@@ -1,0 +1,20 @@
+enclave {
+    from "openenclave/edl/syscall.edl" import *;
+    from "platform.edl" import *;
+
+    include "../shared.h"
+
+    trusted {
+        public int initialize([in] ledger_identity_t* ledger_identity, [out] endorser_identity_t* endorser_identity);
+        public int endorse([in] block_t* block, [out] endorsement_t* endorsement);
+        public int read([in] block_t* nonce, [out] endorsement_t* endorsement);
+        public void close_endorser();
+
+        // the following ecall is for testing purposes
+        public int verify_endorse([in] ledger_identity_t* ledger_identity, [in] endorser_identity_t* endorser_identity, [in] block_t* block, [in] endorsement_t* endorsement);
+    };
+
+    //untrusted {
+    //    no untrusted functions in the endorser 
+    //};
+};
