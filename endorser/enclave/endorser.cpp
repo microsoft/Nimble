@@ -30,9 +30,10 @@ int ecall_dispatcher::initialize(ledger_identity_t *ledger_identity,
     goto exit;
   }
 
-  // copy the public key
+  // copy the public key and free the buffer
   assert(res == PUBLIC_KEY_SIZE_IN_BYTES);
   memcpy(endorser_identity->public_key, pk, PUBLIC_KEY_SIZE_IN_BYTES);
+  free(pk);
 
   // set the name of the ledger
   memcpy((void *)this->hash, ledger_identity->name, HASH_VALUE_SIZE_IN_BYTES);
