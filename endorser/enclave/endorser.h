@@ -1,21 +1,20 @@
 #pragma once
 
 #include "../shared.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/sha256.h"
-#include <mbedtls/ecdsa.h>
-#include <mbedtls/entropy.h>
 #include <openenclave/enclave.h>
+#include <openssl/bn.h>
+#include <openssl/ecdsa.h>
+#include <openssl/err.h>
+#include <openssl/objects.h>
+#include <openssl/sha.h>
 #include <string>
 
 using namespace std;
 
 class ecall_dispatcher {
 private:
-  // ECDSA context
-  mbedtls_ecdsa_context ctx_sign;
-  mbedtls_ctr_drbg_context ctr_drbg;
+  // ECDSA key
+  EC_KEY *eckey;
 
   // tail hash
   unsigned char hash[HASH_VALUE_SIZE_IN_BYTES];

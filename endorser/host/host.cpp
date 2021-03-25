@@ -70,10 +70,10 @@ int main(int argc, const char *argv[]) {
   }
   cout << endl;
 
-  // endorse a block
-  block_t block;
+  cout << "Host: Asking the endorser to endorse a block" << endl;
 
   // set an arbitrary message in the block
+  block_t block;
   memset(block.block, 0x42, sizeof(block.block));
 
   endorsement_t endorsement;
@@ -87,19 +87,6 @@ int main(int argc, const char *argv[]) {
     cerr << "Host: endorse failed with " << ret << endl;
     goto exit;
   }
-
-  // verify if the endorsement is as expected
-  result = verify_endorse(enclave, &ret, &ledger_identity, &endorser_identity,
-                          &block, &endorsement);
-  if (result != OE_OK) {
-    ret = 1;
-    goto exit;
-  }
-  if (ret != 0) {
-    cerr << "Host: verify_endorse failed with " << ret << endl;
-    goto exit;
-  }
-  cout << "Host: Verification of endorsement is: " << ret << endl;
 
 exit:
   cout << "Host: terminate the enclave" << endl;

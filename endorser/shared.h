@@ -1,12 +1,9 @@
 #ifndef _SHARED_H
 #define _SHARED_H
-#include <mbedtls/ecdsa.h>
 
 #define HASH_VALUE_SIZE_IN_BYTES 32
-#define PUBLIC_KEY_SIZE_IN_BYTES 65
-#define SIGNATURE_SIZE_IN_BYTES                                                \
-  MBEDTLS_ECDSA_MAX_LEN // unfortunately, mbedtls doesn't produce
-                        // constant-sized sigs
+#define PUBLIC_KEY_SIZE_IN_BYTES 33
+#define SIGNATURE_SIZE_IN_BYTES 72
 #define NONCE_SIZE_IN_BYTES 16
 
 // ledger_identity_t contains the identity of a ledger
@@ -16,7 +13,6 @@ typedef struct _ledger_identity {
 
 // endorser_identity_t contains the identity of an endorser
 typedef struct _endorser_identity {
-  mbedtls_ecp_group grp;
   unsigned char public_key[PUBLIC_KEY_SIZE_IN_BYTES];
 } endorser_identity_t;
 
@@ -31,7 +27,7 @@ typedef struct _nonce {
 typedef struct _endorsement {
   unsigned char hash[HASH_VALUE_SIZE_IN_BYTES];
   unsigned char sig[SIGNATURE_SIZE_IN_BYTES];
-  size_t sig_len;
+  unsigned int sig_len;
 } endorsement_t;
 
 #endif /* _SHARED_H */
