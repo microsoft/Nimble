@@ -14,6 +14,6 @@ To run tests:
 cargo test
 ```
 
-To build `libspartan`:
+To build `nimble`:
 ```text
 cargo build --release
