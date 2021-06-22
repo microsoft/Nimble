@@ -1,0 +1,26 @@
+NimbleLedger
+-------------
+1. Maintain the log in Azure storage and expose NimbleLedger APIs
+
+2. Support for multiple endorsers
+  * Coordinator interacts with endorsers over RPCs or using queues
+  * Support for introducing new endorsers 
+
+3. Low-TCB endorsers
+  * Option#1: Xingyang's and Weidong's enclave runtime 
+    Pro: Lowest TCB
+    Con: We need FFI to interact with enclave code
+
+  * Option#2: Extend Fortanix's enclave-runner to shed dependency on Rust's std
+    Pro: Fully Rust-based
+    Con: Might not be lowest TCB
+
+
+NimbleIndex: An index atop NimbleLedger
+---------------------------------------
+  * lookup by the index of the entry in the ledger
+  * lookup by a secondary index (i.e., a field in the entry)
+
+NimbleHDFS
+----------
+TBD. Q: What extensions do we need here?
