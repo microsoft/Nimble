@@ -16,11 +16,10 @@ NimbleLedger
     Con: Might not be lowest TCB
 
 
-NimbleIndex: An index atop NimbleLedger
----------------------------------------
+NimbleAdapter/Proxy
+--------------------
+1. An index atop NimbleLedger
   * lookup by the index of the entry in the ledger
   * lookup by a secondary index (i.e., a field in the entry)
 
-NimbleHDFS
-----------
-TBD. Q: What extensions do we need here?
+2. Add HDFS APIs
