@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package protocol;
+
+service Call {
+  rpc NewLedger(LedgerRequest) returns (LedgerResponse);
+  rpc AppendToLedger(UpdateQuery) returns (Status);
+  rpc ReadLatest(Query) returns (Response);
+  rpc ReadAtIndex(Query) returns (Response);
+}
+
+message LedgerRequest {
+  string name = 1;
+}
+
+message LedgerResponse {
+  string handle = 1;
+}
+
+message Status {
+  bool status = 1;
+}
+
+message Query {
+  string handle = 1;
+  uint64 index = 2;
+}
+
+message UpdateQuery {
+  string handle = 1;
+  Data value = 2;
+}
+
+message Data {
+  bytes content = 1;
+}
+
+message Response {
+  Data value = 1;
+}

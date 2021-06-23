@@ -1,7 +1,6 @@
 #![feature(test)]
 #![deny(missing_docs)]
-#![feature(external_doc)]
-#![doc(include = "../README.md")]
+#![doc = include_str!("../README.md")]
 
 extern crate digest;
 extern crate ed25519_dalek;
