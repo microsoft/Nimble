@@ -22,10 +22,10 @@ tonic-build = "0.4.2"
 prost-build = "0.7.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[[bin]] # Bin to run the HelloWorld gRPC server
+[[bin]] # Bin to run the coordinator server
 name = "coordinator"
 path = "src/coordinator.rs"
 
-[[bin]] # Bin to run the HelloWorld gRPC client
+[[bin]] # Bin to run a NimbleLedger client
 name = "client"
 path = "src/client.rs"
