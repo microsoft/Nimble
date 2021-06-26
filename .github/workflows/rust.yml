@@ -17,6 +17,8 @@ jobs:
     - uses: actions/checkout@v2
     - name: Install
       run: rustup default nightly
+    - name: Install rustfmt Components
+      run: rustup component add rustfmt
     - name: Build
       run: cargo build --verbose
     - name: Run tests
