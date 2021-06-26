@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package endorserprotocol;
+
+service EndorserCall {
+  // Debug Endpoints
+  rpc GetEndorserPublicKey(Empty) returns (EndorserPublicKey);
+  rpc GetAllLedgers(Empty) returns (EndorserLedgerHandles);
+  // Protocol Endpoints
+  rpc NewEndorser(Empty) returns (EndorserStateResponse); // Early Start / Restart
+  rpc NewLedger(Handle) returns (EndorserLedgerResponse);
+  rpc ReadLatest(EndorserQuery) returns (EndorserQueryResponse);
+  rpc AppendToLedger(EndorserAppendRequest) returns (EndorserAppendResponse);
+}
+
+message EndorserLedgerResponse {
+  bytes name = 1;
+  bytes signature = 2;
+  EndorserPublicKey endorser_info = 3;
+}
+
+message EndorserLedgerHandles {
+  repeated bytes handles = 1;
+}
+
+message EndorserStateResponse {
+  string handle = 1;
+  EndorserPublicKey keyinfo = 2;
+}
+
+message EndorserPublicKey {
+  bytes publickey = 1;
+  bytes signature = 2;
+}
+
+message Empty {
+
+}
+
+message EndorserAppendRequest {
+  bytes endorser_handle = 1;
+  bytes data = 2;
+}
+
+message EndorserAppendResponse {
+  bytes previous_hash = 1;
+  bytes tail = 2;
+  bytes signature = 3;
+}
+
+message Handle {
+  bytes handle = 1;
+}
+
+message EndorserQuery {
+  bytes handle = 1;
+  bytes nonce = 2;
+}
+
+message EndorserQueryResponse {
+  bytes nonce = 1;
+  bytes tail_hash = 2;
+  bytes signature = 3;
+}

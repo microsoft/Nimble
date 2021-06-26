@@ -8,4 +8,6 @@ pub enum EndorserError {
   LedgerExists,
   /// returned if one attempts to perform a conditional append and the condition check fails
   TailDoesNotMatch,
+  /// returned if the creation of the endorser state fails
+  StateCreationError,
 }

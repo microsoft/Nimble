@@ -1,210 +1,194 @@
-use super::digest::Output;
-use super::ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
-use super::errors::EndorserError;
+mod endorser_state;
+mod errors;
+mod helper;
+
+use crate::endorser_state::{EndorserIdentity, EndorserState, Store};
+use crate::errors::EndorserError;
+use crate::helper::concat_bytes;
+use digest::Output;
+use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
+use endorserprotocol::endorser_call_server::{EndorserCall, EndorserCallServer};
+use endorserprotocol::{
+  Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerHandles,
+  EndorserLedgerResponse, EndorserPublicKey, EndorserQuery, EndorserQueryResponse,
+  EndorserStateResponse, Handle,
+};
+use hex::encode;
 use rand::rngs::OsRng;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use tonic::transport::Server;
+use tonic::{Request, Response, Status};
+use uuid::Uuid;
 
-/// Endorser's internal state
-pub struct EndorserState {
-  /// a key pair in the ed25519 digital signature scheme
-  keypair: Keypair,
-
-  /// a map from fixed-sized labels to a tail hash
-  ledgers: HashMap<Output<Sha3_256>, Output<Sha3_256>>,
+pub mod endorserprotocol {
+  tonic::include_proto!("endorserprotocol");
 }
 
-/// Public identity of the endorser
-pub struct EndorserIdentity {
-  pubkey: PublicKey,
+pub struct EndorserServiceState {
+  state: Arc<RwLock<Store>>,
 }
 
-impl EndorserState {
-  pub fn new() -> (Self, EndorserIdentity) {
-    // initialize a random number generator
-    let mut csprng = OsRng {};
-
-    // generate a fresh ed25519 key pair
-    let keypair = Keypair::generate(&mut csprng);
-
-    // extract the public key component
-    let pubkey = keypair.public;
-
-    // return a new (EndorserState, EndorserIdentity) object
-    (
-      EndorserState {
-        keypair,
-        ledgers: HashMap::new(),
-      },
-      EndorserIdentity { pubkey },
-    )
-  }
-
-  pub fn create(&mut self, genesis_hash: &Output<Sha3_256>) -> Result<bool, EndorserError> {
-    // `genesis_hash` is the hash of the first block in the ledger and a ledger is named
-    // by the first block's hashe, so we first check if there's already a ledger with
-    // the same name
-    if self.ledgers.contains_key(genesis_hash) {
-      return Err(EndorserError::LedgerExists);
+impl EndorserServiceState {
+  pub fn new() -> Self {
+    EndorserServiceState {
+      state: Arc::new(RwLock::new(Store::new())),
     }
-
-    // The internal state for this ledger is initialized to Hash(NULL, block_hash)
-    // since this is the first entry in the ledger
-    let tail = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(b"NULL");
-      hasher.update(genesis_hash);
-      hasher.finalize()
-    };
-
-    self.ledgers.insert(genesis_hash.clone(), tail);
-
-    return Ok(true);
   }
+}
 
-  pub fn append(
-    &mut self,
-    genesis_hash: &Output<Sha3_256>,
-    block_hash: &Output<Sha3_256>,
-    cond_block_hash: &Output<Sha3_256>,
-  ) -> Result<Signature, EndorserError> {
-    // We first check if there's a ledger with the name `genesis_hash`
-    if !self.ledgers.contains_key(genesis_hash) {
-      return Err(EndorserError::InvalidLedgerName);
-    }
-
-    // check if the provided `cond_block_hash` matches the tail hash stored internally
-    if self.ledgers[genesis_hash] != *cond_block_hash {
-      return Err(EndorserError::TailDoesNotMatch);
-    }
-
-    // compute the new tail as Hash(tail, block_hash)
-    let tail = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(self.ledgers[genesis_hash]);
-      hasher.update(block_hash);
-      hasher.finalize()
-    };
-
-    // update the value associated with the key `genesis_hash`
-    self.ledgers.insert(*genesis_hash, tail);
-
-    // produce a signature on the updated tail
-    let sig = self.keypair.sign(&self.ledgers[genesis_hash]);
-
-    return Ok(sig);
-  }
-
-  pub fn read(
+#[tonic::async_trait]
+impl EndorserCall for EndorserServiceState {
+  async fn new_endorser(
     &self,
-    genesis_hash: &Output<Sha3_256>,
-    nonce: &Output<Sha3_256>,
-  ) -> Result<(Output<Sha3_256>, Signature), EndorserError> {
-    // We first check if there's a ledger with the name `genesis_hash`
-    if !self.ledgers.contains_key(genesis_hash) {
-      return Err(EndorserError::InvalidLedgerName);
+    request: Request<Empty>,
+  ) -> Result<Response<EndorserStateResponse>, Status> {
+    println!("Received a NewLedger Request. Generating Handle and creating new EndorserState");
+
+    let mut state_instance = self
+      .state
+      .write()
+      .expect("Unable to acquire write lock on the state");
+    let endorser_create_status = state_instance.create_new_endorser_state();
+    if !endorser_create_status.is_ok() {
+      panic!("Failed. Should not have failed");
     }
+    let (handle, endorser_id) = endorser_create_status.unwrap();
+    let reply = endorserprotocol::EndorserStateResponse {
+      handle,
+      keyinfo: Some(EndorserPublicKey {
+        publickey: endorser_id.get_public_key(),
+        signature: endorser_id.get_signature(),
+      }),
+    };
+    Ok(Response::new(reply))
+  }
 
-    // Compute a signature on Hash(tail, nonce)
-    let sig = {
-      // compute a nonced tail, which is Hash(tail, nonce)
-      let nonced_tail = {
-        let mut hasher = Sha3_256::new();
-        hasher.update(self.ledgers[genesis_hash]);
-        hasher.update(nonce);
-        hasher.finalize()
-      };
+  async fn get_endorser_public_key(
+    &self,
+    request: Request<Empty>,
+  ) -> Result<Response<EndorserPublicKey>, Status> {
+    let state_instance = self
+      .state
+      .read()
+      .expect("Failed to acquire read lock")
+      .get_endorser_key_information();
 
-      // produce a signature on the nonced tail
-      self.keypair.sign(&nonced_tail)
+    if !state_instance.is_ok() {
+      Err(EndorserError::InvalidLedgerName).unwrap()
+    }
+    let public_key = state_instance.unwrap();
+    let reply = EndorserPublicKey {
+      publickey: public_key.get_public_key(),
+      signature: public_key.get_signature(),
     };
 
-    return Ok((self.ledgers[genesis_hash], sig));
+    Ok(Response::new(reply))
+  }
+
+  async fn new_ledger(
+    &self,
+    request: Request<Handle>,
+  ) -> Result<Response<EndorserLedgerResponse>, Status> {
+    println!("Received NewLedger Request to create a ledger by an endorser");
+
+    // The handle is the byte array of information sent by the Nimble Coordinator to the Endorser
+    let Handle { handle } = request.into_inner();
+    println!("Network read handle: {:?}", handle);
+
+    let mut state_instance = self
+      .state
+      .write()
+      .expect("Unable to get a write lock on EndorserState");
+    let (endorsed_handle, signature, public_key) = state_instance
+      .create_new_ledger_in_endorser_state(handle)
+      .expect("Unable to get the signature on genesis handle");
+
+    let endorser_info = EndorserPublicKey {
+      publickey: public_key.get_public_key(),
+      signature: public_key.get_signature(),
+    };
+
+    let reply = EndorserLedgerResponse {
+      name: endorsed_handle,
+      signature: signature.to_bytes().to_vec(),
+      endorser_info: Some(endorser_info),
+    };
+    Ok(Response::new(reply))
+  }
+
+  async fn get_all_ledgers(
+    &self,
+    request: Request<Empty>,
+  ) -> Result<Response<EndorserLedgerHandles>, Status> {
+    let available_handles_in_state = self
+      .state
+      .read()
+      .expect("Failed to acquire read lock")
+      .get_all_available_handles();
+    println!("Available Handles: {:?}", available_handles_in_state);
+    let reply = EndorserLedgerHandles {
+      handles: available_handles_in_state,
+    };
+    Ok(Response::new(reply))
+  }
+
+  async fn append_to_ledger(
+    &self,
+    request: Request<EndorserAppendRequest>,
+  ) -> Result<Response<EndorserAppendResponse>, Status> {
+    let EndorserAppendRequest {
+      endorser_handle,
+      data,
+    } = request.into_inner();
+    println!("Network read handle: {:?}", endorser_handle);
+    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
+    let append_status = endorser_state.append_and_update_endorser_state_tail(endorser_handle, data);
+    if append_status.is_ok() {
+      let (previous_hash, tail, signature) = append_status.unwrap();
+      let signature_bytes = signature.to_bytes().to_vec();
+      let reply = EndorserAppendResponse {
+        previous_hash,
+        tail,
+        signature: signature_bytes,
+      };
+      return Ok(Response::new(reply));
+    }
+    Err(Status::aborted("Failed to Append"))
+  }
+
+  async fn read_latest(
+    &self,
+    request: Request<EndorserQuery>,
+  ) -> Result<Response<EndorserQueryResponse>, Status> {
+    let EndorserQuery { handle, nonce } = request.into_inner();
+    println!("Received ReadLatest Query: {:?} {:?}", handle, nonce);
+    let latest_state = self.state.read().expect("Failed to acquire read lock");
+    let (nonce_bytes, tail_hash, endorser_signature) = latest_state
+      .get_latest_state_for_handle(handle, nonce)
+      .unwrap();
+    let reply = EndorserQueryResponse {
+      nonce: nonce_bytes,
+      tail_hash,
+      signature: endorser_signature.to_bytes().to_vec(),
+    };
+    Ok(Response::new(reply))
   }
 }
 
-mod tests {
-  use super::*;
-  use crate::ed25519_dalek::Verifier;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  #[rustfmt::skip]
+      let addr = "[::1]:9090".parse()?;
+  let server = EndorserServiceState::new();
 
-  #[test]
-  pub fn check_endorser_end_to_end() {
-    let (mut endorser_handle, endorser_id) = EndorserState::new();
+  println!("Running gRPC Coordinator Service at {:?}", addr);
 
-    let genesis_hash = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(b"gensis_hash");
-      hasher.finalize()
-    };
+  Server::builder()
+    .add_service(EndorserCallServer::new(server))
+    .serve(addr)
+    .await?;
 
-    // create a new ledger by calling create method
-    let res = endorser_handle.create(&genesis_hash);
-
-    // check that create returns a success
-    assert!(res.is_ok());
-
-    // now let's append an entry to the ledger
-    let block_hash = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(b"some_entry");
-      hasher.finalize()
-    };
-
-    let cond_block_hash = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(b"NULL");
-      hasher.update(genesis_hash);
-      hasher.finalize()
-    };
-
-    let res = endorser_handle.append(&genesis_hash, &block_hash, &cond_block_hash);
-    assert!(res.is_ok());
-
-    // verify the signature on the appended entry
-    let res_sig = {
-      let message = {
-        let mut hasher = Sha3_256::new();
-        hasher.update(cond_block_hash);
-        hasher.update(block_hash);
-        hasher.finalize()
-      };
-      endorser_id.pubkey.verify(&message, &res.clone().unwrap())
-    };
-    assert!(res_sig.is_ok());
-
-    // verify the signature on a wrong entry and the check should fail
-    let res_sig_wrong = {
-      let wrong_message = {
-        let mut hasher = Sha3_256::new();
-        hasher.update(cond_block_hash);
-        hasher.update(b"some_bits");
-        hasher.update(block_hash);
-        hasher.finalize()
-      };
-      endorser_id.pubkey.verify(&wrong_message, &res.unwrap())
-    };
-    assert!(res_sig_wrong.is_err());
-
-    // now read the appended entry with a nonce
-    let nonce = {
-      let mut hasher = Sha3_256::new();
-      hasher.update(b"some_nonce");
-      hasher.finalize()
-    };
-
-    let res = endorser_handle.read(&genesis_hash, &nonce);
-    assert!(res.is_ok());
-    // verify the signature on the returned entry
-    let res_sig = {
-      let (tail, sig) = res.unwrap();
-      let message = {
-        let mut hasher = Sha3_256::new();
-        hasher.update(tail);
-        hasher.update(nonce);
-        hasher.finalize()
-      };
-      endorser_id.pubkey.verify(&message, &sig)
-    };
-    assert!(res_sig.is_ok());
-  }
+  Ok(())
 }
