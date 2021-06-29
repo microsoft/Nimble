@@ -70,7 +70,9 @@ impl EndorserState {
     // The first time a ledger is requested with a handle, insert tail_hash and sign it.
     let signature = self.keypair.sign(tail_hash.as_slice());
     println!("Inserting {:?} --> {:?}", handle, tail_hash);
-    self.ledgers.insert(handle.clone(), (tail_hash.to_vec(), height));
+    self
+      .ledgers
+      .insert(handle.clone(), (tail_hash.to_vec(), height));
     Ok((handle.clone(), signature))
   }
 
@@ -94,9 +96,11 @@ impl EndorserState {
     block_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     if self.ledgers.contains_key(&*endorser_handle.clone()) {
-      let (current_tail, current_ledger_height) =
-          self.get_tail(endorser_handle.clone()).unwrap();
-      println!("Current Tail: {:?}, Height: {:?}", current_tail, current_ledger_height);
+      let (current_tail, current_ledger_height) = self.get_tail(endorser_handle.clone()).unwrap();
+      println!(
+        "Current Tail: {:?}, Height: {:?}",
+        current_tail, current_ledger_height
+      );
       let new_ledger_height = current_ledger_height + 1;
       println!("New Height: {:?}", new_ledger_height);
 
@@ -110,9 +114,10 @@ impl EndorserState {
 
       let tail_hash = hash(packed_metadata.as_slice());
 
-      self
-        .ledgers
-        .insert(endorser_handle.to_vec(), (tail_hash.clone().to_vec(), new_ledger_height));
+      self.ledgers.insert(
+        endorser_handle.to_vec(),
+        (tail_hash.clone().to_vec(), new_ledger_height),
+      );
 
       let signature = self.keypair.sign(tail_hash.as_slice());
 
@@ -184,7 +189,10 @@ impl Store {
     block_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     let handle = &endorser_handle.clone();
-    println!("Handle Queried: {:?} with Block Hash: {:?}", handle, block_hash);
+    println!(
+      "Handle Queried: {:?} with Block Hash: {:?}",
+      handle, block_hash
+    );
     let (previous_state, tail, signature) = self
       .state
       .append_ledger(handle.clone(), block_hash.to_vec())
@@ -275,10 +283,11 @@ mod tests {
     let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
     let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
     let ledger_height = 0u64;
-    let create_ledger_endorser_response =
-        endorser_state.create_ledger(coordinator_handle.to_vec(),
-                                     genesis_tail_hash.to_vec(),
-                                     ledger_height);
+    let create_ledger_endorser_response = endorser_state.create_ledger(
+      coordinator_handle.to_vec(),
+      genesis_tail_hash.to_vec(),
+      ledger_height,
+    );
     if create_ledger_endorser_response.is_ok() {
       let (handle, signature) = create_ledger_endorser_response.unwrap();
       assert_eq!(handle, coordinator_handle);
@@ -308,10 +317,11 @@ mod tests {
     let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
     let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
     let ledger_height = 0u64;
-    let create_ledger_endorser_response =
-        endorser_state.create_ledger(coordinator_handle.to_vec(),
-                                     genesis_tail_hash.to_vec(),
-                                     ledger_height);
+    let create_ledger_endorser_response = endorser_state.create_ledger(
+      coordinator_handle.to_vec(),
+      genesis_tail_hash.to_vec(),
+      ledger_height,
+    );
 
     let (handle, signature) = create_ledger_endorser_response.unwrap();
 
@@ -337,16 +347,15 @@ mod tests {
 
     let endorser_tail_expectation = hash(&packed_metadata).to_vec();
 
-    let tail_signature_verification = endorser_state.keypair.verify(
-      &endorser_tail_expectation,
-      &signature
-    );
+    let tail_signature_verification = endorser_state
+      .keypair
+      .verify(&endorser_tail_expectation, &signature);
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
       let (tail_result, ledger_height) = endorser_state
-          .get_tail(coordinator_handle.to_vec())
-          .unwrap();
+        .get_tail(coordinator_handle.to_vec())
+        .unwrap();
 
       assert_eq!(endorser_tail_expectation, tail_result);
     } else {

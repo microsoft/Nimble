@@ -1,11 +1,11 @@
+use ed25519_dalek::Signature;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use ed25519_dalek::Signature;
 
 #[derive(Debug, Default)]
 pub struct Store {
   pub ledgers: HashMap<Vec<u8>, Vec<Vec<u8>>>,
-  pub metadata: HashMap<Vec<u8>, Vec<MetaBlock>>
+  pub metadata: HashMap<Vec<u8>, Vec<MetaBlock>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -47,7 +47,10 @@ impl Store {
   }
 
   pub fn set_metadata(&mut self, key: &Vec<u8>, metadata: &Vec<u8>, signatures: &Vec<Signature>) {
-    println!("Setting Metadata State: {:?} --> ({:?}, {:?})", key, metadata, signatures);
+    println!(
+      "Setting Metadata State: {:?} --> ({:?}, {:?})",
+      key, metadata, signatures
+    );
     let value = MetaBlock::new(metadata, signatures);
     if self.metadata.contains_key(key) {
       let (k, metadata_ledger) = self.metadata.get_key_value(key).unwrap();
@@ -56,7 +59,11 @@ impl Store {
       println!("Updated State: {:?} --> {:?}", key, existing_ledger);
       self.metadata.insert(key.to_vec(), existing_ledger);
     } else {
-      self.metadata.entry(key.to_vec()).or_default().push(value.clone());
+      self
+        .metadata
+        .entry(key.to_vec())
+        .or_default()
+        .push(value.clone());
       println!("Updated State: {:?} --> {:?}", key, value.clone());
     }
   }

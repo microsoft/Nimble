@@ -1,17 +1,17 @@
 mod helper;
-mod store;
 mod network;
+mod store;
 
+use crate::network::EndorserConnection;
 use crate::store::Store;
 use protocol::call_server::{Call, CallServer};
 use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
-use crate::network::{EndorserConnection};
-use std::convert::TryFrom;
 
 pub mod protocol {
   tonic::include_proto!("protocol");
@@ -33,8 +33,9 @@ impl CoordinatorState {
     // Create EndorserConnections from here
     let mut endorsers: Vec<EndorserConnection> = vec![];
     for endorser_connection_address in available_endorsers.iter() {
-      let connection =
-            EndorserConnection::new(endorser_connection_address.to_string()).await.unwrap();
+      let connection = EndorserConnection::new(endorser_connection_address.to_string())
+        .await
+        .unwrap();
       endorsers.push(connection);
     }
     CoordinatorState {
@@ -70,13 +71,20 @@ impl Call for CoordinatorState {
     genesis_block_bytes.append(&mut endorser_pk.clone().to_bytes().to_vec());
     genesis_block_bytes.append(&mut endorser_attestation.clone().to_bytes().to_vec());
     genesis_block_bytes.append(&mut value.clone().to_vec());
-    println!("Genesis Block: {:?}, size: {:?}", genesis_block_bytes, genesis_block_bytes.len());
+    println!(
+      "Genesis Block: {:?}, size: {:?}",
+      genesis_block_bytes,
+      genesis_block_bytes.len()
+    );
 
     // 3. Hash the contents of the block to use as the handle.
     let handle = helper::hash(genesis_block_bytes.as_slice()).to_vec();
 
     // Make a request to the endorser for NewLedger using the handle which returns a signature.
-    let ledger_response = conn.call_endorser_new_ledger(handle.to_vec()).await.unwrap();
+    let ledger_response = conn
+      .call_endorser_new_ledger(handle.to_vec())
+      .await
+      .unwrap();
     println!("Endorser Signature: {:?}", ledger_response);
 
     let zero_entry = [0u8; 32].to_vec();
@@ -120,11 +128,14 @@ impl Call for CoordinatorState {
 
     // Ideally need to run multiple times for multiple endorsers.
     let mut conn = self.get_random_endorser_connection();
-    let (tail_hash, ledger_height, signature) =
-        conn.call_endorser_append(handle.clone(), hash_of_block.clone()).await.unwrap();
+    let (tail_hash, ledger_height, signature) = conn
+      .call_endorser_append(handle.clone(), hash_of_block.clone())
+      .await
+      .unwrap();
 
     {
-      let metadata = helper::pack_metadata_information(tail_hash.clone(), hash_of_block, ledger_height);
+      let metadata =
+        helper::pack_metadata_information(tail_hash.clone(), hash_of_block, ledger_height);
       let metadata_signatures = vec![signature.clone()];
       let mut store = self.state.write().expect("Failed to acquire lock on state");
       store.set_metadata(&handle.clone(), &metadata, &metadata_signatures);
@@ -133,7 +144,7 @@ impl Call for CoordinatorState {
     let reply = protocol::Status {
       tail_hash,
       ledger_height,
-      signature: signature.to_bytes().to_vec()
+      signature: signature.to_bytes().to_vec(),
     };
 
     Ok(Response::new(reply))
@@ -143,14 +154,20 @@ impl Call for CoordinatorState {
     &self,
     request: Request<Query>,
   ) -> Result<Response<protocol::Response>, Status> {
-    let Query { handle, index: _ , nonce } = request.into_inner();
+    let Query {
+      handle,
+      index: _,
+      nonce,
+    } = request.into_inner();
     // index has to ideally not exist in the query, TODO: explore "optional"
     println!("Received a ReadLatest Request : {:?} {:?}", handle, nonce);
 
     // 1. Read the information from the Endorser
     let mut conn = self.get_random_endorser_connection();
-    let freshness_signature =
-        conn.call_endorser_read_latest(handle.clone(), nonce).await.unwrap();
+    let freshness_signature = conn
+      .call_endorser_read_latest(handle.clone(), nonce)
+      .await
+      .unwrap();
 
     let read_lock_state = self.state.read().expect("Failed to acquire read lock");
     // 2. ReadLatest Block data from the Data structure.
@@ -159,7 +176,7 @@ impl Call for CoordinatorState {
     // 3. Read latest metablock and signatures from Metadata structure
     let metavalue = read_lock_state.get_latest_state_of_metadata_ledger(handle.clone());
     let (tail_hash, block_hash, ledger_height) =
-        helper::unpack_metadata_information(metavalue.message_data);
+      helper::unpack_metadata_information(metavalue.message_data);
 
     // 4. Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
@@ -168,7 +185,7 @@ impl Call for CoordinatorState {
       block_data: value,
       tail_hash,
       ledger_height,
-      endorser_signature: freshness_signature.to_bytes().to_vec()
+      endorser_signature: freshness_signature.to_bytes().to_vec(),
     };
 
     Ok(Response::new(reply))
@@ -180,30 +197,42 @@ impl Call for CoordinatorState {
   ) -> Result<Response<protocol::Response>, Status> {
     println!("Received a ReadAtIndex Request : {:?}", request);
 
-    let Query { handle, index, nonce: _ } = request.into_inner();
+    let Query {
+      handle,
+      index,
+      nonce: _,
+    } = request.into_inner();
     // index has to ideally not exist in the query, TODO: explore "optional"
     println!("Received a ReadLatest Request : {:?}", handle);
 
     let read_state_instance = self.state.read().expect("Failed to acquire read lock");
 
     // 1. Retrieve the block data information from the main datastructure
-    let value_at_index = read_state_instance.get_ledger_state_at_index(handle.clone(), index.clone());
-    let metadata_at_index = read_state_instance.get_metadata_ledger_state_at_index(handle.clone(), index.clone());
+    let value_at_index =
+      read_state_instance.get_ledger_state_at_index(handle.clone(), index.clone());
+    let metadata_at_index =
+      read_state_instance.get_metadata_ledger_state_at_index(handle.clone(), index.clone());
 
     println!("Block Data at index: {:?}", value_at_index);
     println!("Metadata at index: {:?}", metadata_at_index);
 
     // 2. Retrieve the information from the metadata structure.
-    let (tail_hash, block_hash, ledger_height) = helper::unpack_metadata_information(metadata_at_index.message_data);
+    let (tail_hash, block_hash, ledger_height) =
+      helper::unpack_metadata_information(metadata_at_index.message_data);
 
     // Force only one for now. TODO(@sudheesh): Multiple endorser case.
-    let endorser_signature = metadata_at_index.signatures.get(0).unwrap().to_bytes().to_vec();
+    let endorser_signature = metadata_at_index
+      .signatures
+      .get(0)
+      .unwrap()
+      .to_bytes()
+      .to_vec();
     // 3. TODO(@sudheesh): Pack the information as necessary and submit the response.
     let reply = protocol::Response {
-      block_data : value_at_index,
+      block_data: value_at_index,
       tail_hash,
       ledger_height, // TODO: Ideally optional.
-      endorser_signature
+      endorser_signature,
     };
 
     Ok(Response::new(reply))

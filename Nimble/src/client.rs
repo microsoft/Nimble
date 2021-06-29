@@ -1,10 +1,13 @@
 mod helper;
 mod verification;
 
+use crate::verification::{
+  verify_append_to_ledger, verify_ledger_response, verify_read_at_index_response,
+  verify_read_latest_response,
+};
 use protocol::call_client::CallClient;
-use protocol::{Data, LedgerResponse, Query, Response, Status, UpdateQuery, Empty};
+use protocol::{Data, Empty, LedgerResponse, Query, Response, Status, UpdateQuery};
 use rand::Rng;
-use crate::verification::{verify_ledger_response, verify_read_latest_response, verify_read_at_index_response, verify_append_to_ledger};
 
 pub mod protocol {
   tonic::include_proto!("protocol");
@@ -16,8 +19,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Step 1: NewLedger Request
   let request = tonic::Request::new(Empty {});
-  let LedgerResponse { block_data, signature } = client.new_ledger(request).await?.into_inner();
-  println!("Received Response - Ledger Handle: {:?} {:?}", block_data, signature);
+  let LedgerResponse {
+    block_data,
+    signature,
+  } = client.new_ledger(request).await?.into_inner();
+  println!(
+    "Received Response - Ledger Handle: {:?} {:?}",
+    block_data, signature
+  );
 
   let handle = helper::hash(&block_data).to_vec();
   println!("Handle : {:?}", handle);
@@ -34,11 +43,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_generated_nonce.to_vec(),
   });
 
-  let protocol::Response { block_data, tail_hash, ledger_height, endorser_signature } =
-      client.read_latest(latest_state_query).await?.into_inner();
-  let is_latest_valid =
-      verify_read_latest_response(&block_data, &tail_hash, &ledger_height, endorser_signature,
-      &client_generated_nonce.to_vec(), &pk);
+  let protocol::Response {
+    block_data,
+    tail_hash,
+    ledger_height,
+    endorser_signature,
+  } = client.read_latest(latest_state_query).await?.into_inner();
+  let is_latest_valid = verify_read_latest_response(
+    &block_data,
+    &tail_hash,
+    &ledger_height,
+    endorser_signature,
+    &client_generated_nonce.to_vec(),
+    &pk,
+  );
   println!("Verifying ReadLatest Response : {:?}", is_latest_valid);
   assert_eq!(is_latest_valid, true);
 
@@ -49,12 +67,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: vec![],
   });
 
-  let protocol::Response { block_data, tail_hash, ledger_height, endorser_signature } =
-      client.read_at_index(read_at_index_query).await?.into_inner();
-  let is_read_at_index_valid =
-      verify_read_at_index_response(&block_data, &tail_hash, &ledger_height,
-                                    endorser_signature, &pk);
-  println!("Verifying ReadAtIndex Response: {:?}", is_read_at_index_valid);
+  let protocol::Response {
+    block_data,
+    tail_hash,
+    ledger_height,
+    endorser_signature,
+  } = client
+    .read_at_index(read_at_index_query)
+    .await?
+    .into_inner();
+  let is_read_at_index_valid = verify_read_at_index_response(
+    &block_data,
+    &tail_hash,
+    &ledger_height,
+    endorser_signature,
+    &pk,
+  );
+  println!(
+    "Verifying ReadAtIndex Response: {:?}",
+    is_read_at_index_valid
+  );
   assert_eq!(is_read_at_index_valid, true);
 
   // Step 4: Append
@@ -71,15 +103,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       }),
     });
 
-    let protocol::Status { tail_hash, ledger_height, signature } =
-        client.append_to_ledger(update_query).await?.into_inner();
+    let protocol::Status {
+      tail_hash,
+      ledger_height,
+      signature,
+    } = client.append_to_ledger(update_query).await?.into_inner();
 
-    let is_verify_append_valid = verify_append_to_ledger(&message.to_vec(),
-                                                         &tail_hash,
-                                                         &ledger_height,
-                                                         signature,
-                                                         &pk);
-    println!("Appended {:?} and Verification: {:?}", message, is_verify_append_valid);
+    let is_verify_append_valid = verify_append_to_ledger(
+      &message.to_vec(),
+      &tail_hash,
+      &ledger_height,
+      signature,
+      &pk,
+    );
+    println!(
+      "Appended {:?} and Verification: {:?}",
+      message, is_verify_append_valid
+    );
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data
@@ -90,13 +130,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_generated_nonce.to_vec(),
   });
 
-  let protocol::Response { block_data, tail_hash, ledger_height, endorser_signature } =
-      client.read_latest(latest_state_query).await?.into_inner();
+  let protocol::Response {
+    block_data,
+    tail_hash,
+    ledger_height,
+    endorser_signature,
+  } = client.read_latest(latest_state_query).await?.into_inner();
   println!("Latest information is read by the client matching third message");
   assert_eq!(block_data, m3.clone());
-  let is_latest_valid =
-      verify_read_latest_response(&block_data, &tail_hash, &ledger_height, endorser_signature,
-                                  &client_generated_nonce.to_vec(), &pk);
+  let is_latest_valid = verify_read_latest_response(
+    &block_data,
+    &tail_hash,
+    &ledger_height,
+    endorser_signature,
+    &client_generated_nonce.to_vec(),
+    &pk,
+  );
   println!("Verifying ReadLatest Response : {:?}", is_latest_valid);
   assert_eq!(is_latest_valid, true);
 
@@ -107,14 +156,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: vec![],
   });
 
-  let protocol::Response { block_data, tail_hash, ledger_height, endorser_signature } =
-      client.read_at_index(read_at_index_query).await?.into_inner();
+  let protocol::Response {
+    block_data,
+    tail_hash,
+    ledger_height,
+    endorser_signature,
+  } = client
+    .read_at_index(read_at_index_query)
+    .await?
+    .into_inner();
   println!("Verifying returned Index for Block at Index 2 Specified");
   assert_eq!(block_data, m2.clone());
-  let is_read_at_index_valid =
-      verify_read_at_index_response(&block_data, &tail_hash, &ledger_height,
-                                    endorser_signature, &pk);
-  println!("Verifying ReadAtIndex Response: {:?}", is_read_at_index_valid);
+  let is_read_at_index_valid = verify_read_at_index_response(
+    &block_data,
+    &tail_hash,
+    &ledger_height,
+    endorser_signature,
+    &pk,
+  );
+  println!(
+    "Verifying ReadAtIndex Response: {:?}",
+    is_read_at_index_valid
+  );
   assert_eq!(is_read_at_index_valid, true);
   Ok(())
 }

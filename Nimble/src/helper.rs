@@ -1,7 +1,7 @@
 use sha3::digest::Output;
 use sha3::{Digest, Sha3_256};
-use tokio::io::AsyncReadExt;
 use std::convert::TryInto;
+use tokio::io::AsyncReadExt;
 
 pub fn concat_bytes(first: &[u8], second: &[u8]) -> Vec<u8> {
   [first, second].concat()
@@ -20,8 +20,9 @@ pub fn unpack_metadata_information(metadata_bytes: Vec<u8>) -> (Vec<u8>, Vec<u8>
   let ledger_count_size = 8usize;
   let metadata_buffer = metadata_bytes.as_slice();
   let tail_hash_bytes = &metadata_buffer[0..tail_hash_size];
-  let block_hash_bytes = &metadata_buffer[tail_hash_size..(tail_hash_size+block_hash_size)];
-  let ledger_height_bytes = &metadata_buffer[(tail_hash_size+block_hash_size)..(tail_hash_size+block_hash_size+ledger_count_size)];
+  let block_hash_bytes = &metadata_buffer[tail_hash_size..(tail_hash_size + block_hash_size)];
+  let ledger_height_bytes = &metadata_buffer
+    [(tail_hash_size + block_hash_size)..(tail_hash_size + block_hash_size + ledger_count_size)];
   let ledger_buffer = ledger_height_bytes.try_into().unwrap();
   let tail_hash = tail_hash_bytes.to_vec();
   let block_hash = block_hash_bytes.to_vec();
@@ -29,7 +30,11 @@ pub fn unpack_metadata_information(metadata_bytes: Vec<u8>) -> (Vec<u8>, Vec<u8>
   (tail_hash, block_hash, ledger_height)
 }
 
-pub fn pack_metadata_information(tail_hash: Vec<u8>, block_hash: Vec<u8>, ledger_height: u64) -> Vec<u8> {
+pub fn pack_metadata_information(
+  tail_hash: Vec<u8>,
+  block_hash: Vec<u8>,
+  ledger_height: u64,
+) -> Vec<u8> {
   let mut packed_metadata = Vec::new();
   let ledger_height_bytes = ledger_height.to_be_bytes().to_vec();
   packed_metadata.extend(tail_hash.clone());
