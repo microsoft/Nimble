@@ -67,7 +67,7 @@ impl EndorserState {
     tail_hash: Vec<u8>,
     height: u64,
   ) -> Result<(Vec<u8>, Signature), EndorserError> {
-    // The first time a ledger is requested, generate a handle and sign it
+    // The first time a ledger is requested with a handle, insert tail_hash and sign it.
     let signature = self.keypair.sign(tail_hash.as_slice());
     println!("Inserting {:?} --> {:?}", handle, tail_hash);
     self.ledgers.insert(handle.clone(), (tail_hash.to_vec(), height));
@@ -272,21 +272,26 @@ mod tests {
   pub fn check_endorser_new_ledger_and_get_tail() {
     let mut endorser_state = EndorserState::new();
     // The coordinator sends the hashed contents of the block to the
-    let genesis_block_hash = rand::thread_rng().gen::<[u8; 32]>();
-    let create_ledger_endorser_response = endorser_state.create_ledger(genesis_block_hash.to_vec());
+    let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
+    let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
+    let ledger_height = 0u64;
+    let create_ledger_endorser_response =
+        endorser_state.create_ledger(coordinator_handle.to_vec(),
+                                     genesis_tail_hash.to_vec(),
+                                     ledger_height);
     if create_ledger_endorser_response.is_ok() {
-      let (handle, signature, public_key) = create_ledger_endorser_response.unwrap();
-      assert_eq!(handle, genesis_block_hash);
-      assert_eq!(public_key, endorser_state.keypair.public);
+      let (handle, signature) = create_ledger_endorser_response.unwrap();
+      assert_eq!(handle, coordinator_handle);
 
-      let signature_expected = endorser_state.keypair.sign(&genesis_block_hash);
+      let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash);
       assert_eq!(signature, signature_expected);
 
       // Fetch the value currently in the tail.
-      let tail_result = endorser_state.get_tail(genesis_block_hash.to_vec());
+      let tail_result = endorser_state.get_tail(coordinator_handle.to_vec());
       if tail_result.is_ok() {
         let (tail_hash, ledger_height) = tail_result.unwrap();
-        assert_eq!(tail_hash, hash(&signature_expected.to_bytes()).to_vec());
+        assert_eq!(ledger_height, 0u64);
+        assert_eq!(tail_hash, genesis_tail_hash);
       } else {
         panic!("Failed to retrieve correct tail hash on genesis ledger state creation");
       }
@@ -299,35 +304,51 @@ mod tests {
   pub fn check_endorser_append_ledger_tail() {
     let mut endorser_state = EndorserState::new();
 
-    let genesis_block_hash = rand::thread_rng().gen::<[u8; 32]>();
-    let create_ledger_endorser_response = endorser_state.create_ledger(genesis_block_hash.to_vec());
+    // The coordinator sends the hashed contents of the block to the
+    let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
+    let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
+    let ledger_height = 0u64;
+    let create_ledger_endorser_response =
+        endorser_state.create_ledger(coordinator_handle.to_vec(),
+                                     genesis_tail_hash.to_vec(),
+                                     ledger_height);
 
-    let (handle, signature, public_key) = create_ledger_endorser_response.unwrap();
+    let (handle, signature) = create_ledger_endorser_response.unwrap();
 
     // Fetch the value currently in the tail.
     let (tail_result, ledger_height) = endorser_state
-      .get_tail(genesis_block_hash.to_vec())
+      .get_tail(coordinator_handle.to_vec())
       .unwrap();
 
-    let updated_content_from_coordinator = "this is a new message from coordinator".as_bytes();
-    let updated_hash = hash(updated_content_from_coordinator).to_vec();
-    let (previous_state, tail, signature) = endorser_state
-      .append_ledger(handle.clone(), updated_hash.clone())
+    let block_hash_to_append = rand::thread_rng().gen::<[u8; 32]>();
+
+    let (previous_tail, new_ledger_height, signature) = endorser_state
+      .append_ledger(coordinator_handle.to_vec(), block_hash_to_append.to_vec())
       .unwrap();
 
-    let expected_tail_contents = concat_bytes(&tail_result, &updated_hash);
-    let expected_tail = hash(&expected_tail_contents).to_vec();
+    assert_eq!(tail_result, previous_tail);
+    assert_eq!(new_ledger_height, ledger_height + 1);
 
-    assert_eq!(previous_state.as_slice(), tail_result.as_slice());
-    assert_eq!(tail.as_slice(), expected_tail.as_slice());
+    let mut packed_metadata = Vec::new();
+    let ledger_height_bytes = new_ledger_height.to_be_bytes().to_vec();
+    packed_metadata.extend(previous_tail.clone());
+    packed_metadata.extend(block_hash_to_append.clone());
+    packed_metadata.extend(ledger_height_bytes);
 
-    let tail_signature_verification = endorser_state.keypair.verify(tail.as_slice(), &signature);
+    let endorser_tail_expectation = hash(&packed_metadata).to_vec();
+
+    let tail_signature_verification = endorser_state.keypair.verify(
+      &endorser_tail_expectation,
+      &signature
+    );
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
-      let (new_tail, ledger_height) = endorser_state.get_tail(handle).unwrap();
-      assert_eq!(new_tail.as_slice(), tail.as_slice());
-      assert_eq!(new_tail.as_slice(), expected_tail.as_slice());
+      let (tail_result, ledger_height) = endorser_state
+          .get_tail(coordinator_handle.to_vec())
+          .unwrap();
+
+      assert_eq!(endorser_tail_expectation, tail_result);
     } else {
       panic!("Signature verification failed when it should not have failed");
     }
