@@ -24,4 +24,4 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
     - name: Check Rustfmt Code Style
-      run: cargo fmt --all -- check
+      run: cargo fmt --all -- --check
