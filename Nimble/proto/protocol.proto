@@ -18,7 +18,9 @@ message LedgerResponse {
 }
 
 message Status {
-  bool status = 1;
+  bytes tail_hash = 1;
+  uint64 ledger_height = 2;
+  bytes signature = 3;
 }
 
 message Query {

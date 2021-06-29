@@ -108,11 +108,23 @@ impl Call for CoordinatorState {
       handle, value
     );
 
-    let mut store = self.state.write().expect("Failed to acquire lock on state");
     let content: Vec<u8> = value.unwrap().content;
-    store.set(handle, content.to_vec());
+    let hash_of_block = helper::hash(&content).to_vec();
 
-    let reply = protocol::Status { status: true };
+    {
+      let mut store = self.state.write().expect("Failed to acquire lock on state");
+      store.set(handle.clone(), content.to_vec());
+    }
+
+    let mut conn = self.get_random_endorser_connection();
+    let (tail_hash, ledger_height, signature) =
+        conn.call_endorser_append(handle.clone(), hash_of_block.clone()).await.unwrap();
+
+    let reply = protocol::Status {
+      tail_hash,
+      ledger_height,
+      signature: signature.to_bytes().to_vec()
+    };
 
     Ok(Response::new(reply))
   }

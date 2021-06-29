@@ -1,4 +1,5 @@
-use endorserprotocol::{Empty, EndorserLedgerResponse, EndorserPublicKey, EndorserQueryResponse};
+use endorserprotocol::{Empty, EndorserLedgerResponse, EndorserAppendResponse,
+                       EndorserQueryResponse, EndorserPublicKey};
 use endorserprotocol::endorser_call_client::{EndorserCallClient};
 use tonic::transport::{Channel, Endpoint};
 use tonic::codegen::http::uri::InvalidUri;
@@ -88,6 +89,22 @@ impl EndorserConnection {
             ed25519_dalek::ed25519::signature::Signature::from_bytes(&signature).unwrap();
 
         Ok(signature_instance)
+    }
+
+    pub async fn call_endorser_append(&mut self, handle: Vec<u8>, block_content_hash: Vec<u8>)
+        -> Result<(Vec<u8>, u64, Signature), Box<dyn Error>> {
+        let request = tonic::Request::new(endorserprotocol::EndorserAppendRequest {
+            endorser_handle: handle,
+            data: block_content_hash,
+        });
+
+        let EndorserAppendResponse { tail_hash, ledger_height, signature } =
+            self.client.append_to_ledger(request).await?.into_inner();
+
+        let signature_instance =
+            ed25519_dalek::ed25519::signature::Signature::from_bytes(&signature).unwrap();
+
+        Ok((tail_hash, ledger_height, signature_instance))
     }
 }
 

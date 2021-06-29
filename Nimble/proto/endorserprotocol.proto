@@ -41,8 +41,8 @@ message EndorserAppendRequest {
 }
 
 message EndorserAppendResponse {
-  bytes previous_hash = 1;
-  bytes tail = 2;
+  bytes tail_hash = 1;
+  uint64 ledger_height = 2;
   bytes signature = 3;
 }
 

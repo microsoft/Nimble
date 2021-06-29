@@ -92,7 +92,7 @@ impl EndorserState {
     &mut self,
     endorser_handle: Vec<u8>,
     updated_hash: Vec<u8>,
-  ) -> Result<(Vec<u8>, Vec<u8>, Signature), EndorserError> {
+  ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     if self.ledgers.contains_key(&*endorser_handle.clone()) {
       let (handle, previous_hash) = self
         .ledgers
@@ -106,7 +106,7 @@ impl EndorserState {
       self
         .ledgers
         .insert(handle.to_vec(), (tail_hash.clone().to_vec(), previous_tail_height + 1));
-      return Ok((previous_hash_bytes, tail_hash.clone().to_vec(), signature));
+      return Ok((tail_hash.clone().to_vec(), previous_tail_height + 1, signature));
     }
     Err(EndorserError::StateCreationError)
   }
@@ -172,7 +172,7 @@ impl Store {
     &mut self,
     endorsor_handle: Vec<u8>,
     updated_data: Vec<u8>,
-  ) -> Result<(Vec<u8>, Vec<u8>, Signature), EndorserError> {
+  ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     let handle = &endorsor_handle.clone();
     println!("Handle Queried: {:?}", handle);
     let updated_hash = hash(updated_data.as_slice());
