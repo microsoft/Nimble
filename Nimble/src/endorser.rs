@@ -97,23 +97,27 @@ impl EndorserCall for EndorserServiceState {
     let Handle { handle } = request.into_inner();
     println!("Network read handle: {:?}", handle);
 
+    let zero_entry = [0u8; 32].to_vec();
+    let ledger_height = 0u64;
+    let ledger_height_bytes = ledger_height.to_be_bytes().to_vec();
+    let mut message: Vec<u8> = vec![];
+    message.extend(zero_entry);
+    message.extend(handle.to_vec());
+    message.extend(ledger_height_bytes);
+
+    let tail_hash = helper::hash(&message).to_vec();
+
     let mut state_instance = self
       .state
       .write()
       .expect("Unable to get a write lock on EndorserState");
-    let (endorsed_handle, signature, public_key) = state_instance
-      .create_new_ledger_in_endorser_state(handle)
+
+    let signature = state_instance
+      .create_new_ledger_in_endorser_state(handle, tail_hash, ledger_height)
       .expect("Unable to get the signature on genesis handle");
 
-    let endorser_info = EndorserPublicKey {
-      publickey: public_key.get_public_key(),
-      signature: public_key.get_signature(),
-    };
-
     let reply = EndorserLedgerResponse {
-      name: endorsed_handle,
       signature: signature.to_bytes().to_vec(),
-      endorser_info: Some(endorser_info),
     };
     Ok(Response::new(reply))
   }
@@ -183,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       let addr = "[::1]:9090".parse()?;
   let server = EndorserServiceState::new();
 
-  println!("Running gRPC Coordinator Service at {:?}", addr);
+  println!("Running gRPC Endorser Service at {:?}", addr);
 
   Server::builder()
     .add_service(EndorserCallServer::new(server))

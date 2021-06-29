@@ -23,7 +23,7 @@ pub struct EndorserState {
   keypair: Keypair,
 
   /// a map from fixed-sized labels to a tail hash
-  ledgers: HashMap<Vec<u8>, Vec<u8>>,
+  ledgers: HashMap<Vec<u8>, (Vec<u8>, u64)>,
 
   /// Endorser identity
   id: EndorserIdentity,
@@ -63,15 +63,15 @@ impl EndorserState {
 
   pub fn create_ledger(
     &mut self,
-    genesis_block_hash: Vec<u8>,
-  ) -> Result<(Vec<u8>, Signature, PublicKey), EndorserError> {
+    handle: Vec<u8>,
+    tail_hash: Vec<u8>,
+    height: u64,
+  ) -> Result<(Vec<u8>, Signature), EndorserError> {
     // The first time a ledger is requested, generate a handle and sign it
-    let handle = genesis_block_hash.clone();
-    let sign_handle = self.keypair.sign(handle.as_slice());
-    let sign_hash = hash(&sign_handle.clone().to_bytes());
-    println!("Inserting {:?} --> {:?}", handle, sign_hash);
-    self.ledgers.insert(handle.clone(), sign_hash.to_vec());
-    Ok((handle.clone(), sign_handle, self.keypair.public))
+    let signature = self.keypair.sign(tail_hash.as_slice());
+    println!("Inserting {:?} --> {:?}", handle, tail_hash);
+    self.ledgers.insert(handle.clone(), (tail_hash.to_vec(), height));
+    Ok((handle.clone(), signature))
   }
 
   pub fn get_handles_in_endorser_state(&self) -> Result<Vec<Vec<u8>>, EndorserError> {
@@ -79,11 +79,11 @@ impl EndorserState {
     Ok(handles)
   }
 
-  pub fn get_tail(&self, endorser_handle: Vec<u8>) -> Result<Vec<u8>, EndorserError> {
+  pub fn get_tail(&self, endorser_handle: Vec<u8>) -> Result<(Vec<u8>, u64), EndorserError> {
     println!("Handle: {:?}", endorser_handle);
     if self.ledgers.contains_key(&*endorser_handle) {
-      let current_tail = self.ledgers.get(endorser_handle.as_slice());
-      return Ok(current_tail.unwrap().to_vec());
+      let (current_tail, tail_height) = self.ledgers.get(endorser_handle.as_slice()).unwrap();
+      return Ok((current_tail.to_vec(), tail_height.clone()));
     }
     Err(EndorserError::StateCreationError)
   }
@@ -98,14 +98,14 @@ impl EndorserState {
         .ledgers
         .get_key_value(&*endorser_handle.clone())
         .unwrap();
-      let previous_hash_bytes = previous_hash.clone();
+      let (previous_hash_bytes, previous_tail_height) = previous_hash.clone();
       let current_hash = updated_hash.clone();
-      let concat_hashes = concat_bytes(previous_hash, current_hash.as_slice());
+      let concat_hashes = concat_bytes(&previous_hash_bytes, current_hash.as_slice());
       let tail_hash = hash(concat_hashes.as_slice());
       let signature = self.keypair.sign(tail_hash.as_slice());
       self
         .ledgers
-        .insert(handle.to_vec(), tail_hash.clone().to_vec());
+        .insert(handle.to_vec(), (tail_hash.clone().to_vec(), previous_tail_height + 1));
       return Ok((previous_hash_bytes, tail_hash.clone().to_vec(), signature));
     }
     Err(EndorserError::StateCreationError)
@@ -148,13 +148,15 @@ impl Store {
   pub fn create_new_ledger_in_endorser_state(
     &mut self,
     coordinator_handle: Vec<u8>,
-  ) -> Result<(Vec<u8>, Signature, EndorserIdentity), EndorserError> {
+    tail_hash: Vec<u8>,
+    tail_index: u64,
+  ) -> Result<Signature, EndorserError> {
     println!("Received Coordinator Handle: {:?}", coordinator_handle);
-    let (handle, ledger_response, public_key) = self
+    let (handle, ledger_response) = self
       .state
-      .create_ledger(coordinator_handle)
+      .create_ledger(coordinator_handle, tail_hash, tail_index)
       .expect("Unable to create a Ledger in EndorserState");
-    Ok((handle, ledger_response, self.state.id))
+    Ok((ledger_response))
   }
 
   pub fn get_all_available_handles(&self) -> Vec<Vec<u8>> {
@@ -188,9 +190,9 @@ impl Store {
   ) -> Result<(Vec<u8>, Vec<u8>, Signature), EndorserError> {
     let tail_hash = self.state.get_tail(handle);
     if tail_hash.is_ok() {
-      let tail_hash_bytes = tail_hash.unwrap().to_vec();
+      let (tail_hash_bytes, ledger_height) = tail_hash.unwrap();
       let concat_result = concat_bytes(tail_hash_bytes.as_slice(), nonce.as_slice());
-      let content_to_sign = hash(concat_result.as_slice());
+      let content_to_sign = hash(&concat_result);
       let endorser_signature = self.state.keypair.sign(content_to_sign.as_slice());
       return Ok((nonce, tail_hash_bytes, endorser_signature));
     }
@@ -274,7 +276,7 @@ mod tests {
       // Fetch the value currently in the tail.
       let tail_result = endorser_state.get_tail(genesis_block_hash.to_vec());
       if tail_result.is_ok() {
-        let tail_hash = tail_result.unwrap();
+        let (tail_hash, ledger_height) = tail_result.unwrap();
         assert_eq!(tail_hash, hash(&signature_expected.to_bytes()).to_vec());
       } else {
         panic!("Failed to retrieve correct tail hash on genesis ledger state creation");
@@ -294,7 +296,7 @@ mod tests {
     let (handle, signature, public_key) = create_ledger_endorser_response.unwrap();
 
     // Fetch the value currently in the tail.
-    let tail_result = endorser_state
+    let (tail_result, ledger_height) = endorser_state
       .get_tail(genesis_block_hash.to_vec())
       .unwrap();
 
@@ -314,7 +316,7 @@ mod tests {
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
-      let new_tail = endorser_state.get_tail(handle).unwrap();
+      let (new_tail, ledger_height) = endorser_state.get_tail(handle).unwrap();
       assert_eq!(new_tail.as_slice(), tail.as_slice());
       assert_eq!(new_tail.as_slice(), expected_tail.as_slice());
     } else {

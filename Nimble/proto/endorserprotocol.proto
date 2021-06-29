@@ -14,9 +14,7 @@ service EndorserCall {
 }
 
 message EndorserLedgerResponse {
-  bytes name = 1;
-  bytes signature = 2;
-  EndorserPublicKey endorser_info = 3;
+  bytes signature = 1;
 }
 
 message EndorserLedgerHandles {

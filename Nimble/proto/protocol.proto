@@ -3,18 +3,18 @@ syntax = "proto3";
 package protocol;
 
 service Call {
-  rpc NewLedger(LedgerRequest) returns (LedgerResponse);
+  rpc NewLedger(Empty) returns (LedgerResponse);
   rpc AppendToLedger(UpdateQuery) returns (Status);
   rpc ReadLatest(Query) returns (Response);
   rpc ReadAtIndex(Query) returns (Response);
 }
 
-message LedgerRequest {
-  string name = 1;
+message Empty {
 }
 
 message LedgerResponse {
-  string handle = 1;
+  bytes block_data = 1;
+  bytes signature = 2;
 }
 
 message Status {
@@ -22,12 +22,13 @@ message Status {
 }
 
 message Query {
-  string handle = 1;
+  bytes handle = 1;
   uint64 index = 2;
+  bytes nonce = 3;
 }
 
 message UpdateQuery {
-  string handle = 1;
+  bytes handle = 1;
   Data value = 2;
 }
 
