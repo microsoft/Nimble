@@ -95,7 +95,7 @@ impl EndorserConnection {
         -> Result<(Vec<u8>, u64, Signature), Box<dyn Error>> {
         let request = tonic::Request::new(endorserprotocol::EndorserAppendRequest {
             endorser_handle: handle,
-            data: block_content_hash,
+            block_hash: block_content_hash,
         });
 
         let EndorserAppendResponse { tail_hash, ledger_height, signature } =

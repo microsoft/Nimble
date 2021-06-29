@@ -39,5 +39,8 @@ message Data {
 }
 
 message Response {
-  Data value = 1;
+  bytes block_data = 1;
+  bytes tail_hash = 2;
+  uint64 ledger_height = 3;
+  bytes endorser_signature = 4;
 }

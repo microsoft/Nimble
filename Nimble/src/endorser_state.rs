@@ -91,22 +91,32 @@ impl EndorserState {
   pub fn append_ledger(
     &mut self,
     endorser_handle: Vec<u8>,
-    updated_hash: Vec<u8>,
+    block_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     if self.ledgers.contains_key(&*endorser_handle.clone()) {
-      let (handle, previous_hash) = self
-        .ledgers
-        .get_key_value(&*endorser_handle.clone())
-        .unwrap();
-      let (previous_hash_bytes, previous_tail_height) = previous_hash.clone();
-      let current_hash = updated_hash.clone();
-      let concat_hashes = concat_bytes(&previous_hash_bytes, current_hash.as_slice());
-      let tail_hash = hash(concat_hashes.as_slice());
-      let signature = self.keypair.sign(tail_hash.as_slice());
+      let (current_tail, current_ledger_height) =
+          self.get_tail(endorser_handle.clone()).unwrap();
+      println!("Current Tail: {:?}, Height: {:?}", current_tail, current_ledger_height);
+      let new_ledger_height = current_ledger_height + 1;
+      println!("New Height: {:?}", new_ledger_height);
+
+      let mut packed_metadata = Vec::new();
+      let ledger_height_bytes = new_ledger_height.to_be_bytes().to_vec();
+      packed_metadata.extend(current_tail.clone());
+      packed_metadata.extend(block_hash.clone());
+      packed_metadata.extend(ledger_height_bytes);
+
+      println!("m: {:?}", packed_metadata);
+
+      let tail_hash = hash(packed_metadata.as_slice());
+
       self
         .ledgers
-        .insert(handle.to_vec(), (tail_hash.clone().to_vec(), previous_tail_height + 1));
-      return Ok((tail_hash.clone().to_vec(), previous_tail_height + 1, signature));
+        .insert(endorser_handle.to_vec(), (tail_hash.clone().to_vec(), new_ledger_height));
+
+      let signature = self.keypair.sign(tail_hash.as_slice());
+
+      return Ok((current_tail.clone(), new_ledger_height, signature));
     }
     Err(EndorserError::StateCreationError)
   }
@@ -170,15 +180,14 @@ impl Store {
 
   pub fn append_and_update_endorser_state_tail(
     &mut self,
-    endorsor_handle: Vec<u8>,
-    updated_data: Vec<u8>,
+    endorser_handle: Vec<u8>,
+    block_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
-    let handle = &endorsor_handle.clone();
-    println!("Handle Queried: {:?}", handle);
-    let updated_hash = hash(updated_data.as_slice());
+    let handle = &endorser_handle.clone();
+    println!("Handle Queried: {:?} with Block Hash: {:?}", handle, block_hash);
     let (previous_state, tail, signature) = self
       .state
-      .append_ledger(handle.clone(), updated_hash.to_vec())
+      .append_ledger(handle.clone(), block_hash.to_vec())
       .unwrap();
     Ok((previous_state, tail, signature))
   }

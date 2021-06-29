@@ -37,7 +37,7 @@ message Empty {
 
 message EndorserAppendRequest {
   bytes endorser_handle = 1;
-  bytes data = 2;
+  bytes block_hash = 2;
 }
 
 message EndorserAppendResponse {

@@ -1,15 +1,33 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use ed25519_dalek::Signature;
 
 #[derive(Debug, Default)]
 pub struct Store {
   pub ledgers: HashMap<Vec<u8>, Vec<Vec<u8>>>,
+  pub metadata: HashMap<Vec<u8>, Vec<MetaBlock>>
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MetaBlock {
+  pub message_data: Vec<u8>,
+  pub signatures: Vec<Signature>,
+}
+
+impl MetaBlock {
+  pub fn new(message_data: &Vec<u8>, signatures: &Vec<Signature>) -> Self {
+    MetaBlock {
+      message_data: message_data.clone(),
+      signatures: signatures.clone(),
+    }
+  }
 }
 
 impl Store {
   pub fn new() -> Self {
     Store {
       ledgers: HashMap::new(),
+      metadata: HashMap::new(),
     }
   }
 
@@ -28,12 +46,35 @@ impl Store {
     }
   }
 
+  pub fn set_metadata(&mut self, key: &Vec<u8>, metadata: &Vec<u8>, signatures: &Vec<Signature>) {
+    println!("Setting Metadata State: {:?} --> ({:?}, {:?})", key, metadata, signatures);
+    let value = MetaBlock::new(metadata, signatures);
+    if self.metadata.contains_key(key) {
+      let (k, metadata_ledger) = self.metadata.get_key_value(key).unwrap();
+      let mut existing_ledger = metadata_ledger.clone();
+      existing_ledger.push(value);
+      println!("Updated State: {:?} --> {:?}", key, existing_ledger);
+      self.metadata.insert(key.to_vec(), existing_ledger);
+    } else {
+      self.metadata.entry(key.to_vec()).or_default().push(value.clone());
+      println!("Updated State: {:?} --> {:?}", key, value.clone());
+    }
+  }
+
   pub fn get(&self, key: Vec<u8>) -> Vec<Vec<u8>> {
     self.ledgers.get(&*key).unwrap().to_vec()
   }
 
+  pub fn get_metadata(&self, key: Vec<u8>) -> Vec<MetaBlock> {
+    self.metadata.get(&*key).unwrap().to_vec()
+  }
+
   pub fn get_latest_state_of_ledger(&self, key: Vec<u8>) -> Vec<u8> {
     self.get(key).last().unwrap().to_vec()
+  }
+
+  pub fn get_latest_state_of_metadata_ledger(&self, key: Vec<u8>) -> MetaBlock {
+    self.get_metadata(key).last().unwrap().clone()
   }
 
   pub fn get_ledger_state_at_index(&self, key: Vec<u8>, mut index: u64) -> Vec<u8> {
@@ -42,8 +83,19 @@ impl Store {
     if !(index < ledger.len() as u64) {
       index = 0
     }
+    // This might cause an issue down the line ...
     let usize_index = usize::try_from(index).unwrap();
     ledger[usize_index].to_vec()
+  }
+
+  pub fn get_metadata_ledger_state_at_index(&self, key: Vec<u8>, mut index: u64) -> MetaBlock {
+    let metadata_ledger = self.get_metadata(key);
+    if !(index < metadata_ledger.len() as u64) {
+      index = 0
+    }
+    // This might cause an issue down the line ...
+    let usize_index = usize::try_from(index).unwrap();
+    metadata_ledger[usize_index].clone()
   }
 
   pub fn get_all_ledgers_handles(&self) -> Vec<Vec<u8>> {
