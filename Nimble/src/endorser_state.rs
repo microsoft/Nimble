@@ -101,7 +101,10 @@ impl EndorserState {
       let conditional_tail_bytes = conditional_tail_hash.as_slice();
       // TODO: Handle case where conditional tail_bytes aren't provided (treating it as [0u8] array for now)
       if current_tail_bytes != conditional_tail_bytes && conditional_tail_bytes != [0u8; 32] {
-        println!("Current: {:?}; Conditional: {:?}", current_tail_bytes, conditional_tail_bytes);
+        println!(
+          "Current: {:?}; Conditional: {:?}",
+          current_tail_bytes, conditional_tail_bytes
+        );
         Err(EndorserError::TailDoesNotMatch).unwrap()
       }
       println!(
@@ -203,7 +206,11 @@ impl Store {
     );
     let (previous_state, tail, signature) = self
       .state
-      .append_ledger(handle.clone(), block_hash.to_vec(), conditional_tail_hash.clone())
+      .append_ledger(
+        handle.clone(),
+        block_hash.to_vec(),
+        conditional_tail_hash.clone(),
+      )
       .unwrap();
     Ok((previous_state, tail, signature))
   }
@@ -340,9 +347,14 @@ mod tests {
       .unwrap();
 
     let block_hash_to_append = rand::thread_rng().gen::<[u8; 32]>();
+    let zero_block = [0u8; 32].to_vec();
 
     let (previous_tail, new_ledger_height, signature) = endorser_state
-      .append_ledger(coordinator_handle.to_vec(), block_hash_to_append.to_vec())
+      .append_ledger(
+        coordinator_handle.to_vec(),
+        block_hash_to_append.to_vec(),
+        zero_block,
+      )
       .unwrap();
 
     assert_eq!(tail_result, previous_tail);

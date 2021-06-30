@@ -1,15 +1,15 @@
 mod helper;
 mod verification;
 
+use crate::helper::pack_metadata_information;
 use crate::verification::{
   verify_append_to_ledger, verify_ledger_response, verify_read_at_index_response,
   verify_read_latest_response,
 };
 use protocol::call_client::CallClient;
 use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
-use rand::Rng;
-use crate::helper::pack_metadata_information;
 use rand::seq::SliceRandom;
+use rand::Rng;
 
 pub mod protocol {
   tonic::include_proto!("protocol");
@@ -134,7 +134,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tail_hash_expectation = helper::hash(&tail_content).to_vec();
     let zero_state = [0u8; 32].to_vec();
     let test_with_expected_tail_or_none = vec![&tail_hash_expectation, &zero_state];
-    last_known_tail = test_with_expected_tail_or_none.choose(&mut rand::thread_rng()).unwrap().to_vec();
+    last_known_tail = test_with_expected_tail_or_none
+      .choose(&mut rand::thread_rng())
+      .unwrap()
+      .to_vec();
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data

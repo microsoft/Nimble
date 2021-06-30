@@ -110,7 +110,11 @@ impl Call for CoordinatorState {
     &self,
     request: Request<UpdateQuery>,
   ) -> Result<Response<protocol::Status>, Status> {
-    let UpdateQuery { handle, value, conditional_tail_hash } = request.into_inner();
+    let UpdateQuery {
+      handle,
+      value,
+      conditional_tail_hash,
+    } = request.into_inner();
     println!(
       "Received a AppendToLedger Request with Conditional Hash : {:?} {:?} {:?}",
       handle, value, conditional_tail_hash
@@ -127,7 +131,11 @@ impl Call for CoordinatorState {
     // Ideally need to run multiple times for multiple endorsers.
     let mut conn = self.get_random_endorser_connection();
     let (tail_hash, ledger_height, signature) = conn
-      .call_endorser_append(handle.clone(), hash_of_block.clone(), conditional_tail_hash.clone())
+      .call_endorser_append(
+        handle.clone(),
+        hash_of_block.clone(),
+        conditional_tail_hash.clone(),
+      )
       .await
       .unwrap();
 
