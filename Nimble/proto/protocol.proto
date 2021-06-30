@@ -32,6 +32,7 @@ message Query {
 message UpdateQuery {
   bytes handle = 1;
   Data value = 2;
+  bytes conditional_tail_hash = 3;  // Ideally optional
 }
 
 message Data {

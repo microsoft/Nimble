@@ -93,9 +93,17 @@ impl EndorserState {
     &mut self,
     endorser_handle: Vec<u8>,
     block_hash: Vec<u8>,
+    conditional_tail_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     if self.ledgers.contains_key(&*endorser_handle.clone()) {
       let (current_tail, current_ledger_height) = self.get_tail(endorser_handle.clone()).unwrap();
+      let current_tail_bytes = current_tail.as_slice();
+      let conditional_tail_bytes = conditional_tail_hash.as_slice();
+      // TODO: Handle case where conditional tail_bytes aren't provided (treating it as [0u8] array for now)
+      if current_tail_bytes != conditional_tail_bytes && conditional_tail_bytes != [0u8; 32] {
+        println!("Current: {:?}; Conditional: {:?}", current_tail_bytes, conditional_tail_bytes);
+        Err(EndorserError::TailDoesNotMatch).unwrap()
+      }
       println!(
         "Current Tail: {:?}, Height: {:?}",
         current_tail, current_ledger_height
@@ -186,6 +194,7 @@ impl Store {
     &mut self,
     endorser_handle: Vec<u8>,
     block_hash: Vec<u8>,
+    conditional_tail_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), EndorserError> {
     let handle = &endorser_handle.clone();
     println!(
@@ -194,7 +203,7 @@ impl Store {
     );
     let (previous_state, tail, signature) = self
       .state
-      .append_ledger(handle.clone(), block_hash.to_vec())
+      .append_ledger(handle.clone(), block_hash.to_vec(), conditional_tail_hash.clone())
       .unwrap();
     Ok((previous_state, tail, signature))
   }

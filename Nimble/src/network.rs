@@ -101,10 +101,12 @@ impl EndorserConnection {
     &mut self,
     handle: Vec<u8>,
     block_content_hash: Vec<u8>,
+    conditional_tail_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), Box<dyn Error>> {
     let request = tonic::Request::new(endorserprotocol::EndorserAppendRequest {
       endorser_handle: handle,
       block_hash: block_content_hash,
+      conditional_tail_hash,
     });
 
     let EndorserAppendResponse {

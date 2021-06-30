@@ -8,6 +8,8 @@ use crate::verification::{
 use protocol::call_client::CallClient;
 use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
 use rand::Rng;
+use crate::helper::pack_metadata_information;
+use rand::seq::SliceRandom;
 
 pub mod protocol {
   tonic::include_proto!("protocol");
@@ -95,12 +97,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let m3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let messages = vec![&m1, &m2, &m3].to_vec();
 
+  let mut last_known_tail = tail_hash.clone();
+
   for message in messages {
     let update_query = tonic::Request::new(UpdateQuery {
       handle: handle.clone(),
       value: Some(Data {
         content: message.to_vec(),
       }),
+      conditional_tail_hash: last_known_tail.to_vec(),
     });
 
     let protocol::Status {
@@ -120,6 +125,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       "Appended {:?} and Verification: {:?}",
       message, is_verify_append_valid
     );
+    assert_eq!(is_verify_append_valid, true);
+
+    // Coordinator returns previous Tail Hash State prior to append, use the information to
+    // construct T' which is the known tail or the expectation for the client.
+    let block_hash = helper::hash(&message).to_vec();
+    let tail_content = pack_metadata_information(tail_hash, block_hash, ledger_height);
+    let tail_hash_expectation = helper::hash(&tail_content).to_vec();
+    let zero_state = [0u8; 32].to_vec();
+    let test_with_expected_tail_or_none = vec![&tail_hash_expectation, &zero_state];
+    last_known_tail = test_with_expected_tail_or_none.choose(&mut rand::thread_rng()).unwrap().to_vec();
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data

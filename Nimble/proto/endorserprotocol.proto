@@ -38,6 +38,7 @@ message Empty {
 message EndorserAppendRequest {
   bytes endorser_handle = 1;
   bytes block_hash = 2;
+  bytes conditional_tail_hash = 3;  // Ideally optional
 }
 
 message EndorserAppendResponse {

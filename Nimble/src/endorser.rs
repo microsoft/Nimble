@@ -137,11 +137,12 @@ impl EndorserCall for EndorserServiceState {
     let EndorserAppendRequest {
       endorser_handle,
       block_hash,
+      conditional_tail_hash,
     } = request.into_inner();
     println!("Network read handle: {:?}", endorser_handle);
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
     let append_status =
-      endorser_state.append_and_update_endorser_state_tail(endorser_handle, block_hash);
+      endorser_state.append_and_update_endorser_state_tail(endorser_handle, block_hash, conditional_tail_hash);
 
     if append_status.is_ok() {
       let (tail_hash, ledger_height, signature) = append_status.unwrap();
