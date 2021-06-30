@@ -177,6 +177,10 @@ impl Store {
     tail_index: u64,
   ) -> Result<Signature, EndorserError> {
     println!("Received Coordinator Handle: {:?}", coordinator_handle);
+    let check_handle_existence = self.state.ledgers.contains_key(&coordinator_handle);
+    if check_handle_existence {
+      Err(EndorserError::LedgerExists).unwrap()
+    }
     let (_handle, ledger_response) = self
       .state
       .create_ledger(coordinator_handle, tail_hash, tail_index)
