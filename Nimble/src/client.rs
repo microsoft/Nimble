@@ -114,6 +114,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       signature,
     } = client.append_to_ledger(update_query).await?.into_inner();
 
+    if last_known_tail != [0u8; 32] {
+      println!("Asserting returned tail hash is the conditional expectation");
+      assert_eq!(tail_hash, last_known_tail);
+    }
+
     let is_verify_append_valid = verify_append_to_ledger(
       &message.to_vec(),
       &tail_hash,
