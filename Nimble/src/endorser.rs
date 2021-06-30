@@ -2,25 +2,17 @@ mod endorser_state;
 mod errors;
 mod helper;
 
-use crate::endorser_state::{EndorserIdentity, EndorserState, Store};
+use crate::endorser_state::Store;
 use crate::errors::EndorserError;
-use crate::helper::concat_bytes;
-use digest::Output;
-use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
 use endorserprotocol::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorserprotocol::{
   Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerHandles,
   EndorserLedgerResponse, EndorserPublicKey, EndorserQuery, EndorserQueryResponse,
   EndorserStateResponse, Handle,
 };
-use hex::encode;
-use rand::rngs::OsRng;
-use sha3::{Digest, Sha3_256};
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
-use uuid::Uuid;
 
 pub mod endorserprotocol {
   tonic::include_proto!("endorserprotocol");
@@ -42,7 +34,7 @@ impl EndorserServiceState {
 impl EndorserCall for EndorserServiceState {
   async fn new_endorser(
     &self,
-    request: Request<Empty>,
+    _request: Request<Empty>,
   ) -> Result<Response<EndorserStateResponse>, Status> {
     println!("Received a NewLedger Request. Generating Handle and creating new EndorserState");
 
@@ -67,7 +59,7 @@ impl EndorserCall for EndorserServiceState {
 
   async fn get_endorser_public_key(
     &self,
-    request: Request<Empty>,
+    _request: Request<Empty>,
   ) -> Result<Response<EndorserPublicKey>, Status> {
     let state_instance = self
       .state
@@ -124,7 +116,7 @@ impl EndorserCall for EndorserServiceState {
 
   async fn get_all_ledgers(
     &self,
-    request: Request<Empty>,
+    _request: Request<Empty>,
   ) -> Result<Response<EndorserLedgerHandles>, Status> {
     let available_handles_in_state = self
       .state

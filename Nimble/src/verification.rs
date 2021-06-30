@@ -59,7 +59,7 @@ pub fn verify_ledger_response(block_data: Vec<u8>, signature_bytes: Vec<u8>) -> 
   let signature =
     ed25519_dalek::ed25519::signature::Signature::from_bytes(&signature_bytes).unwrap();
   println!("Handle : {:?}", handle);
-  let (pk, sig, nonce) = parse_genesis_block_data(block_data).unwrap();
+  let (pk, sig, _nonce) = parse_genesis_block_data(block_data).unwrap();
   // For each endorser: Do the following
   let is_endorser_information_valid = verify_endorser_information(&pk, &sig);
   println!("Endorser Verified: {:?}", is_endorser_information_valid);

@@ -1,20 +1,13 @@
 use ed25519_dalek::{PublicKey, Signature};
 use endorserprotocol::endorser_call_client::EndorserCallClient;
 use endorserprotocol::{
-  Empty, EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey, EndorserQueryResponse,
+  EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey, EndorserQueryResponse,
 };
 use std::error::Error;
-use tonic::codegen::http::uri::InvalidUri;
 use tonic::transport::{Channel, Endpoint};
 
 pub mod protocol {
   tonic::include_proto!("protocol");
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CoordinatorError {
-  /// Returned if the coordinator is unable to connect to an endorser.
-  UnableToConnectToEndorser,
 }
 
 pub mod endorserprotocol {
@@ -93,8 +86,8 @@ impl EndorserConnection {
     let request = tonic::Request::new(endorserprotocol::EndorserQuery { handle, nonce });
 
     let EndorserQueryResponse {
-      nonce,
-      tail_hash,
+      nonce: _,
+      tail_hash: _,
       signature,
     } = self.client.read_latest(request).await?.into_inner();
 

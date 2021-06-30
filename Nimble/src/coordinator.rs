@@ -5,9 +5,7 @@ mod store;
 use crate::network::EndorserConnection;
 use crate::store::Store;
 use protocol::call_server::{Call, CallServer};
-use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
-use std::collections::HashMap;
-use std::convert::TryFrom;
+use protocol::{LedgerResponse, Query, UpdateQuery};
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -55,7 +53,7 @@ impl CoordinatorState {
 impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
-    request: Request<protocol::Empty>,
+    _request: Request<protocol::Empty>,
   ) -> Result<Response<LedgerResponse>, Status> {
     println!("Received a NewLedger Request");
 
@@ -175,7 +173,7 @@ impl Call for CoordinatorState {
 
     // 3. Read latest metablock and signatures from Metadata structure
     let metavalue = read_lock_state.get_latest_state_of_metadata_ledger(handle.clone());
-    let (tail_hash, block_hash, ledger_height) =
+    let (tail_hash, _block_hash, ledger_height) =
       helper::unpack_metadata_information(metavalue.message_data);
 
     // 4. Pack the response structure (m, \sigma) from metadata structure
@@ -217,7 +215,7 @@ impl Call for CoordinatorState {
     println!("Metadata at index: {:?}", metadata_at_index);
 
     // 2. Retrieve the information from the metadata structure.
-    let (tail_hash, block_hash, ledger_height) =
+    let (tail_hash, _block_hash, ledger_height) =
       helper::unpack_metadata_information(metadata_at_index.message_data);
 
     // Force only one for now. TODO(@sudheesh): Multiple endorser case.

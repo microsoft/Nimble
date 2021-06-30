@@ -53,7 +53,7 @@ impl Store {
     );
     let value = MetaBlock::new(metadata, signatures);
     if self.metadata.contains_key(key) {
-      let (k, metadata_ledger) = self.metadata.get_key_value(key).unwrap();
+      let (_k, metadata_ledger) = self.metadata.get_key_value(key).unwrap();
       let mut existing_ledger = metadata_ledger.clone();
       existing_ledger.push(value);
       println!("Updated State: {:?} --> {:?}", key, existing_ledger);
@@ -104,14 +104,10 @@ impl Store {
     let usize_index = usize::try_from(index).unwrap();
     metadata_ledger[usize_index].clone()
   }
-
-  pub fn get_all_ledgers_handles(&self) -> Vec<Vec<u8>> {
-    self.ledgers.keys().cloned().collect()
-  }
 }
 
+#[cfg(test)]
 mod tests {
-  use super::*;
   use crate::store::Store;
 
   #[test]

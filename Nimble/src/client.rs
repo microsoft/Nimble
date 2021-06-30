@@ -6,7 +6,7 @@ use crate::verification::{
   verify_read_latest_response,
 };
 use protocol::call_client::CallClient;
-use protocol::{Data, Empty, LedgerResponse, Query, Response, Status, UpdateQuery};
+use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
 use rand::Rng;
 
 pub mod protocol {

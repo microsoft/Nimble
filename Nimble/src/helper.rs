@@ -1,7 +1,6 @@
 use sha3::digest::Output;
 use sha3::{Digest, Sha3_256};
 use std::convert::TryInto;
-use tokio::io::AsyncReadExt;
 
 pub fn concat_bytes(first: &[u8], second: &[u8]) -> Vec<u8> {
   [first, second].concat()
@@ -43,6 +42,7 @@ pub fn pack_metadata_information(
   packed_metadata
 }
 
+#[cfg(test)]
 mod tests {
   use super::*;
 

@@ -2,7 +2,6 @@ use crate::errors::EndorserError;
 use crate::helper::{concat_bytes, hash};
 use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
 use rand::rngs::OsRng;
-use sha3::digest::Output;
 use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 
@@ -141,7 +140,7 @@ impl Store {
   // Returns the creation of a new EndorserState and the Signed Key corresponding to it
   // Explicitly refreshes the keys in the keystate for testing purposes.
   pub fn create_new_endorser_state(&mut self) -> Result<(String, EndorserIdentity), EndorserError> {
-    let mut endorser_state = EndorserState::new();
+    let endorser_state = EndorserState::new();
     let identity = endorser_state.id.clone();
     let data = concat_bytes(identity.pubkey.as_bytes(), &identity.sign.to_bytes());
     println!("PK    : {:?}", identity.pubkey.to_bytes());
@@ -167,11 +166,11 @@ impl Store {
     tail_index: u64,
   ) -> Result<Signature, EndorserError> {
     println!("Received Coordinator Handle: {:?}", coordinator_handle);
-    let (handle, ledger_response) = self
+    let (_handle, ledger_response) = self
       .state
       .create_ledger(coordinator_handle, tail_hash, tail_index)
       .expect("Unable to create a Ledger in EndorserState");
-    Ok((ledger_response))
+    Ok(ledger_response)
   }
 
   pub fn get_all_available_handles(&self) -> Vec<Vec<u8>> {
@@ -207,7 +206,7 @@ impl Store {
   ) -> Result<(Vec<u8>, Vec<u8>, Signature), EndorserError> {
     let tail_hash = self.state.get_tail(handle);
     if tail_hash.is_ok() {
-      let (tail_hash_bytes, ledger_height) = tail_hash.unwrap();
+      let (tail_hash_bytes, _ledger_height) = tail_hash.unwrap();
       let concat_result = concat_bytes(tail_hash_bytes.as_slice(), nonce.as_slice());
       let content_to_sign = hash(&concat_result);
       let endorser_signature = self.state.keypair.sign(content_to_sign.as_slice());
@@ -217,6 +216,7 @@ impl Store {
   }
 }
 
+#[cfg(test)]
 mod tests {
   use super::*;
   use ed25519_dalek::ed25519::signature::Signature;
@@ -323,7 +323,7 @@ mod tests {
       ledger_height,
     );
 
-    let (handle, signature) = create_ledger_endorser_response.unwrap();
+    let (_handle, _signature) = create_ledger_endorser_response.unwrap();
 
     // Fetch the value currently in the tail.
     let (tail_result, ledger_height) = endorser_state
@@ -353,7 +353,7 @@ mod tests {
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
-      let (tail_result, ledger_height) = endorser_state
+      let (tail_result, _ledger_height) = endorser_state
         .get_tail(coordinator_handle.to_vec())
         .unwrap();
 
