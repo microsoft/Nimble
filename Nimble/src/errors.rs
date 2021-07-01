@@ -11,3 +11,9 @@ pub enum EndorserError {
   /// returned if the creation of the endorser state fails
   StateCreationError,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VerificationError {
+  /// returned if the supplied genesis block is not well formed
+  InvalidGenesisBlock,
+}

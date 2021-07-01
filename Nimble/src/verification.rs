@@ -1,3 +1,4 @@
+use crate::errors::VerificationError;
 use crate::helper;
 use crate::helper::concat_bytes;
 use ed25519_dalek::{PublicKey, Signature, Verifier};
@@ -33,13 +34,22 @@ fn verify_endorser_information(pk: &PublicKey, attestation: &Signature) -> bool 
 }
 
 fn reconstruct_genesis_metadata(handle: &Vec<u8>) -> Vec<u8> {
+  // canonical previous hash pointer for the genesis block
   let zero_entry = [0u8; 32].to_vec();
+
+  // canonical height for the genesis block
   let ledger_height = 0u64.to_be_bytes().to_vec();
-  let mut message: Vec<u8> = vec![];
-  message.extend(zero_entry);
-  message.extend(handle);
-  message.extend(ledger_height);
-  message
+
+  // genesis metadata has three entries
+  let genesis_metadata = {
+    let mut message: Vec<u8> = vec![];
+    message.extend(zero_entry);
+    message.extend(handle);
+    message.extend(ledger_height);
+    message
+  };
+
+  genesis_metadata
 }
 
 fn verify_endorser_tail_signature(
@@ -54,23 +64,29 @@ fn verify_endorser_tail_signature(
   return false;
 }
 
-pub fn verify_ledger_response(block_data: Vec<u8>, signature_bytes: Vec<u8>) -> (PublicKey, bool) {
+pub fn verify_new_ledger_response(
+  block_data: Vec<u8>,
+  signature_bytes: Vec<u8>,
+) -> Result<PublicKey, VerificationError> {
   let handle = helper::hash(&block_data).to_vec();
   let signature =
     ed25519_dalek::ed25519::signature::Signature::from_bytes(&signature_bytes).unwrap();
   println!("Handle : {:?}", handle);
   let (pk, sig, _nonce) = parse_genesis_block_data(block_data).unwrap();
   // For each endorser: Do the following
-  let is_endorser_information_valid = verify_endorser_information(&pk, &sig);
-  println!("Endorser Verified: {:?}", is_endorser_information_valid);
+
+  if !verify_endorser_information(&pk, &sig) {
+    return Err(VerificationError::InvalidGenesisBlock);
+  }
+  println!("Endorser Verified");
+
   let metadata_message = reconstruct_genesis_metadata(&handle);
   let tail_hash = helper::hash(&metadata_message).to_vec();
-  let endorser_information_verification =
-    verify_endorser_tail_signature(&pk, &tail_hash, &signature);
-  (
-    pk,
-    is_endorser_information_valid && endorser_information_verification,
-  )
+  if !verify_endorser_tail_signature(&pk, &tail_hash, &signature) {
+    return Err(VerificationError::InvalidGenesisBlock);
+  }
+
+  Ok(pk)
 }
 
 pub fn verify_read_latest_response(

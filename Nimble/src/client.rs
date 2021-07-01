@@ -1,9 +1,10 @@
+mod errors;
 mod helper;
 mod verification;
 
 use crate::helper::pack_metadata_information;
 use crate::verification::{
-  verify_append_to_ledger, verify_ledger_response, verify_read_at_index_response,
+  verify_append_to_ledger, verify_new_ledger_response, verify_read_at_index_response,
   verify_read_latest_response,
 };
 use protocol::call_client::CallClient;
@@ -33,9 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let handle = helper::hash(&block_data).to_vec();
   println!("Handle : {:?}", handle);
 
-  let (pk, is_valid) = verify_ledger_response(block_data, signature);
-  println!("Verification NewLedger: {:?}", is_valid);
-  assert_eq!(is_valid, true);
+  let res = verify_new_ledger_response(block_data, signature);
+  assert!(res.is_ok());
+  let pk = res.unwrap();
 
   // Step 2: Read Latest with the Nonce generated:
   let client_generated_nonce = rand::thread_rng().gen::<[u8; 16]>();
