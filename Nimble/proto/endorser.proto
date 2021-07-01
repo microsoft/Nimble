@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package endorserprotocol;
+package endorser_proto;
 
 service EndorserCall {
   // Debug Endpoints

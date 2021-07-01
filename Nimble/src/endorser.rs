@@ -4,8 +4,8 @@ mod helper;
 
 use crate::endorser_state::Store;
 use crate::errors::EndorserError;
-use endorserprotocol::endorser_call_server::{EndorserCall, EndorserCallServer};
-use endorserprotocol::{
+use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
+use endorser_proto::{
   Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerHandles,
   EndorserLedgerResponse, EndorserPublicKey, EndorserQuery, EndorserQueryResponse,
   EndorserStateResponse, Handle,
@@ -14,8 +14,8 @@ use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-pub mod endorserprotocol {
-  tonic::include_proto!("endorserprotocol");
+pub mod endorser_proto {
+  tonic::include_proto!("endorser_proto");
 }
 
 pub struct EndorserServiceState {
@@ -47,7 +47,7 @@ impl EndorserCall for EndorserServiceState {
       panic!("Failed. Should not have failed");
     }
     let (handle, endorser_id) = endorser_create_status.unwrap();
-    let reply = endorserprotocol::EndorserStateResponse {
+    let reply = endorser_proto::EndorserStateResponse {
       handle,
       keyinfo: Some(EndorserPublicKey {
         publickey: endorser_id.get_public_key(),

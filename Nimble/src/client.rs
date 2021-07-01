@@ -7,14 +7,15 @@ use crate::verification::{
   verify_append_to_ledger, verify_new_ledger_response, verify_read_at_index_response,
   verify_read_latest_response,
 };
-use protocol::call_client::CallClient;
-use protocol::{Data, Empty, LedgerResponse, Query, UpdateQuery};
 use rand::seq::SliceRandom;
 use rand::Rng;
 
-pub mod protocol {
-  tonic::include_proto!("protocol");
+pub mod coordinator_proto {
+  tonic::include_proto!("coordinator_proto");
 }
+
+use coordinator_proto::call_client::CallClient;
+use coordinator_proto::{Data, Empty, LedgerResponse, Query, UpdateQuery};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_generated_nonce.to_vec(),
   });
 
-  let protocol::Response {
+  let coordinator_proto::Response {
     block_data,
     tail_hash,
     ledger_height,
@@ -70,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: vec![],
   });
 
-  let protocol::Response {
+  let coordinator_proto::Response {
     block_data,
     tail_hash,
     ledger_height,
@@ -109,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       conditional_tail_hash: last_known_tail.to_vec(),
     });
 
-    let protocol::Status {
+    let coordinator_proto::Status {
       tail_hash,
       ledger_height,
       signature,
@@ -154,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_generated_nonce.to_vec(),
   });
 
-  let protocol::Response {
+  let coordinator_proto::Response {
     block_data,
     tail_hash,
     ledger_height,
@@ -180,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: vec![],
   });
 
-  let protocol::Response {
+  let coordinator_proto::Response {
     block_data,
     tail_hash,
     ledger_height,

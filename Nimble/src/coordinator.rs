@@ -4,16 +4,17 @@ mod store;
 
 use crate::network::EndorserConnection;
 use crate::store::Store;
-use protocol::call_server::{Call, CallServer};
-use protocol::{LedgerResponse, Query, UpdateQuery};
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-pub mod protocol {
-  tonic::include_proto!("protocol");
+pub mod coordinator_proto {
+  tonic::include_proto!("coordinator_proto");
 }
+
+use coordinator_proto::call_server::{Call, CallServer};
+use coordinator_proto::{LedgerResponse, Query, UpdateQuery};
 
 #[derive(Debug, Default)]
 pub struct CoordinatorState {
@@ -53,7 +54,7 @@ impl CoordinatorState {
 impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
-    _request: Request<protocol::Empty>,
+    _request: Request<coordinator_proto::Empty>,
   ) -> Result<Response<LedgerResponse>, Status> {
     println!("Received a NewLedger Request");
 
@@ -99,7 +100,7 @@ impl Call for CoordinatorState {
     let all_signatures = vec![ledger_response.clone()];
     store.set_metadata(&handle, &message, &all_signatures);
 
-    let reply = protocol::LedgerResponse {
+    let reply = coordinator_proto::LedgerResponse {
       block_data: genesis_block_bytes.clone().to_vec(),
       signature: ledger_response.to_bytes().to_vec(),
     };
@@ -109,7 +110,7 @@ impl Call for CoordinatorState {
   async fn append_to_ledger(
     &self,
     request: Request<UpdateQuery>,
-  ) -> Result<Response<protocol::Status>, Status> {
+  ) -> Result<Response<coordinator_proto::Status>, Status> {
     let UpdateQuery {
       handle,
       value,
@@ -147,7 +148,7 @@ impl Call for CoordinatorState {
       store.set_metadata(&handle.clone(), &metadata, &metadata_signatures);
     }
 
-    let reply = protocol::Status {
+    let reply = coordinator_proto::Status {
       tail_hash,
       ledger_height,
       signature: signature.to_bytes().to_vec(),
@@ -159,7 +160,7 @@ impl Call for CoordinatorState {
   async fn read_latest(
     &self,
     request: Request<Query>,
-  ) -> Result<Response<protocol::Response>, Status> {
+  ) -> Result<Response<coordinator_proto::Response>, Status> {
     let Query {
       handle,
       index: _,
@@ -186,7 +187,7 @@ impl Call for CoordinatorState {
 
     // 4. Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
-    let reply = protocol::Response {
+    let reply = coordinator_proto::Response {
       // Update the value as necessary.
       block_data: value,
       tail_hash,
@@ -200,7 +201,7 @@ impl Call for CoordinatorState {
   async fn read_at_index(
     &self,
     request: Request<Query>,
-  ) -> Result<Response<protocol::Response>, Status> {
+  ) -> Result<Response<coordinator_proto::Response>, Status> {
     println!("Received a ReadAtIndex Request : {:?}", request);
 
     let Query {
@@ -234,7 +235,7 @@ impl Call for CoordinatorState {
       .to_bytes()
       .to_vec();
     // 3. TODO(@sudheesh): Pack the information as necessary and submit the response.
-    let reply = protocol::Response {
+    let reply = coordinator_proto::Response {
       block_data: value_at_index,
       tail_hash,
       ledger_height, // TODO: Ideally optional.

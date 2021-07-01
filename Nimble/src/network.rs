@@ -1,18 +1,15 @@
 use ed25519_dalek::{PublicKey, Signature};
-use endorserprotocol::endorser_call_client::EndorserCallClient;
-use endorserprotocol::{
-  EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey, EndorserQueryResponse,
-};
 use std::error::Error;
 use tonic::transport::{Channel, Endpoint};
 
-pub mod protocol {
-  tonic::include_proto!("protocol");
+pub mod endorser_proto {
+  tonic::include_proto!("endorser_proto");
 }
 
-pub mod endorserprotocol {
-  tonic::include_proto!("endorserprotocol");
-}
+use endorser_proto::endorser_call_client::EndorserCallClient;
+use endorser_proto::{
+  EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey, EndorserQueryResponse,
+};
 
 #[derive(Clone, Debug)]
 pub struct EndorserKeyInformation {
@@ -36,7 +33,7 @@ impl EndorserConnection {
     let channel = endorser_endpoint.connect_lazy()?;
     let mut client = EndorserCallClient::new(channel);
 
-    let empty_request = tonic::Request::new(endorserprotocol::Empty {});
+    let empty_request = tonic::Request::new(endorser_proto::Empty {});
     let EndorserPublicKey {
       publickey,
       signature,
@@ -67,7 +64,7 @@ impl EndorserConnection {
     &mut self,
     handle: Vec<u8>,
   ) -> Result<Signature, Box<dyn Error>> {
-    let request = tonic::Request::new(endorserprotocol::Handle { handle });
+    let request = tonic::Request::new(endorser_proto::Handle { handle });
     let EndorserLedgerResponse { signature } = self.client.new_ledger(request).await?.into_inner();
 
     println!("Received Ledger Response: {:?}", signature);
@@ -83,7 +80,7 @@ impl EndorserConnection {
     handle: Vec<u8>,
     nonce: Vec<u8>,
   ) -> Result<Signature, Box<dyn Error>> {
-    let request = tonic::Request::new(endorserprotocol::EndorserQuery { handle, nonce });
+    let request = tonic::Request::new(endorser_proto::EndorserQuery { handle, nonce });
 
     let EndorserQueryResponse {
       nonce: _,
@@ -103,7 +100,7 @@ impl EndorserConnection {
     block_content_hash: Vec<u8>,
     conditional_tail_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Signature), Box<dyn Error>> {
-    let request = tonic::Request::new(endorserprotocol::EndorserAppendRequest {
+    let request = tonic::Request::new(endorser_proto::EndorserAppendRequest {
       endorser_handle: handle,
       block_hash: block_content_hash,
       conditional_tail_hash,
