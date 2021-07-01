@@ -1,6 +1,6 @@
+mod errors;
 mod helper;
 mod verification;
-mod errors;
 
 use crate::helper::pack_metadata_information;
 use crate::verification::{
