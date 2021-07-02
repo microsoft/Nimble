@@ -111,7 +111,6 @@ mod tests {
     let current_tail = res.unwrap();
     assert_eq!(current_tail, new_value_appended);
 
-    let index_query = 0u64;
     let res = state.read_by_index(&key, 0);
     assert!(res.is_ok());
     let data_at_index = res.unwrap();

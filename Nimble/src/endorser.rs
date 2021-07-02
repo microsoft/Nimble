@@ -7,7 +7,7 @@ use crate::errors::EndorserError;
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
   Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey,
-  EndorserQuery, EndorserQueryResponse, EndorserStateResponse, Handle,
+  EndorserQuery, EndorserQueryResponse, Handle,
 };
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;

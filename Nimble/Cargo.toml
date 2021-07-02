@@ -31,6 +31,6 @@ path = "src/coordinator.rs"
 name = "endorser"
 path = "src/endorser.rs"
 
-[[bin]] # Bin to run the gRPC client
+[[bin]] # Bin to run the gRPC Client
 name = "client"
 path = "src/client.rs"

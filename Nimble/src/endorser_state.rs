@@ -2,7 +2,6 @@ use crate::errors::EndorserError;
 use crate::helper::{concat_bytes, hash};
 use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
 use rand::rngs::OsRng;
-use sha3::{Digest, Sha3_256};
 use std::collections::HashMap;
 
 pub struct Store {
@@ -141,28 +140,6 @@ impl Store {
     Store {
       state: EndorserState::new(),
     }
-  }
-
-  // Returns the creation of a new EndorserState and the Signed Key corresponding to it
-  // Explicitly refreshes the keys in the keystate for testing purposes.
-  pub fn create_new_endorser_state(&mut self) -> Result<(String, EndorserIdentity), EndorserError> {
-    let endorser_state = EndorserState::new();
-    let identity = endorser_state.id.clone();
-    let data = concat_bytes(identity.pubkey.as_bytes(), &identity.sign.to_bytes());
-    println!("PK    : {:?}", identity.pubkey.to_bytes());
-    println!("Sign  : {:?}", identity.sign.to_bytes());
-    println!("Concat: {:?}", data);
-
-    let endorser_handle_index = Sha3_256::digest(&*data).to_vec();
-    println!("Hash  : {:?}", endorser_handle_index);
-
-    let response = EndorserIdentity {
-      pubkey: identity.pubkey,
-      sign: identity.sign,
-    };
-    let endorser_handle = hex::encode(endorser_handle_index);
-    self.state = endorser_state;
-    Ok((endorser_handle.to_string(), response))
   }
 
   pub fn create_new_ledger_in_endorser_state(

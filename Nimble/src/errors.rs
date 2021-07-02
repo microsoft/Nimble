@@ -16,6 +16,8 @@ pub enum EndorserError {
 pub enum VerificationError {
   /// returned if the supplied genesis block is not well formed
   InvalidGenesisBlock,
+  /// returned for internal errors. TODO: fix name and comment
+  UnableToVerifyEndorser,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,4 +28,16 @@ pub enum StorageError {
   DuplicateKey,
   /// returned if the requested index is not in the vector associated with a key
   InvalidIndex,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClientError {
+  /// returned if the client uses as InvalidUri as Coordinator hostname
+  CoordinatorHostNameNotFound,
+  /// returned if the client fails to connect to the Coordinator while creating a channel
+  UnableToConnectToCoordinator,
+  /// returned if the client inserts/updates the local state of endorser keys and finds existing key
+  ConflictingEndorserPublicKeyToInsert,
+  /// returned if the client requests a PublicKey from local state and does not find it
+  EndorserKeyDoesnotExist,
 }

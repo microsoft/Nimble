@@ -2,149 +2,147 @@ use crate::errors::VerificationError;
 use crate::helper;
 use crate::helper::concat_bytes;
 use ed25519_dalek::{PublicKey, Signature, Verifier};
-use std::error::Error;
 
-// Parsing the Genesis Block returns: PublicKey of Endorser, Attestation and the Nonce UUID used
-fn parse_genesis_block_data(
-  block_data: Vec<u8>,
-) -> Result<(PublicKey, Signature, Vec<u8>), Box<dyn Error>> {
-  // TODO:(@sudheesh) Revisit this when there are multiple endorsers to work with.
-  let pk_size = 32usize;
-  let sig_size = 64usize;
-  let nonce_size = 16usize;
-  let block_data_buffer = block_data.as_slice();
-  let public_key_bytes = &block_data_buffer[0..pk_size];
-  let sig_bytes = &block_data_buffer[pk_size..(pk_size + sig_size)];
-  let nonce_bytes = &block_data_buffer[(pk_size + sig_size)..((pk_size + sig_size) + nonce_size)];
-  println!("PK Bytes: {:?}", public_key_bytes);
-  println!("SIG Bytes: {:?}", sig_bytes);
-  println!("Nonce Bytes: {:?}", nonce_bytes);
-  let pk_instance = PublicKey::from_bytes(public_key_bytes).unwrap();
-  let sig_instance = ed25519_dalek::ed25519::signature::Signature::from_bytes(sig_bytes).unwrap();
-  Ok((pk_instance, sig_instance, nonce_bytes.to_vec()))
+#[derive(Debug, Clone, Default)]
+pub struct VerificationKey {
+  handle: Vec<u8>,
+  public_key: PublicKey,
 }
 
-fn verify_endorser_information(pk: &PublicKey, attestation: &Signature) -> bool {
-  let message_content = pk.as_bytes();
-  let verify = pk.verify(message_content, attestation);
-  if verify.is_ok() {
-    return true;
+pub type Block = Vec<u8>;
+pub type TailHash = Vec<u8>;
+pub type Nonce = Vec<u8>;
+
+///
+/// The parameters of the VerifyNewLedger() are:
+/// 1. The Block Data
+/// 2. A signature from an endorser (the code currently assumes a single endorser)
+pub fn verify_new_ledger(
+  data: &Block,
+  signature: &Signature,
+) -> Result<VerificationKey, VerificationError> {
+  // Parse the genesis block
+  let (pk, sig, _nonce) = {
+    let block_data_buffer = data.as_slice();
+    let public_key_bytes = &block_data_buffer[0..32usize];
+    let sig_bytes = &block_data_buffer[32usize..(32usize + 64usize)];
+    let nonce_bytes = &block_data_buffer[(32usize + 64usize)..((32usize + 64usize) + 16usize)];
+    (
+      PublicKey::from_bytes(public_key_bytes).unwrap(),
+      ed25519_dalek::ed25519::signature::Signature::from_bytes(sig_bytes).unwrap(),
+      nonce_bytes.to_vec(),
+    )
+  };
+  // Verify the contents of the genesis block
+  let res = pk.verify(pk.as_bytes(), &sig);
+  if res.is_err() {
+    return Err(VerificationError::UnableToVerifyEndorser);
   }
-  return false;
+
+  // compute a handle as hash of the block
+  let handle = helper::hash(&data).to_vec();
+
+  let genesis_metadata = {
+    // genesis metadata has three entries
+    let mut metadata: Vec<u8> = vec![];
+    metadata.extend([0u8; 32].to_vec()); // canonical previous hash pointer in the genesis block
+    metadata.extend(handle.clone());
+    metadata.extend(0u64.to_be_bytes().to_vec()); // canonical ledger height for the genesis block
+    metadata
+  };
+  let hash = helper::hash(&genesis_metadata).to_vec();
+  let res = pk.verify(&hash, &signature);
+  if res.is_err() {
+    return Err(VerificationError::InvalidGenesisBlock);
+  }
+
+  Ok(VerificationKey {
+    handle,
+    public_key: pk,
+  })
 }
 
-fn reconstruct_genesis_metadata(handle: &Vec<u8>) -> Vec<u8> {
-  // canonical previous hash pointer for the genesis block
-  let zero_entry = [0u8; 32].to_vec();
-
-  // canonical height for the genesis block
-  let ledger_height = 0u64.to_be_bytes().to_vec();
-
-  // genesis metadata has three entries
-  let genesis_metadata = {
-    let mut message: Vec<u8> = vec![];
-    message.extend(zero_entry);
-    message.extend(handle);
-    message.extend(ledger_height);
-    message
+pub fn verify_read_latest(
+  vk: &VerificationKey,
+  data: &Block,
+  tail: &TailHash,
+  counter: usize,
+  nonce: &Nonce,
+  signature: &Signature,
+) -> Result<(), VerificationError> {
+  let block_hash = helper::hash(&data).to_vec();
+  let metadata = helper::pack_metadata_information(tail.to_vec(), block_hash, counter);
+  let tail_hash_prime = helper::hash(&metadata).to_vec();
+  let hashed_message = {
+    let verification_message = concat_bytes(tail_hash_prime.as_slice(), &nonce);
+    helper::hash(&verification_message).to_vec()
   };
 
-  genesis_metadata
+  let res = vk.public_key.verify(hashed_message.as_slice(), &signature);
+  if res.is_err() {
+    Err(VerificationError::UnableToVerifyEndorser)
+  } else {
+    Ok(())
+  }
 }
 
-fn verify_endorser_tail_signature(
-  public_key: &PublicKey,
-  tail_hash: &Vec<u8>,
+pub fn verify_read_by_index(
+  vk: &VerificationKey,
+  data: &Block,
+  tail_hash: &TailHash,
+  idx: usize,
   signature: &Signature,
-) -> bool {
-  let is_valid_endorser_message = public_key.verify(tail_hash, signature);
-  if is_valid_endorser_message.is_ok() {
-    return true;
-  }
-  return false;
-}
-
-pub fn verify_new_ledger_response(
-  block_data: Vec<u8>,
-  signature_bytes: Vec<u8>,
-) -> Result<PublicKey, VerificationError> {
-  let handle = helper::hash(&block_data).to_vec();
-  let signature =
-    ed25519_dalek::ed25519::signature::Signature::from_bytes(&signature_bytes).unwrap();
-  println!("Handle : {:?}", handle);
-  let (pk, sig, _nonce) = parse_genesis_block_data(block_data).unwrap();
-  // For each endorser: Do the following
-
-  if !verify_endorser_information(&pk, &sig) {
-    return Err(VerificationError::InvalidGenesisBlock);
-  }
-  println!("Endorser Verified");
-
-  let metadata_message = reconstruct_genesis_metadata(&handle);
-  let tail_hash = helper::hash(&metadata_message).to_vec();
-  if !verify_endorser_tail_signature(&pk, &tail_hash, &signature) {
-    return Err(VerificationError::InvalidGenesisBlock);
-  }
-
-  Ok(pk)
-}
-
-pub fn verify_read_latest_response(
-  block_data: &Vec<u8>,
-  tail_hash: &Vec<u8>,
-  ledger_height: &u64,
-  endorser_signature_bytes: Vec<u8>,
-  nonce: &Vec<u8>,
-  endorser_pk: &PublicKey,
-) -> bool {
-  let endorser_signature =
-    ed25519_dalek::ed25519::signature::Signature::from_bytes(&endorser_signature_bytes).unwrap();
-  let block_hash = helper::hash(block_data).to_vec();
-  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, *ledger_height);
+) -> Result<(), VerificationError> {
+  let block_hash = helper::hash(&data).to_vec();
+  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, idx);
   let tail_hash_prime = helper::hash(&metadata).to_vec();
-  let verification_message = concat_bytes(tail_hash_prime.as_slice(), nonce);
-  let hashed_message = helper::hash(&verification_message);
-  let is_valid = endorser_pk.verify(hashed_message.as_slice(), &endorser_signature);
-  if is_valid.is_ok() {
-    return true;
+
+  let res = vk.public_key.verify(tail_hash_prime.as_slice(), &signature);
+  if res.is_err() {
+    Err(VerificationError::UnableToVerifyEndorser)
+  } else {
+    Ok(())
   }
-  return false;
 }
 
-pub fn verify_read_at_index_response(
-  block_data: &Vec<u8>,
-  tail_hash: &Vec<u8>,
-  index_queried: &u64,
-  endorser_signature_bytes: Vec<u8>,
-  endorser_pk: &PublicKey,
-) -> bool {
-  let endorser_signature =
-    ed25519_dalek::ed25519::signature::Signature::from_bytes(&endorser_signature_bytes).unwrap();
+pub fn verify_append(
+  vk: &VerificationKey,
+  block_data: &Block,
+  tail_hash: &TailHash,
+  ledger_height: usize,
+  signature: &Signature,
+) -> Result<(), VerificationError> {
   let block_hash = helper::hash(block_data).to_vec();
-  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, *index_queried);
+  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, ledger_height);
   let tail_hash_prime = helper::hash(&metadata).to_vec();
-  let is_valid = endorser_pk.verify(tail_hash_prime.as_slice(), &endorser_signature);
-  if is_valid.is_ok() {
-    return true;
+
+  let res = vk.public_key.verify(tail_hash_prime.as_slice(), &signature);
+  if res.is_err() {
+    Err(VerificationError::UnableToVerifyEndorser)
+  } else {
+    Ok(())
   }
-  return false;
 }
 
-pub fn verify_append_to_ledger(
-  block_data: &Vec<u8>,
-  tail_hash: &Vec<u8>,
-  ledger_height: &u64,
-  endorser_signature_bytes: Vec<u8>,
-  endorser_pk: &PublicKey,
-) -> bool {
-  let endorser_signature =
-    ed25519_dalek::ed25519::signature::Signature::from_bytes(&endorser_signature_bytes).unwrap();
-  let block_hash = helper::hash(block_data).to_vec();
-  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, *ledger_height);
-  let tail_hash_prime = helper::hash(&metadata).to_vec();
-  let is_valid = endorser_pk.verify(tail_hash_prime.as_slice(), &endorser_signature);
-  if is_valid.is_ok() {
-    return true;
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use ed25519_dalek::ed25519::signature::Signature;
+
+  #[test]
+  pub fn test_verify_new_ledger() {
+    let block_data = {
+      let block_data_hex = "4b2dd24314c098717dfdcbf04e2bd9a2ed6f580ad4e444fed30f736d6f273e60eab295f4aff4a7d5eb83c776e6f5cff233219bad8798ea500a7cde2776037e4849188184479e019712a55d1d91a3b9678f6288d02816baced4de555ec81f4f0cf413e33cb2444824bdbd93b06958c8ba";
+      hex::decode(block_data_hex).unwrap()
+    };
+
+    let signature = {
+      let signature_data_hex = "1c48864bc5f164375f175ace328b1e9b373cf8001b959c5cf80c71ef8f73a196eba677a54e06d16818bf461e49e6376082fc00845101e79da968434715eefa06";
+      let signature_data = hex::decode(signature_data_hex).unwrap();
+      Signature::from_bytes(&signature_data).unwrap()
+    };
+
+    let res = verify_new_ledger(&block_data, &signature);
+    assert!(res.is_ok());
   }
-  return false;
 }

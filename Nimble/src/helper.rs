@@ -32,7 +32,7 @@ pub fn unpack_metadata_information(metadata_bytes: Vec<u8>) -> (Vec<u8>, Vec<u8>
 pub fn pack_metadata_information(
   tail_hash: Vec<u8>,
   block_hash: Vec<u8>,
-  ledger_height: u64,
+  ledger_height: usize,
 ) -> Vec<u8> {
   let mut packed_metadata = Vec::new();
   let ledger_height_bytes = ledger_height.to_be_bytes().to_vec();

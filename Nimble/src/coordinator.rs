@@ -208,8 +208,11 @@ impl Call for CoordinatorState {
 
     {
       let meta_block = {
-        let metadata =
-          helper::pack_metadata_information(tail_hash.clone(), hash_of_block, ledger_height);
+        let metadata = helper::pack_metadata_information(
+          tail_hash.clone(),
+          hash_of_block,
+          ledger_height as usize,
+        );
         let signatures = vec![signature.clone()];
         MetaBlock {
           metadata,
