@@ -90,7 +90,7 @@ mod tests {
     // [TEST]: Testing Coordinator insert and read_latest
     let res = state.insert(&key, &initial_value);
     assert!(res.is_ok());
-    
+
     let res = state.read_latest(&key);
     assert!(res.is_ok());
 
