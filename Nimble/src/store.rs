@@ -1,147 +1,120 @@
-use ed25519_dalek::Signature;
+use core::cmp::Eq;
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use std::hash::Hash;
+
+use crate::errors::StorageError;
 
 #[derive(Debug, Default)]
-pub struct Store {
-  pub ledgers: HashMap<Vec<u8>, Vec<Vec<u8>>>,
-  pub metadata: HashMap<Vec<u8>, Vec<MetaBlock>>,
+pub struct AppendOnlyStore<K, V> {
+  map: HashMap<K, Vec<V>>,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct MetaBlock {
-  pub message_data: Vec<u8>,
-  pub signatures: Vec<Signature>,
-}
-
-impl MetaBlock {
-  pub fn new(message_data: &Vec<u8>, signatures: &Vec<Signature>) -> Self {
-    MetaBlock {
-      message_data: message_data.clone(),
-      signatures: signatures.clone(),
-    }
-  }
-}
-
-impl Store {
+impl<K, V> AppendOnlyStore<K, V>
+where
+  K: Clone + Eq + Hash,
+  V: Clone,
+{
   pub fn new() -> Self {
-    Store {
-      ledgers: HashMap::new(),
-      metadata: HashMap::new(),
+    AppendOnlyStore {
+      map: HashMap::new(),
     }
   }
 
-  pub fn set(&mut self, key: Vec<u8>, value: Vec<u8>) {
-    println!("Setting State : {:?} {:?}", key, value);
-    if self.ledgers.contains_key(&*key) {
-      let ledgers = self.ledgers.clone();
-      let (state_k, state_v) = ledgers.get_key_value(&*key).unwrap();
-      let mut updated_state = Vec::new();
-      updated_state.append(&mut state_v.to_vec());
-      updated_state.push(value);
-      println!("Updated State: {:?} --> {:?}", state_v, updated_state);
-      self.ledgers.insert(state_k.clone(), updated_state);
-    } else {
-      self.ledgers.entry(key).or_default().push(value);
+  pub fn insert(&mut self, key: &K, val: &V) -> Result<(), StorageError> {
+    // check if `map` already contains an entry for the supplied `key`
+    if self.map.contains_key(key) {
+      return Err(StorageError::DuplicateKey);
+    }
+
+    // store `val` as the first entry associated with `key` in `map`
+    self.map.insert(key.clone(), vec![val.clone()]);
+    Ok(())
+  }
+
+  pub fn append(&mut self, key: &K, val: &V) -> Result<(), StorageError> {
+    let cur_val_opt = self.map.get_mut(key);
+    match cur_val_opt {
+      // if the supplied `key` does not exist in `map` return an error
+      None => Err(StorageError::InvalidKey),
+      // if the supplied `key` exists in `map` append `val` to the vector associated with `key` in `map`
+      Some(cur_val) => {
+        cur_val.push(val.clone());
+        Ok(())
+      },
     }
   }
 
-  pub fn set_metadata(&mut self, key: &Vec<u8>, metadata: &Vec<u8>, signatures: &Vec<Signature>) {
-    println!(
-      "Setting Metadata State: {:?} --> ({:?}, {:?})",
-      key, metadata, signatures
-    );
-    let value = MetaBlock::new(metadata, signatures);
-    if self.metadata.contains_key(key) {
-      let (_k, metadata_ledger) = self.metadata.get_key_value(key).unwrap();
-      let mut existing_ledger = metadata_ledger.clone();
-      existing_ledger.push(value);
-      println!("Updated State: {:?} --> {:?}", key, existing_ledger);
-      self.metadata.insert(key.to_vec(), existing_ledger);
-    } else {
-      self
-        .metadata
-        .entry(key.to_vec())
-        .or_default()
-        .push(value.clone());
-      println!("Updated State: {:?} --> {:?}", key, value.clone());
+  pub fn read_latest(&self, key: &K) -> Result<V, StorageError> {
+    let cur_val_opt = self.map.get(key);
+    match cur_val_opt {
+      // if the supplied `key` does not exist in `map` return an error
+      None => Err(StorageError::InvalidKey),
+      // if the supplied `key` exists in `map` return the last entry in the vector associated with `key` in `map`
+      Some(cur_val) => {
+        Ok(cur_val[cur_val.len() - 1].clone()) // TODO: use last method
+      },
     }
   }
 
-  pub fn get(&self, key: Vec<u8>) -> Vec<Vec<u8>> {
-    self.ledgers.get(&*key).unwrap().to_vec()
-  }
-
-  pub fn get_metadata(&self, key: Vec<u8>) -> Vec<MetaBlock> {
-    self.metadata.get(&*key).unwrap().to_vec()
-  }
-
-  pub fn get_latest_state_of_ledger(&self, key: Vec<u8>) -> Vec<u8> {
-    self.get(key).last().unwrap().to_vec()
-  }
-
-  pub fn get_latest_state_of_metadata_ledger(&self, key: Vec<u8>) -> MetaBlock {
-    self.get_metadata(key).last().unwrap().clone()
-  }
-
-  pub fn get_ledger_state_at_index(&self, key: Vec<u8>, mut index: u64) -> Vec<u8> {
-    let ledger = self.get(key);
-
-    if !(index < ledger.len() as u64) {
-      index = 0
+  pub fn read_by_index(&self, key: &K, idx: usize) -> Result<V, StorageError> {
+    let cur_val_opt = self.map.get(key);
+    match cur_val_opt {
+      // if the supplied `key` does not exist in `map` return an error
+      None => Err(StorageError::InvalidKey),
+      // if the supplied `key` exists in `map` return the entry at index `idx` in the vector associated with `key` in `map`
+      Some(cur_val) => {
+        if idx < cur_val.len() {
+          Ok(cur_val[idx].clone())
+        } else {
+          Err(StorageError::InvalidIndex)
+        }
+      },
     }
-    // This might cause an issue down the line ...
-    let usize_index = usize::try_from(index).unwrap();
-    ledger[usize_index].to_vec()
-  }
-
-  pub fn get_metadata_ledger_state_at_index(&self, key: Vec<u8>, mut index: u64) -> MetaBlock {
-    let metadata_ledger = self.get_metadata(key);
-    if !(index < metadata_ledger.len() as u64) {
-      index = 0
-    }
-    // This might cause an issue down the line ...
-    let usize_index = usize::try_from(index).unwrap();
-    metadata_ledger[usize_index].clone()
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use crate::store::Store;
+  use crate::store::AppendOnlyStore;
 
   #[test]
-  pub fn check_coordinator_state_creation_and_operations() {
-    let mut coordinator_state = Store::new();
+  pub fn check_store_creation_and_operations() {
+    let mut state = AppendOnlyStore::<Vec<u8>, Vec<u8>>::new();
+
     let key = b"endorser_issued_handle".to_vec();
     let initial_value: Vec<u8> = vec![
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       1, 2,
     ];
 
-    // [TEST]: Testing Coordinator Set and Get
-    coordinator_state.set(key.clone(), initial_value.clone());
-    let current_data = coordinator_state.get(key.clone());
-    assert_eq!(current_data.len(), 1);
-    let expected_current_data = vec![initial_value];
-    assert_eq!(current_data, expected_current_data);
+    // [TEST]: Testing Coordinator insert and read_latest
+    let res = state.insert(&key, &initial_value);
+    assert!(res.is_ok());
+    
+    let res = state.read_latest(&key);
+    assert!(res.is_ok());
 
-    // [TEST]: Testing Coordinator GetLatest and GetLedgerAtIndex
+    let current_data = res.unwrap();
+    assert_eq!(current_data, initial_value);
+
     let new_value_appended: Vec<u8> = vec![
       2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
       2, 1,
     ];
-    coordinator_state.set(key.clone(), new_value_appended.clone());
-    let current_tail = coordinator_state.get_latest_state_of_ledger(key.clone());
+
+    let res = state.append(&key, &new_value_appended);
+    assert!(res.is_ok());
+
+    let res = state.read_latest(&key);
+    assert!(res.is_ok());
+
+    let current_tail = res.unwrap();
     assert_eq!(current_tail, new_value_appended);
-    let ledger_data = coordinator_state.get(key.clone());
-    assert_eq!(ledger_data.len(), 2);
+
     let index_query = 0u64;
-    let data_at_index =
-      coordinator_state.get_ledger_state_at_index(key.clone(), index_query.clone());
-    assert_eq!(
-      data_at_index,
-      ledger_data.get(index_query as usize).unwrap().to_vec()
-    )
+    let res = state.read_by_index(&key, 0);
+    assert!(res.is_ok());
+    let data_at_index = res.unwrap();
+    assert_eq!(data_at_index, initial_value)
   }
 }
