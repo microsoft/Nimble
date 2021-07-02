@@ -6,9 +6,8 @@ use crate::endorser_state::Store;
 use crate::errors::EndorserError;
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
-  Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerHandles,
-  EndorserLedgerResponse, EndorserPublicKey, EndorserQuery, EndorserQueryResponse,
-  EndorserStateResponse, Handle,
+  Empty, EndorserAppendRequest, EndorserAppendResponse, EndorserLedgerResponse, EndorserPublicKey,
+  EndorserQuery, EndorserQueryResponse, EndorserStateResponse, Handle,
 };
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
@@ -32,31 +31,6 @@ impl EndorserServiceState {
 
 #[tonic::async_trait]
 impl EndorserCall for EndorserServiceState {
-  async fn new_endorser(
-    &self,
-    _request: Request<Empty>,
-  ) -> Result<Response<EndorserStateResponse>, Status> {
-    println!("Received a NewLedger Request. Generating Handle and creating new EndorserState");
-
-    let mut state_instance = self
-      .state
-      .write()
-      .expect("Unable to acquire write lock on the state");
-    let endorser_create_status = state_instance.create_new_endorser_state();
-    if !endorser_create_status.is_ok() {
-      panic!("Failed. Should not have failed");
-    }
-    let (handle, endorser_id) = endorser_create_status.unwrap();
-    let reply = endorser_proto::EndorserStateResponse {
-      handle,
-      keyinfo: Some(EndorserPublicKey {
-        publickey: endorser_id.get_public_key(),
-        signature: endorser_id.get_signature(),
-      }),
-    };
-    Ok(Response::new(reply))
-  }
-
   async fn get_endorser_public_key(
     &self,
     _request: Request<Empty>,
@@ -110,22 +84,6 @@ impl EndorserCall for EndorserServiceState {
 
     let reply = EndorserLedgerResponse {
       signature: signature.to_bytes().to_vec(),
-    };
-    Ok(Response::new(reply))
-  }
-
-  async fn get_all_ledgers(
-    &self,
-    _request: Request<Empty>,
-  ) -> Result<Response<EndorserLedgerHandles>, Status> {
-    let available_handles_in_state = self
-      .state
-      .read()
-      .expect("Failed to acquire read lock")
-      .get_all_available_handles();
-    println!("Available Handles: {:?}", available_handles_in_state);
-    let reply = EndorserLedgerHandles {
-      handles: available_handles_in_state,
     };
     Ok(Response::new(reply))
   }

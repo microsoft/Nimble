@@ -3,11 +3,8 @@ syntax = "proto3";
 package endorser_proto;
 
 service EndorserCall {
-  // Debug Endpoints
-  rpc GetEndorserPublicKey(Empty) returns (EndorserPublicKey);
-  rpc GetAllLedgers(Empty) returns (EndorserLedgerHandles);
   // Protocol Endpoints
-  rpc NewEndorser(Empty) returns (EndorserStateResponse); // Early Start / Restart
+  rpc GetEndorserPublicKey(Empty) returns (EndorserPublicKey);
   rpc NewLedger(Handle) returns (EndorserLedgerResponse);
   rpc ReadLatest(EndorserQuery) returns (EndorserQueryResponse);
   rpc AppendToLedger(EndorserAppendRequest) returns (EndorserAppendResponse);
@@ -15,10 +12,6 @@ service EndorserCall {
 
 message EndorserLedgerResponse {
   bytes signature = 1;
-}
-
-message EndorserLedgerHandles {
-  repeated bytes handles = 1;
 }
 
 message EndorserStateResponse {

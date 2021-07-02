@@ -75,11 +75,6 @@ impl EndorserState {
     Ok((handle.clone(), signature))
   }
 
-  pub fn get_handles_in_endorser_state(&self) -> Result<Vec<Vec<u8>>, EndorserError> {
-    let handles = self.ledgers.keys().cloned().collect();
-    Ok(handles)
-  }
-
   pub fn get_tail(&self, endorser_handle: Vec<u8>) -> Result<(Vec<u8>, u64), EndorserError> {
     println!("Handle: {:?}", endorser_handle);
     if self.ledgers.contains_key(&*endorser_handle) {
@@ -186,10 +181,6 @@ impl Store {
       .create_ledger(coordinator_handle, tail_hash, tail_index)
       .expect("Unable to create a Ledger in EndorserState");
     Ok(ledger_response)
-  }
-
-  pub fn get_all_available_handles(&self) -> Vec<Vec<u8>> {
-    self.state.get_handles_in_endorser_state().unwrap()
   }
 
   pub fn get_endorser_key_information(&self) -> Result<EndorserIdentity, EndorserError> {
