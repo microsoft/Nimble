@@ -3,45 +3,51 @@ syntax = "proto3";
 package coordinator_proto;
 
 service Call {
-  rpc NewLedger(Empty) returns (LedgerResponse);
-  rpc AppendToLedger(UpdateQuery) returns (Status);
-  rpc ReadLatest(Query) returns (Response);
-  rpc ReadAtIndex(Query) returns (Response);
+  rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
+  rpc Append(AppendReq) returns (AppendResp);
+  rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
+  rpc ReadByIndex(ReadByIndexReq) returns (ReadByIndexResp);
 }
 
-message Empty {
+message NewLedgerReq {
 }
 
-message LedgerResponse {
-  bytes block_data = 1;
+message NewLedgerResp {
+  bytes block = 1;
   bytes signature = 2;
 }
 
-message Status {
+message AppendReq {
+  bytes handle = 1;
+  bytes block = 2;
+  bytes cond_tail_hash = 3;  // Ideally optional
+}
+
+message AppendResp {
   bytes tail_hash = 1;
-  uint64 ledger_height = 2;
+  uint64 height = 2;
   bytes signature = 3;
 }
 
-message Query {
+message ReadLatestReq {
+  bytes handle = 1;
+  bytes nonce = 2;
+}
+
+message ReadLatestResp {
+  bytes block = 1;
+  bytes tail_hash = 2;
+  uint64 height = 3;
+  bytes signature = 4;
+}
+
+message ReadByIndexReq {
   bytes handle = 1;
   uint64 index = 2;
-  bytes nonce = 3;
 }
 
-message UpdateQuery {
-  bytes handle = 1;
-  Data value = 2;
-  bytes conditional_tail_hash = 3;  // Ideally optional
-}
-
-message Data {
-  bytes content = 1;
-}
-
-message Response {
-  bytes block_data = 1;
+message ReadByIndexResp {
+  bytes block = 1;
   bytes tail_hash = 2;
-  uint64 ledger_height = 3;
-  bytes endorser_signature = 4;
+  bytes signature = 3;
 }

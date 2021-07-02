@@ -57,11 +57,8 @@ impl EndorserCall for EndorserServiceState {
     &self,
     request: Request<Handle>,
   ) -> Result<Response<EndorserLedgerResponse>, Status> {
-    println!("Received NewLedger Request to create a ledger by an endorser");
-
     // The handle is the byte array of information sent by the Nimble Coordinator to the Endorser
     let Handle { handle } = request.into_inner();
-    println!("Network read handle: {:?}", handle);
 
     let zero_entry = [0u8; 32].to_vec();
     let ledger_height = 0u64;
@@ -97,7 +94,6 @@ impl EndorserCall for EndorserServiceState {
       block_hash,
       conditional_tail_hash,
     } = request.into_inner();
-    println!("Network read handle: {:?}", endorser_handle);
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
     let append_status = endorser_state.append_and_update_endorser_state_tail(
       endorser_handle,
@@ -123,7 +119,6 @@ impl EndorserCall for EndorserServiceState {
     request: Request<EndorserQuery>,
   ) -> Result<Response<EndorserQueryResponse>, Status> {
     let EndorserQuery { handle, nonce } = request.into_inner();
-    println!("Received ReadLatest Query: {:?} {:?}", handle, nonce);
     let latest_state = self.state.read().expect("Failed to acquire read lock");
     let (nonce_bytes, tail_hash, endorser_signature) = latest_state
       .get_latest_state_for_handle(handle, nonce)

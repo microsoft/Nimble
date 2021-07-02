@@ -16,7 +16,10 @@ pub mod coordinator_proto {
 }
 
 use coordinator_proto::call_server::{Call, CallServer};
-use coordinator_proto::{LedgerResponse, Query, UpdateQuery};
+use coordinator_proto::{
+  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+  ReadLatestReq, ReadLatestResp,
+};
 
 type Handle = Vec<u8>;
 type Block = Vec<u8>;
@@ -80,15 +83,12 @@ impl CoordinatorState {
 impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
-    _request: Request<coordinator_proto::Empty>,
-  ) -> Result<Response<LedgerResponse>, Status> {
-    println!("Received a NewLedger Request");
-
+    _request: Request<NewLedgerReq>,
+  ) -> Result<Response<NewLedgerResp>, Status> {
     // Generate a Unique Value
     let nonce = {
       let unique_ledger_id = Uuid::new_v4();
       let value = unique_ledger_id.as_bytes().to_vec();
-      println!("N: {:?}, size: {:?}", value, value.len());
       value
     };
 
@@ -102,11 +102,6 @@ impl Call for CoordinatorState {
       genesis_block_bytes.append(&mut endorser_pk.clone().to_bytes().to_vec());
       genesis_block_bytes.append(&mut endorser_attestation.clone().to_bytes().to_vec());
       genesis_block_bytes.append(&mut nonce.clone().to_vec());
-      println!(
-        "Genesis Block: {:?}, size: {:?}",
-        genesis_block_bytes,
-        genesis_block_bytes.len()
-      );
       genesis_block_bytes
     };
 
@@ -128,7 +123,6 @@ impl Call for CoordinatorState {
       .call_endorser_new_ledger(handle.to_vec())
       .await
       .unwrap();
-    println!("Endorser Signature: {:?}", endorser_response);
 
     // Prepare a metadata block
     let meta_block = {
@@ -139,7 +133,6 @@ impl Call for CoordinatorState {
         message.extend(zero_entry);
         message.extend(handle.to_vec());
         message.extend(ledger_height);
-        println!("Message: {:?}, size: {:?}", message, message.len());
         message
       };
 
@@ -162,57 +155,47 @@ impl Call for CoordinatorState {
       assert!(res.is_ok()); // TODO: do error handling
     }
 
-    let reply = coordinator_proto::LedgerResponse {
-      block_data: genesis_block.clone().to_vec(),
+    let reply = NewLedgerResp {
+      block: genesis_block.clone().to_vec(),
       signature: endorser_response.to_bytes().to_vec(),
     };
     Ok(Response::new(reply))
   }
 
-  async fn append_to_ledger(
-    &self,
-    request: Request<UpdateQuery>,
-  ) -> Result<Response<coordinator_proto::Status>, Status> {
-    let UpdateQuery {
+  async fn append(&self, request: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
+    let AppendReq {
       handle,
-      value,
-      conditional_tail_hash,
+      block,
+      cond_tail_hash,
     } = request.into_inner();
-    println!(
-      "Received a AppendToLedger Request with Conditional Hash : {:?} {:?} {:?}",
-      handle, value, conditional_tail_hash
-    );
 
-    let content: Vec<u8> = value.unwrap().content;
-    let hash_of_block = helper::hash(&content).to_vec();
+    let hash_of_block = helper::hash(&block).to_vec();
 
+    // Write the block to the data store
     {
       let mut data_store_handle = self
         .data_store
         .write()
         .expect("Failed to acquire lock on state");
-      let res = data_store_handle.append(&handle, &content.to_vec());
+      let res = data_store_handle.append(&handle, &block);
       assert!(res.is_ok());
     }
 
     // Ideally need to run multiple times for multiple endorsers.
     let mut conn = self.get_random_endorser_connection();
-    let (tail_hash, ledger_height, signature) = conn
+    let (tail_hash, height, signature) = conn
       .call_endorser_append(
         handle.clone(),
         hash_of_block.clone(),
-        conditional_tail_hash.clone(),
+        cond_tail_hash.clone(),
       )
       .await
       .unwrap();
 
     {
       let meta_block = {
-        let metadata = helper::pack_metadata_information(
-          tail_hash.clone(),
-          hash_of_block,
-          ledger_height as usize,
-        );
+        let metadata =
+          helper::pack_metadata_information(tail_hash.clone(), hash_of_block, height as usize);
         let signatures = vec![signature.clone()];
         MetaBlock {
           metadata,
@@ -228,9 +211,9 @@ impl Call for CoordinatorState {
       assert!(res.is_ok());
     }
 
-    let reply = coordinator_proto::Status {
+    let reply = AppendResp {
       tail_hash,
-      ledger_height,
+      height,
       signature: signature.to_bytes().to_vec(),
     };
 
@@ -239,19 +222,13 @@ impl Call for CoordinatorState {
 
   async fn read_latest(
     &self,
-    request: Request<Query>,
-  ) -> Result<Response<coordinator_proto::Response>, Status> {
-    let Query {
-      handle,
-      index: _,
-      nonce,
-    } = request.into_inner();
-    // index has to ideally not exist in the query, TODO: explore "optional"
-    println!("Received a ReadLatest Request : {:?} {:?}", handle, nonce);
+    request: Request<ReadLatestReq>,
+  ) -> Result<Response<ReadLatestResp>, Status> {
+    let ReadLatestReq { handle, nonce } = request.into_inner();
 
     // 1. Read the information from the Endorser
     let mut conn = self.get_random_endorser_connection();
-    let freshness_signature = conn
+    let signature = conn
       .call_endorser_read_latest(handle.clone(), nonce)
       .await
       .unwrap();
@@ -261,7 +238,7 @@ impl Call for CoordinatorState {
       .data_store
       .read()
       .expect("Failed to acquire read lock on the data store");
-    let value = read_lock_state_data.read_latest(&handle).unwrap(); // TODO: do error handling
+    let block = read_lock_state_data.read_latest(&handle).unwrap(); // TODO: do error handling
 
     // 3. Read latest metablock and signatures from Metadata structure
     let read_lock_state_metadata = self
@@ -269,45 +246,35 @@ impl Call for CoordinatorState {
       .read()
       .expect("Failed to acquire read lock on the metadata store");
     let metavalue = read_lock_state_metadata.read_latest(&handle).unwrap(); // TODO: do error handling
-    let (tail_hash, _block_hash, ledger_height) =
-      helper::unpack_metadata_information(metavalue.metadata);
+    let (tail_hash, _block_hash, height) = helper::unpack_metadata_information(metavalue.metadata);
 
     // 4. Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
-    let reply = coordinator_proto::Response {
-      // Update the value as necessary.
-      block_data: value,
+    let reply = ReadLatestResp {
+      block,
       tail_hash,
-      ledger_height,
-      endorser_signature: freshness_signature.to_bytes().to_vec(),
+      height,
+      signature: signature.to_bytes().to_vec(),
     };
 
     Ok(Response::new(reply))
   }
 
-  async fn read_at_index(
+  async fn read_by_index(
     &self,
-    request: Request<Query>,
-  ) -> Result<Response<coordinator_proto::Response>, Status> {
-    println!("Received a ReadAtIndex Request : {:?}", request);
-
-    let Query {
-      handle,
-      index,
-      nonce: _,
-    } = request.into_inner();
-    // index has to ideally not exist in the query, TODO: explore "optional"
-    println!("Received a ReadLatest Request : {:?}", handle);
+    request: Request<ReadByIndexReq>,
+  ) -> Result<Response<ReadByIndexResp>, Status> {
+    let ReadByIndexReq { handle, index } = request.into_inner();
 
     // 1. Retrieve the block data information from the main datastructure
-    let value_at_index = {
+    let block = {
       let read_data_instance = self.data_store.read().expect("Failed to acquire read lock");
       read_data_instance
         .read_by_index(&handle, index as usize)
         .unwrap() // TODO: perform error handling
     };
 
-    let metadata_at_index = {
+    let metadata = {
       let read_metadata_instance = self
         .metadata_store
         .read()
@@ -317,26 +284,16 @@ impl Call for CoordinatorState {
         .unwrap() // TODO: perform error handling
     };
 
-    println!("Block Data at index: {:?}", value_at_index);
-    println!("Metadata at index: {:?}", metadata_at_index);
-
     // 2. Retrieve the information from the metadata structure.
-    let (tail_hash, _block_hash, ledger_height) =
-      helper::unpack_metadata_information(metadata_at_index.metadata);
+    let (tail_hash, _block_hash, _height) = helper::unpack_metadata_information(metadata.metadata);
 
     // Force only one for now. TODO(@sudheesh): Multiple endorser case.
-    let endorser_signature = metadata_at_index
-      .signatures
-      .get(0)
-      .unwrap()
-      .to_bytes()
-      .to_vec();
+    let signature = metadata.signatures.get(0).unwrap().to_bytes().to_vec();
     // 3. TODO(@sudheesh): Pack the information as necessary and submit the response.
-    let reply = coordinator_proto::Response {
-      block_data: value_at_index,
+    let reply = ReadByIndexResp {
+      block,
       tail_hash,
-      ledger_height, // TODO: Ideally optional.
-      endorser_signature,
+      signature,
     };
 
     Ok(Response::new(reply))
