@@ -76,7 +76,7 @@ impl EndorserCall for EndorserServiceState {
       .expect("Unable to get a write lock on EndorserState");
 
     let signature = state_instance
-      .create_new_ledger_in_endorser_state(handle, tail_hash, ledger_height)
+      .create_new_ledger_in_endorser_state(handle, tail_hash)
       .expect("Unable to get the signature on genesis handle");
 
     let reply = EndorserLedgerResponse {

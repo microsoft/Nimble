@@ -16,8 +16,12 @@ pub enum EndorserError {
 pub enum VerificationError {
   /// returned if the supplied genesis block is not well formed
   InvalidGenesisBlock,
-  /// returned for internal errors. TODO: fix name and comment
-  UnableToVerifyEndorser,
+  /// returned if the endorser's attestion is invalid
+  InvalidEndorserAttestation,
+  /// returned if the supplied byte array is not of the correct length
+  IncorrectLength,
+  /// returned if the supplied receipt is invalid
+  InvalidReceipt,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

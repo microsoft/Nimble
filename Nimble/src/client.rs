@@ -1,14 +1,12 @@
 mod errors;
-mod helper;
+mod ledger;
 mod verification;
 
 use crate::errors::ClientError;
-use crate::helper::pack_metadata_information;
 use crate::verification::{
   verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
 };
 use ed25519_dalek::ed25519::signature::Signature;
-use rand::seq::SliceRandom;
 use rand::Rng;
 use tonic::transport::{Channel, Endpoint};
 
@@ -66,16 +64,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = verify_new_ledger(&block, &Signature::from_bytes(&signature).unwrap());
   assert!(res.is_ok());
 
-  // store the verification key
-  let vk = res.unwrap();
+  // store the handle and verification key
+  let (handle, vk) = res.unwrap();
 
-  // Step 2: Read Latest with the Nonce generated:
-  let handle = helper::hash(&block).to_vec();
-
-  let client_generated_nonce = rand::thread_rng().gen::<[u8; 16]>();
-  let latest_state_query = tonic::Request::new(ReadLatestReq {
+  // Step 2: Read Latest with the Nonce generated
+  let nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let req = tonic::Request::new(ReadLatestReq {
     handle: handle.clone(),
-    nonce: client_generated_nonce.to_vec(),
+    nonce: nonce.to_vec(),
   });
 
   let ReadLatestResp {
@@ -85,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     signature,
   } = coordinator_connection
     .client
-    .read_latest(latest_state_query)
+    .read_latest(req)
     .await?
     .into_inner();
   let res = verify_read_latest(
@@ -93,14 +89,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &block,
     &tail_hash,
     height as usize,
-    &client_generated_nonce.to_vec(),
+    &nonce.to_vec(),
     &Signature::from_bytes(&signature).unwrap(),
   );
   println!("Verifying ReadLatest Response : {:?}", res);
   assert!(res.is_ok());
 
   // Step 3: Read At Index
-  let read_at_index_query = tonic::Request::new(ReadByIndexReq {
+  let req = tonic::Request::new(ReadByIndexReq {
     handle: handle.clone(),
     index: 0,
   });
@@ -111,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     signature,
   } = coordinator_connection
     .client
-    .read_by_index(read_at_index_query)
+    .read_by_index(req)
     .await?
     .into_inner();
 
@@ -131,10 +127,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let m3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let messages = vec![&m1, &m2, &m3].to_vec();
 
-  let mut last_known_tail = tail_hash.clone();
+  let last_known_tail = tail_hash.clone();
 
   for message in messages {
-    let update_query = tonic::Request::new(AppendReq {
+    let req = tonic::Request::new(AppendReq {
       handle: handle.clone(),
       block: message.to_vec(),
       cond_tail_hash: last_known_tail.to_vec(),
@@ -146,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       signature,
     } = coordinator_connection
       .client
-      .append(update_query)
+      .append(req)
       .await?
       .into_inner();
 
@@ -164,24 +160,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Append verification: {:?}", res.is_ok());
     assert_eq!(res.is_ok(), true);
 
-    // Coordinator returns previous Tail Hash State prior to append, use the information to
-    // construct T' which is the known tail or the expectation for the client.
-    let block_hash = helper::hash(&message).to_vec();
-    let tail_content = pack_metadata_information(tail_hash, block_hash, height as usize);
-    let tail_hash_expectation = helper::hash(&tail_content).to_vec();
-    let zero_state = [0u8; 32].to_vec();
-    let test_with_expected_tail_or_none = vec![&tail_hash_expectation, &zero_state];
-    last_known_tail = test_with_expected_tail_or_none
-      .choose(&mut rand::thread_rng())
-      .unwrap()
-      .to_vec();
+    // last known tail is returned by `verify_append`
+    let last_known_tail = res.unwrap();
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data
-  let client_generated_nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let nonce = rand::thread_rng().gen::<[u8; 16]>();
   let latest_state_query = tonic::Request::new(ReadLatestReq {
     handle: handle.clone(),
-    nonce: client_generated_nonce.to_vec(),
+    nonce: nonce.to_vec(),
   });
 
   let ReadLatestResp {
@@ -200,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &block,
     &tail_hash,
     height as usize,
-    &client_generated_nonce.to_vec(),
+    &nonce.to_vec(),
     &Signature::from_bytes(&signature).unwrap(),
   );
   println!(
@@ -210,7 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert_eq!(is_latest_valid.is_ok(), true);
 
   // Step 5: Read At Index
-  let read_at_index_query = tonic::Request::new(ReadByIndexReq {
+  let req = tonic::Request::new(ReadByIndexReq {
     handle: handle.clone(),
     index: 2,
   });
@@ -221,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     signature,
   } = coordinator_connection
     .client
-    .read_by_index(read_at_index_query)
+    .read_by_index(req)
     .await?
     .into_inner();
   assert_eq!(block, m2.clone());

@@ -1,86 +1,86 @@
 use crate::errors::VerificationError;
-use crate::helper;
-use crate::helper::concat_bytes;
+use crate::ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait};
 use ed25519_dalek::{PublicKey, Signature, Verifier};
 
 #[derive(Debug, Clone, Default)]
 pub struct VerificationKey {
-  handle: Vec<u8>,
-  public_key: PublicKey,
+  pk: PublicKey,
 }
-
-pub type Block = Vec<u8>;
-pub type TailHash = Vec<u8>;
-pub type Nonce = Vec<u8>;
 
 ///
 /// The parameters of the VerifyNewLedger() are:
 /// 1. The Block Data
 /// 2. A signature from an endorser (the code currently assumes a single endorser)
 pub fn verify_new_ledger(
-  data: &Block,
+  block_bytes: &Vec<u8>,
   signature: &Signature,
-) -> Result<VerificationKey, VerificationError> {
-  // Parse the genesis block
-  let (pk, sig, _nonce) = {
-    let block_data_buffer = data.as_slice();
-    let public_key_bytes = &block_data_buffer[0..32usize];
-    let sig_bytes = &block_data_buffer[32usize..(32usize + 64usize)];
-    let nonce_bytes = &block_data_buffer[(32usize + 64usize)..((32usize + 64usize) + 16usize)];
+) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
+  // check the length of block_bytes
+  if block_bytes.len() != 112 {
+    return Err(VerificationError::InvalidGenesisBlock);
+  }
+
+  // parse the genesis block
+  let (pk, sig) = {
+    let public_key_bytes = &block_bytes[0..32usize];
+    let sig_bytes = &block_bytes[32usize..(32usize + 64usize)];
+    let _nonce_bytes = &block_bytes[(32usize + 64usize)..((32usize + 64usize) + 16usize)];
     (
       PublicKey::from_bytes(public_key_bytes).unwrap(),
       ed25519_dalek::ed25519::signature::Signature::from_bytes(sig_bytes).unwrap(),
-      nonce_bytes.to_vec(),
     )
   };
+
   // Verify the contents of the genesis block
   let res = pk.verify(pk.as_bytes(), &sig);
   if res.is_err() {
-    return Err(VerificationError::UnableToVerifyEndorser);
+    return Err(VerificationError::InvalidEndorserAttestation);
   }
 
   // compute a handle as hash of the block
-  let handle = helper::hash(&data).to_vec();
-
-  let genesis_metadata = {
-    // genesis metadata has three entries
-    let mut metadata: Vec<u8> = vec![];
-    metadata.extend([0u8; 32].to_vec()); // canonical previous hash pointer in the genesis block
-    metadata.extend(handle.clone());
-    metadata.extend(0u64.to_be_bytes().to_vec()); // canonical ledger height for the genesis block
-    metadata
+  let handle = {
+    let block = Block::new(block_bytes);
+    block.hash()
   };
-  let hash = helper::hash(&genesis_metadata).to_vec();
-  let res = pk.verify(&hash, &signature);
+
+  // verify the signature on the genesis metablock with `handle` as the genesis block's hash
+  let genesis_metablock = MetaBlock::genesis(&handle);
+  let res = {
+    let hash = genesis_metablock.hash().to_bytes();
+    pk.verify(&hash, &signature)
+  };
+
   if res.is_err() {
     return Err(VerificationError::InvalidGenesisBlock);
   }
 
-  Ok(VerificationKey {
-    handle,
-    public_key: pk,
-  })
+  Ok((handle.to_bytes(), VerificationKey { pk }))
 }
 
 pub fn verify_read_latest(
   vk: &VerificationKey,
-  data: &Block,
-  tail: &TailHash,
-  counter: usize,
-  nonce: &Nonce,
+  block_bytes: &Vec<u8>,
+  tail_hash_bytes: &Vec<u8>,
+  height: usize,
+  nonce_bytes: &Vec<u8>,
   signature: &Signature,
 ) -> Result<(), VerificationError> {
-  let block_hash = helper::hash(&data).to_vec();
-  let metadata = helper::pack_metadata_information(tail.to_vec(), block_hash, counter);
-  let tail_hash_prime = helper::hash(&metadata).to_vec();
-  let hashed_message = {
-    let verification_message = concat_bytes(tail_hash_prime.as_slice(), &nonce);
-    helper::hash(&verification_message).to_vec()
-  };
+  let block = Block::new(&block_bytes);
 
-  let res = vk.public_key.verify(hashed_message.as_slice(), &signature);
+  // construct a tail hash from `tail_hash_bytes`
+  // TODO: simplify error handling
+  let res = NimbleDigest::from_bytes(tail_hash_bytes);
   if res.is_err() {
-    Err(VerificationError::UnableToVerifyEndorser)
+    return Err(VerificationError::IncorrectLength);
+  }
+  let tail_hash = res.unwrap();
+
+  let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
+  let tail_hash_prime = metablock.hash();
+  let nonced_tail_hash_prime = [tail_hash_prime.to_bytes(), nonce_bytes.clone()].concat();
+  let res = vk.pk.verify(&nonced_tail_hash_prime, &signature);
+  if res.is_err() {
+    Err(VerificationError::InvalidReceipt)
   } else {
     Ok(())
   }
@@ -88,18 +88,25 @@ pub fn verify_read_latest(
 
 pub fn verify_read_by_index(
   vk: &VerificationKey,
-  data: &Block,
-  tail_hash: &TailHash,
+  block_bytes: &Vec<u8>,
+  tail_hash_bytes: &Vec<u8>,
   idx: usize,
   signature: &Signature,
 ) -> Result<(), VerificationError> {
-  let block_hash = helper::hash(&data).to_vec();
-  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, idx);
-  let tail_hash_prime = helper::hash(&metadata).to_vec();
-
-  let res = vk.public_key.verify(tail_hash_prime.as_slice(), &signature);
+  let block = Block::new(block_bytes);
+  let block_hash = block.hash();
+  let res = NimbleDigest::from_bytes(tail_hash_bytes);
   if res.is_err() {
-    Err(VerificationError::UnableToVerifyEndorser)
+    return Err(VerificationError::IncorrectLength);
+  }
+  let tail_hash = res.unwrap();
+
+  let metablock = MetaBlock::new(&tail_hash, &block_hash, idx);
+  let tail_hash_prime = metablock.hash();
+
+  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), &signature);
+  if res.is_err() {
+    Err(VerificationError::InvalidReceipt)
   } else {
     Ok(())
   }
@@ -107,20 +114,27 @@ pub fn verify_read_by_index(
 
 pub fn verify_append(
   vk: &VerificationKey,
-  block_data: &Block,
-  tail_hash: &TailHash,
-  ledger_height: usize,
+  block_bytes: &Vec<u8>,
+  tail_hash_bytes: &Vec<u8>,
+  height: usize,
   signature: &Signature,
-) -> Result<(), VerificationError> {
-  let block_hash = helper::hash(block_data).to_vec();
-  let metadata = helper::pack_metadata_information(tail_hash.clone(), block_hash, ledger_height);
-  let tail_hash_prime = helper::hash(&metadata).to_vec();
-
-  let res = vk.public_key.verify(tail_hash_prime.as_slice(), &signature);
+) -> Result<Vec<u8>, VerificationError> {
+  let block = Block::new(block_bytes);
+  let block_hash = block.hash();
+  let res = NimbleDigest::from_bytes(tail_hash_bytes);
   if res.is_err() {
-    Err(VerificationError::UnableToVerifyEndorser)
+    return Err(VerificationError::IncorrectLength);
+  }
+  let tail_hash = res.unwrap();
+
+  let metablock = MetaBlock::new(&tail_hash, &block_hash, height);
+  let tail_hash_prime = metablock.hash();
+
+  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), &signature);
+  if res.is_err() {
+    Err(VerificationError::InvalidReceipt)
   } else {
-    Ok(())
+    Ok(tail_hash_prime.to_bytes())
   }
 }
 

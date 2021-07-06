@@ -63,14 +63,13 @@ impl EndorserState {
     &mut self,
     handle: Vec<u8>,
     tail_hash: Vec<u8>,
-    height: u64,
   ) -> Result<(Vec<u8>, Signature), EndorserError> {
     // The first time a ledger is requested with a handle, insert tail_hash and sign it.
     let signature = self.keypair.sign(tail_hash.as_slice());
     println!("Inserting {:?} --> {:?}", handle, tail_hash);
     self
       .ledgers
-      .insert(handle.clone(), (tail_hash.to_vec(), height));
+      .insert(handle.clone(), (tail_hash.to_vec(), 0u64));
     Ok((handle.clone(), signature))
   }
 
@@ -146,7 +145,6 @@ impl Store {
     &mut self,
     coordinator_handle: Vec<u8>,
     tail_hash: Vec<u8>,
-    tail_index: u64,
   ) -> Result<Signature, EndorserError> {
     println!("Received Coordinator Handle: {:?}", coordinator_handle);
     let check_handle_existence = self.state.ledgers.contains_key(&coordinator_handle);
@@ -155,7 +153,7 @@ impl Store {
     }
     let (_handle, ledger_response) = self
       .state
-      .create_ledger(coordinator_handle, tail_hash, tail_index)
+      .create_ledger(coordinator_handle, tail_hash)
       .expect("Unable to create a Ledger in EndorserState");
     Ok(ledger_response)
   }
@@ -196,8 +194,7 @@ impl Store {
     if tail_hash.is_ok() {
       let (tail_hash_bytes, _ledger_height) = tail_hash.unwrap();
       let concat_result = concat_bytes(tail_hash_bytes.as_slice(), nonce.as_slice());
-      let content_to_sign = hash(&concat_result);
-      let endorser_signature = self.state.keypair.sign(content_to_sign.as_slice());
+      let endorser_signature = self.state.keypair.sign(concat_result.as_slice());
       return Ok((nonce, tail_hash_bytes, endorser_signature));
     }
     Err(EndorserError::TailDoesNotMatch)
@@ -270,12 +267,8 @@ mod tests {
     // The coordinator sends the hashed contents of the block to the
     let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
     let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
-    let ledger_height = 0u64;
-    let create_ledger_endorser_response = endorser_state.create_ledger(
-      coordinator_handle.to_vec(),
-      genesis_tail_hash.to_vec(),
-      ledger_height,
-    );
+    let create_ledger_endorser_response =
+      endorser_state.create_ledger(coordinator_handle.to_vec(), genesis_tail_hash.to_vec());
     if create_ledger_endorser_response.is_ok() {
       let (handle, signature) = create_ledger_endorser_response.unwrap();
       assert_eq!(handle, coordinator_handle);
@@ -304,12 +297,8 @@ mod tests {
     // The coordinator sends the hashed contents of the block to the
     let coordinator_handle = rand::thread_rng().gen::<[u8; 32]>();
     let genesis_tail_hash = rand::thread_rng().gen::<[u8; 32]>();
-    let ledger_height = 0u64;
-    let create_ledger_endorser_response = endorser_state.create_ledger(
-      coordinator_handle.to_vec(),
-      genesis_tail_hash.to_vec(),
-      ledger_height,
-    );
+    let create_ledger_endorser_response =
+      endorser_state.create_ledger(coordinator_handle.to_vec(), genesis_tail_hash.to_vec());
 
     let (_handle, _signature) = create_ledger_endorser_response.unwrap();
 
