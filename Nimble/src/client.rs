@@ -67,35 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // store the handle and verification key
   let (handle, vk) = res.unwrap();
 
-  // Step 2: Read Latest with the Nonce generated
-  let nonce = rand::thread_rng().gen::<[u8; 16]>();
-  let req = tonic::Request::new(ReadLatestReq {
-    handle: handle.clone(),
-    nonce: nonce.to_vec(),
-  });
-
-  let ReadLatestResp {
-    block,
-    tail_hash,
-    height,
-    signature,
-  } = coordinator_connection
-    .client
-    .read_latest(req)
-    .await?
-    .into_inner();
-  let res = verify_read_latest(
-    &vk,
-    &block,
-    &tail_hash,
-    height as usize,
-    &nonce.to_vec(),
-    &Signature::from_bytes(&signature).unwrap(),
-  );
-  println!("Verifying ReadLatest Response : {:?}", res);
-  assert!(res.is_ok());
-
-  // Step 3: Read At Index
+  // Step 2: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
     handle: handle.clone(),
     index: 0,
@@ -121,13 +93,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Verifying ReadByIndex Response: {:?}", res);
   assert!(res.is_ok());
 
+  // Step 3: Read Latest with the Nonce generated
+  let nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let req = tonic::Request::new(ReadLatestReq {
+    handle: handle.clone(),
+    nonce: nonce.to_vec(),
+  });
+
+  let ReadLatestResp {
+    block,
+    tail_hash,
+    height,
+    signature,
+  } = coordinator_connection
+    .client
+    .read_latest(req)
+    .await?
+    .into_inner();
+  let res = verify_read_latest(
+    &vk,
+    &block,
+    &tail_hash,
+    height as usize,
+    &nonce.to_vec(),
+    &Signature::from_bytes(&signature).unwrap(),
+  );
+  println!("Verifying ReadLatest Response : {:?}", res.is_ok());
+  assert!(res.is_ok());
+  let mut last_known_tail = res.unwrap();
+
   // Step 4: Append
   let m1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
   let m2: Vec<u8> = "data_block_example_2".as_bytes().to_vec();
   let m3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let messages = vec![&m1, &m2, &m3].to_vec();
-
-  let last_known_tail = tail_hash.clone();
 
   for message in messages {
     let req = tonic::Request::new(AppendReq {
@@ -160,8 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Append verification: {:?}", res.is_ok());
     assert_eq!(res.is_ok(), true);
 
-    // last known tail is returned by `verify_append`
-    let last_known_tail = res.unwrap();
+    last_known_tail = res.unwrap();
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data

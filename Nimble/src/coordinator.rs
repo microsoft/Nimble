@@ -94,13 +94,12 @@ impl Call for CoordinatorState {
 
     // Pick an endorser for the new ledger
     let mut conn = self.get_random_endorser_connection();
-    let (endorser_pk, endorser_attestation) = conn.get_endorser_keyinformation().unwrap();
+    let endorser_pk = conn.get_endorser_keyinformation().unwrap();
 
     // Package the contents into a Block, TODO(@sudheesh): Enhance as needed. Currently bytes
     let genesis_block = {
       let mut genesis_block_bytes: Vec<u8> = Vec::new();
       genesis_block_bytes.append(&mut endorser_pk.clone().to_bytes().to_vec());
-      genesis_block_bytes.append(&mut endorser_attestation.clone().to_bytes().to_vec());
       genesis_block_bytes.append(&mut nonce.clone().to_vec());
       genesis_block_bytes
     };

@@ -4,53 +4,46 @@ package endorser_proto;
 
 service EndorserCall {
   // Protocol Endpoints
-  rpc GetEndorserPublicKey(Empty) returns (EndorserPublicKey);
-  rpc NewLedger(Handle) returns (EndorserLedgerResponse);
-  rpc ReadLatest(EndorserQuery) returns (EndorserQueryResponse);
-  rpc AppendToLedger(EndorserAppendRequest) returns (EndorserAppendResponse);
+  rpc GetEndorserPublicKey(GetEndorserPublicKeyReq) returns (GetEndorserPublicKeyResp);
+  rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
+  rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
+  rpc Append(AppendReq) returns (AppendResp);
 }
 
-message EndorserLedgerResponse {
-  bytes signature = 1;
+message GetEndorserPublicKeyReq {
 }
 
-message EndorserStateResponse {
-  string handle = 1;
-  EndorserPublicKey keyinfo = 2;
-}
-
-message EndorserPublicKey {
+message GetEndorserPublicKeyResp {
   bytes publickey = 1;
-  bytes signature = 2;
 }
 
-message Empty {
-
-}
-
-message EndorserAppendRequest {
-  bytes endorser_handle = 1;
-  bytes block_hash = 2;
-  bytes conditional_tail_hash = 3;  // Ideally optional
-}
-
-message EndorserAppendResponse {
-  bytes tail_hash = 1;
-  uint64 ledger_height = 2;
-  bytes signature = 3;
-}
-
-message Handle {
+message NewLedgerReq {
   bytes handle = 1;
 }
 
-message EndorserQuery {
+message NewLedgerResp {
+  bytes signature = 1;
+}
+
+message ReadLatestReq {
   bytes handle = 1;
   bytes nonce = 2;
 }
 
-message EndorserQueryResponse {
-  bytes nonce = 1;
-  bytes tail_hash = 2;
+message ReadLatestResp {
+  bytes tail_hash = 1;
+  uint64 height = 2;
+  bytes signature = 3;
+}
+
+message AppendReq {
+  bytes handle = 1;
+  bytes block_hash = 2;
+  bytes cond_tail_hash = 3;  // Ideally optional
+}
+
+message AppendResp {
+  bytes tail_hash = 1;
+  uint64 height = 2;
   bytes signature = 3;
 }

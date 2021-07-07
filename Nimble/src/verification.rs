@@ -16,26 +16,16 @@ pub fn verify_new_ledger(
   signature: &Signature,
 ) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
   // check the length of block_bytes
-  if block_bytes.len() != 112 {
+  if block_bytes.len() != 48 {
     return Err(VerificationError::InvalidGenesisBlock);
   }
 
-  // parse the genesis block
-  let (pk, sig) = {
+  // parse the genesis block and extract the endorser's public key
+  let pk = {
     let public_key_bytes = &block_bytes[0..32usize];
-    let sig_bytes = &block_bytes[32usize..(32usize + 64usize)];
-    let _nonce_bytes = &block_bytes[(32usize + 64usize)..((32usize + 64usize) + 16usize)];
-    (
-      PublicKey::from_bytes(public_key_bytes).unwrap(),
-      ed25519_dalek::ed25519::signature::Signature::from_bytes(sig_bytes).unwrap(),
-    )
+    let _nonce_bytes = &block_bytes[32usize..(32usize + 16usize)];
+    PublicKey::from_bytes(public_key_bytes).unwrap()
   };
-
-  // Verify the contents of the genesis block
-  let res = pk.verify(pk.as_bytes(), &sig);
-  if res.is_err() {
-    return Err(VerificationError::InvalidEndorserAttestation);
-  }
 
   // compute a handle as hash of the block
   let handle = {
@@ -64,7 +54,7 @@ pub fn verify_read_latest(
   height: usize,
   nonce_bytes: &Vec<u8>,
   signature: &Signature,
-) -> Result<(), VerificationError> {
+) -> Result<Vec<u8>, VerificationError> {
   let block = Block::new(&block_bytes);
 
   // construct a tail hash from `tail_hash_bytes`
@@ -82,7 +72,7 @@ pub fn verify_read_latest(
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
-    Ok(())
+    Ok(tail_hash_prime.to_bytes())
   }
 }
 
@@ -135,28 +125,5 @@ pub fn verify_append(
     Err(VerificationError::InvalidReceipt)
   } else {
     Ok(tail_hash_prime.to_bytes())
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use ed25519_dalek::ed25519::signature::Signature;
-
-  #[test]
-  pub fn test_verify_new_ledger() {
-    let block_data = {
-      let block_data_hex = "4b2dd24314c098717dfdcbf04e2bd9a2ed6f580ad4e444fed30f736d6f273e60eab295f4aff4a7d5eb83c776e6f5cff233219bad8798ea500a7cde2776037e4849188184479e019712a55d1d91a3b9678f6288d02816baced4de555ec81f4f0cf413e33cb2444824bdbd93b06958c8ba";
-      hex::decode(block_data_hex).unwrap()
-    };
-
-    let signature = {
-      let signature_data_hex = "1c48864bc5f164375f175ace328b1e9b373cf8001b959c5cf80c71ef8f73a196eba677a54e06d16818bf461e49e6376082fc00845101e79da968434715eefa06";
-      let signature_data = hex::decode(signature_data_hex).unwrap();
-      Signature::from_bytes(&signature_data).unwrap()
-    };
-
-    let res = verify_new_ledger(&block_data, &signature);
-    assert!(res.is_ok());
   }
 }
