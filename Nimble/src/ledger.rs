@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use core::fmt::Debug;
 use digest::Output;
 use ed25519_dalek::Signature;
@@ -7,7 +8,7 @@ use sha3::{Digest, Sha3_256};
 use std::convert::TryInto;
 
 /// A cryptographic digest
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct NimbleDigest {
   digest: Output<Sha3_256>,
 }
@@ -39,14 +40,15 @@ impl NimbleDigest {
 }
 
 /// A block in a ledger is a byte array
+#[derive(Clone, Debug, Default)]
 pub struct Block {
   block: Vec<u8>,
 }
 
 impl Block {
-  pub fn new(bytes: &Vec<u8>) -> Self {
+  pub fn new(bytes: &[u8]) -> Self {
     Block {
-      block: bytes.clone(),
+      block: bytes.to_vec(),
     }
   }
 }
@@ -54,6 +56,7 @@ impl Block {
 /// `MetaBlock` has three entries: (i) hash of the previous metadata,
 /// (ii) a hash of the current block, and (iii) a counter denoting the height
 /// of the current block in the ledger
+#[derive(Clone, Debug, Default)]
 pub struct MetaBlock {
   prev: NimbleDigest,
   block_hash: NimbleDigest,
@@ -61,9 +64,31 @@ pub struct MetaBlock {
 }
 
 /// An `EndorsedMetaBlock` has two components: (1) a Metadata and (2) a set of signatures
+#[derive(Clone, Debug, Default)]
 pub struct EndorsedMetaBlock {
   metablock: MetaBlock,
   receipt: Vec<Signature>,
+}
+
+impl EndorsedMetaBlock {
+  pub fn new(metablock: &MetaBlock, receipt: &[Signature]) -> Self {
+    EndorsedMetaBlock {
+      metablock: metablock.clone(),
+      receipt: receipt.to_vec(),
+    }
+  }
+
+  pub fn get_tail_hash(&self) -> NimbleDigest {
+    self.metablock.prev.clone()
+  }
+
+  pub fn get_height(&self) -> usize {
+    self.metablock.height
+  }
+
+  pub fn get_receipts(&self) -> Vec<Signature> {
+    self.receipt.clone()
+  }
 }
 
 impl MetaBlock {
@@ -166,5 +191,67 @@ impl NimbleHashTrait for Block {
 impl NimbleHashTrait for MetaBlock {
   fn hash(&self) -> NimbleDigest {
     NimbleDigest::digest(&self.to_bytes())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use rand::Rng;
+
+  #[test]
+  pub fn test_nimble_digest_equality() {
+    let hash_bytes_1 = rand::thread_rng().gen::<[u8; 32]>();
+    let hash_bytes_2 = rand::thread_rng().gen::<[u8; 32]>();
+    let duplicate_hash_bytes_1 = hash_bytes_1.clone();
+    let nimble_digest_1 = NimbleDigest::from_bytes(&hash_bytes_1);
+    let nimble_digest_2 = NimbleDigest::from_bytes(&hash_bytes_2);
+    let nimble_digest_1_dupe = NimbleDigest::from_bytes(&duplicate_hash_bytes_1);
+    assert_ne!(nimble_digest_1, nimble_digest_2);
+    assert_eq!(nimble_digest_1, nimble_digest_1_dupe);
+  }
+
+  #[test]
+  pub fn test_nimble_digest_hash_correctness_and_equality() {
+    let message_1 = "1".as_bytes();
+    let message_2 = "2".as_bytes();
+
+    let expected_hash_message_1_hex =
+      "67b176705b46206614219f47a05aee7ae6a3edbe850bbbe214c536b989aea4d2";
+    let expected_hash_message_2_hex =
+      "b1b1bd1ed240b1496c81ccf19ceccf2af6fd24fac10ae42023628abbe2687310";
+
+    let expected_hash_message_1_op = hex::decode(expected_hash_message_1_hex);
+    let expected_hash_message_2_op = hex::decode(expected_hash_message_2_hex);
+    assert!(expected_hash_message_1_op.is_ok());
+    assert!(expected_hash_message_2_op.is_ok());
+
+    let nimble_digest_1 = NimbleDigest::digest(message_1);
+    let nimble_digest_2 = NimbleDigest::digest(message_2);
+
+    assert_eq!(
+      nimble_digest_1.to_bytes(),
+      expected_hash_message_1_op.unwrap()
+    );
+    assert_eq!(
+      nimble_digest_2.to_bytes(),
+      expected_hash_message_2_op.unwrap()
+    );
+  }
+
+  #[test]
+  pub fn test_block_hash_results() {
+    let message_1 = "1".as_bytes();
+
+    let expected_hash_message_1_hex =
+      "67b176705b46206614219f47a05aee7ae6a3edbe850bbbe214c536b989aea4d2";
+
+    let expected_hash_message_1_op = hex::decode(expected_hash_message_1_hex);
+    assert!(expected_hash_message_1_op.is_ok());
+
+    let block_1 = Block::new(message_1);
+    let block_1_hash = block_1.hash();
+
+    assert_eq!(block_1_hash.to_bytes(), expected_hash_message_1_op.unwrap());
   }
 }

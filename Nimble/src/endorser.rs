@@ -1,12 +1,13 @@
 mod endorser_state;
 mod errors;
-mod helper;
+mod ledger;
 
 use crate::endorser_state::EndorserState;
+use crate::ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
-  AppendReq, AppendResp, GetEndorserPublicKeyReq, GetEndorserPublicKeyResp, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
+  ReadLatestReq, ReadLatestResp,
 };
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
@@ -28,20 +29,26 @@ impl EndorserServiceState {
   }
 }
 
+impl Default for EndorserServiceState {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 #[tonic::async_trait]
 impl EndorserCall for EndorserServiceState {
-  async fn get_endorser_public_key(
+  async fn get_public_key(
     &self,
-    _req: Request<GetEndorserPublicKeyReq>,
-  ) -> Result<Response<GetEndorserPublicKeyResp>, Status> {
-    let id = self
+    _req: Request<GetPublicKeyReq>,
+  ) -> Result<Response<GetPublicKeyResp>, Status> {
+    let pk = self
       .state
       .read()
       .expect("Failed to acquire read lock")
       .get_public_key();
 
-    let reply = GetEndorserPublicKeyResp {
-      publickey: id.as_bytes().to_vec(),
+    let reply = GetPublicKeyResp {
+      pk: pk.as_bytes().to_vec(),
     };
 
     Ok(Response::new(reply))
@@ -54,15 +61,13 @@ impl EndorserCall for EndorserServiceState {
     // The handle is the byte array of information sent by the Nimble Coordinator to the Endorser
     let NewLedgerReq { handle } = req.into_inner();
 
-    let zero_entry = [0u8; 32].to_vec();
-    let ledger_height = 0u64;
-    let ledger_height_bytes = ledger_height.to_be_bytes().to_vec();
-    let mut message: Vec<u8> = vec![];
-    message.extend(zero_entry);
-    message.extend(handle.to_vec());
-    message.extend(ledger_height_bytes);
-
-    let tail_hash = helper::hash(&message).to_vec();
+    let handle_instance = NimbleDigest::from_bytes(&handle);
+    if handle_instance.is_err() {
+      return Err(Status::invalid_argument("Handle size is invalid"));
+    }
+    let handle = handle_instance.unwrap();
+    let metadata = MetaBlock::genesis(&handle);
+    let tail_hash = metadata.hash();
 
     let mut endorser = self
       .state
@@ -85,19 +90,35 @@ impl EndorserCall for EndorserServiceState {
       block_hash,
       cond_tail_hash,
     } = req.into_inner();
-    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append(&handle, &block_hash, &cond_tail_hash);
 
-    if res.is_ok() {
-      let (tail_hash, height, signature) = res.unwrap();
-      let reply = AppendResp {
-        tail_hash,
-        height: height as u64,
-        signature: signature.to_bytes().to_vec(),
-      };
-      return Ok(Response::new(reply));
+    let handle_instance = NimbleDigest::from_bytes(&handle);
+    let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
+    let cond_tail_hash_instance = NimbleDigest::from_bytes(&cond_tail_hash);
+
+    if handle_instance.is_err() || block_hash_instance.is_err() || cond_tail_hash_instance.is_err()
+    {
+      return Err(Status::invalid_argument("Invalid input sizes"));
     }
-    Err(Status::aborted("Failed to Append"))
+
+    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
+    let res = endorser_state.append(
+      &handle_instance.unwrap(),
+      &block_hash_instance.unwrap(),
+      &cond_tail_hash_instance.unwrap(),
+    );
+
+    match res {
+      Ok((tail_hash, height, signature)) => {
+        let reply = AppendResp {
+          tail_hash,
+          height: height as u64,
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+
+      Err(_) => Err(Status::aborted("Failed to append")),
+    }
   }
 
   async fn read_latest(
@@ -105,22 +126,33 @@ impl EndorserCall for EndorserServiceState {
     request: Request<ReadLatestReq>,
   ) -> Result<Response<ReadLatestResp>, Status> {
     let ReadLatestReq { handle, nonce } = request.into_inner();
-    let latest_state = self.state.read().expect("Failed to acquire read lock");
-    let (tail_hash, height, endorser_signature) =
-      latest_state.read_latest(&handle, &nonce).unwrap();
-    let reply = ReadLatestResp {
-      tail_hash,
-      height: height as u64,
-      signature: endorser_signature.to_bytes().to_vec(),
+    let handle_instance = {
+      let h = NimbleDigest::from_bytes(&handle);
+      if h.is_err() {
+        return Err(Status::invalid_argument("Invalid handle size"));
+      }
+      h.unwrap()
     };
-    Ok(Response::new(reply))
+    let latest_state = self.state.read().expect("Failed to acquire read lock");
+    let res = latest_state.read_latest(&handle_instance, &nonce);
+
+    match res {
+      Ok((tail_hash, height, signature)) => {
+        let reply = ReadLatestResp {
+          tail_hash,
+          height: height as u64,
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(_) => Err(Status::aborted("Failed to process read_latest")),
+    }
   }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  #[rustfmt::skip]
-      let addr = "[::1]:9090".parse()?;
+  let addr = "[::1]:9090".parse()?;
   let server = EndorserServiceState::new();
 
   println!("Running gRPC Endorser Service at {:?}", addr);

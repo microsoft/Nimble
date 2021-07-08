@@ -4,17 +4,17 @@ package endorser_proto;
 
 service EndorserCall {
   // Protocol Endpoints
-  rpc GetEndorserPublicKey(GetEndorserPublicKeyReq) returns (GetEndorserPublicKeyResp);
+  rpc GetPublicKey(GetPublicKeyReq) returns (GetPublicKeyResp);
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
 }
 
-message GetEndorserPublicKeyReq {
+message GetPublicKeyReq {
 }
 
-message GetEndorserPublicKeyResp {
-  bytes publickey = 1;
+message GetPublicKeyResp {
+  bytes pk = 1;
 }
 
 message NewLedgerReq {

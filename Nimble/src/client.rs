@@ -27,7 +27,7 @@ pub struct CoordinatorConnection {
 
 impl CoordinatorConnection {
   pub async fn new(coordinator_endpoint_address: String) -> Result<Self, errors::ClientError> {
-    let connection_attempt = Endpoint::from_shared(coordinator_endpoint_address.clone());
+    let connection_attempt = Endpoint::from_shared(coordinator_endpoint_address);
     let connection = match connection_attempt {
       Ok(connection) => connection,
       Err(_err) => return Err(ClientError::CoordinatorHostNameNotFound),
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       &Signature::from_bytes(&signature).unwrap(),
     );
     println!("Append verification: {:?}", res.is_ok());
-    assert_eq!(res.is_ok(), true);
+    assert!(res.is_ok());
 
     last_known_tail = res.unwrap();
   }
@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()
   );
-  assert_eq!(is_latest_valid.is_ok(), true);
+  assert!(is_latest_valid.is_ok());
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {

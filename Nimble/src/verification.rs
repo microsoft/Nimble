@@ -12,7 +12,7 @@ pub struct VerificationKey {
 /// 1. The Block Data
 /// 2. A signature from an endorser (the code currently assumes a single endorser)
 pub fn verify_new_ledger(
-  block_bytes: &Vec<u8>,
+  block_bytes: &[u8],
   signature: &Signature,
 ) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
   // check the length of block_bytes
@@ -37,7 +37,7 @@ pub fn verify_new_ledger(
   let genesis_metablock = MetaBlock::genesis(&handle);
   let res = {
     let hash = genesis_metablock.hash().to_bytes();
-    pk.verify(&hash, &signature)
+    pk.verify(&hash, signature)
   };
 
   if res.is_err() {
@@ -49,13 +49,13 @@ pub fn verify_new_ledger(
 
 pub fn verify_read_latest(
   vk: &VerificationKey,
-  block_bytes: &Vec<u8>,
-  tail_hash_bytes: &Vec<u8>,
+  block_bytes: &[u8],
+  tail_hash_bytes: &[u8],
   height: usize,
-  nonce_bytes: &Vec<u8>,
+  nonce_bytes: &[u8],
   signature: &Signature,
 ) -> Result<Vec<u8>, VerificationError> {
-  let block = Block::new(&block_bytes);
+  let block = Block::new(block_bytes);
 
   // construct a tail hash from `tail_hash_bytes`
   // TODO: simplify error handling
@@ -67,8 +67,8 @@ pub fn verify_read_latest(
 
   let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
-  let nonced_tail_hash_prime = [tail_hash_prime.to_bytes(), nonce_bytes.clone()].concat();
-  let res = vk.pk.verify(&nonced_tail_hash_prime, &signature);
+  let nonced_tail_hash_prime = [tail_hash_prime.to_bytes(), nonce_bytes.to_vec()].concat();
+  let res = vk.pk.verify(&nonced_tail_hash_prime, signature);
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
@@ -78,8 +78,8 @@ pub fn verify_read_latest(
 
 pub fn verify_read_by_index(
   vk: &VerificationKey,
-  block_bytes: &Vec<u8>,
-  tail_hash_bytes: &Vec<u8>,
+  block_bytes: &[u8],
+  tail_hash_bytes: &[u8],
   idx: usize,
   signature: &Signature,
 ) -> Result<(), VerificationError> {
@@ -94,7 +94,7 @@ pub fn verify_read_by_index(
   let metablock = MetaBlock::new(&tail_hash, &block_hash, idx);
   let tail_hash_prime = metablock.hash();
 
-  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), &signature);
+  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), signature);
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
@@ -104,8 +104,8 @@ pub fn verify_read_by_index(
 
 pub fn verify_append(
   vk: &VerificationKey,
-  block_bytes: &Vec<u8>,
-  tail_hash_bytes: &Vec<u8>,
+  block_bytes: &[u8],
+  tail_hash_bytes: &[u8],
   height: usize,
   signature: &Signature,
 ) -> Result<Vec<u8>, VerificationError> {
@@ -120,7 +120,7 @@ pub fn verify_append(
   let metablock = MetaBlock::new(&tail_hash, &block_hash, height);
   let tail_hash_prime = metablock.hash();
 
-  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), &signature);
+  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), signature);
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {

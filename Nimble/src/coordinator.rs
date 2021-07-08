@@ -1,11 +1,13 @@
 mod errors;
-mod helper;
+mod ledger;
 mod network;
 mod store;
 
+use crate::ledger::{
+  Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait,
+};
 use crate::network::EndorserConnection;
 use crate::store::AppendOnlyStore;
-use ed25519_dalek::Signature;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -21,27 +23,10 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp,
 };
 
-type Handle = Vec<u8>;
-type Block = Vec<u8>;
-
-//#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-//pub struct Handle {
-//  handle: Vec<u8>, // TODO: make this a typed digest
-//}
-
-//#[derive(Clone, Debug, Default)]
-//pub struct Block {
-//  block: Vec<u8>,
-//}
-
-#[derive(Clone, Debug, Default)]
-pub struct MetaBlock {
-  pub metadata: Vec<u8>, // TODO: make this a typed tuple
-  pub signatures: Vec<Signature>,
-}
+type Handle = NimbleDigest;
 
 pub type DataStore = AppendOnlyStore<Handle, Block>;
-pub type MetadataStore = AppendOnlyStore<Handle, MetaBlock>;
+pub type MetadataStore = AppendOnlyStore<Handle, EndorsedMetaBlock>;
 
 #[derive(Debug, Default)]
 pub struct CoordinatorState {
@@ -83,32 +68,23 @@ impl CoordinatorState {
 impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
-    _request: Request<NewLedgerReq>,
+    _req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
     // Generate a Unique Value
-    let nonce = {
-      let unique_ledger_id = Uuid::new_v4();
-      let value = unique_ledger_id.as_bytes().to_vec();
-      value
-    };
+    let nonce = Uuid::new_v4().as_bytes().to_vec();
 
     // Pick an endorser for the new ledger
     let mut conn = self.get_random_endorser_connection();
-    let endorser_pk = conn.get_endorser_keyinformation().unwrap();
+    let pk = conn.get_public_key().unwrap();
 
-    // Package the contents into a Block, TODO(@sudheesh): Enhance as needed. Currently bytes
-    let genesis_block = {
-      let mut genesis_block_bytes: Vec<u8> = Vec::new();
-      genesis_block_bytes.append(&mut endorser_pk.clone().to_bytes().to_vec());
-      genesis_block_bytes.append(&mut nonce.clone().to_vec());
-      genesis_block_bytes
-    };
+    // Package the contents into a Block
+    let genesis_block = Block::new(&[pk.to_bytes().to_vec(), nonce.to_vec()].concat());
 
     // Hash the contents of the block to use as the handle.
-    let handle = helper::hash(genesis_block.as_slice()).to_vec();
+    let handle = genesis_block.hash();
 
+    // Write the genesis block to data store
     {
-      // Write the genesis block to data store
       let mut data_store_handle = self
         .data_store
         .write()
@@ -118,31 +94,11 @@ impl Call for CoordinatorState {
     }
 
     // Make a request to the endorser for NewLedger using the handle which returns a signature.
-    let endorser_response = conn
-      .call_endorser_new_ledger(handle.to_vec())
-      .await
-      .unwrap();
+    let endorser_response = conn.new_ledger(handle.to_bytes()).await.unwrap();
 
     // Prepare a metadata block
-    let meta_block = {
-      let metadata = {
-        let zero_entry = [0u8; 32].to_vec();
-        let ledger_height = 0u64.to_be_bytes().to_vec();
-        let mut message: Vec<u8> = vec![];
-        message.extend(zero_entry);
-        message.extend(handle.to_vec());
-        message.extend(ledger_height);
-        message
-      };
-
-      // TODO(@sudheesh): LATER (Retrieve signatures from all/quorum of endorsers)
-      let signatures = vec![endorser_response.clone()];
-
-      MetaBlock {
-        metadata,
-        signatures,
-      }
-    };
+    let endorsed_meta_block =
+      EndorsedMetaBlock::new(&MetaBlock::genesis(&handle), &[endorser_response]);
 
     {
       // Store the metadata block in the metadata store
@@ -150,12 +106,12 @@ impl Call for CoordinatorState {
         .metadata_store
         .write()
         .expect("Failed to acquire lock on the data store");
-      let res = metadata_store_handle.insert(&handle, &meta_block);
+      let res = metadata_store_handle.insert(&handle, &endorsed_meta_block);
       assert!(res.is_ok()); // TODO: do error handling
     }
 
     let reply = NewLedgerResp {
-      block: genesis_block.clone().to_vec(),
+      block: genesis_block.to_bytes(),
       signature: endorser_response.to_bytes().to_vec(),
     };
     Ok(Response::new(reply))
@@ -168,7 +124,13 @@ impl Call for CoordinatorState {
       cond_tail_hash,
     } = request.into_inner();
 
-    let hash_of_block = helper::hash(&block).to_vec();
+    let handle_instance = NimbleDigest::from_bytes(&handle);
+    if handle_instance.is_err() {
+      return Err(Status::invalid_argument("Incorrect Handle Provided"));
+    }
+    let handle_info = handle_instance.unwrap();
+    let data_block = Block::new(&block);
+    let hash_of_block = data_block.hash();
 
     // Write the block to the data store
     {
@@ -176,37 +138,41 @@ impl Call for CoordinatorState {
         .data_store
         .write()
         .expect("Failed to acquire lock on state");
-      let res = data_store_handle.append(&handle, &block);
+      let res = data_store_handle.append(&handle_info, &data_block);
       assert!(res.is_ok());
     }
 
-    // Ideally need to run multiple times for multiple endorsers.
     let mut conn = self.get_random_endorser_connection();
     let (tail_hash, height, signature) = conn
-      .call_endorser_append(
-        handle.clone(),
-        hash_of_block.clone(),
+      .append(
+        handle_info.to_bytes(),
+        hash_of_block.to_bytes(),
         cond_tail_hash.clone(),
       )
       .await
       .unwrap();
 
     {
-      let meta_block = {
-        let metadata =
-          helper::pack_metadata_information(tail_hash.clone(), hash_of_block, height as usize);
-        let signatures = vec![signature.clone()];
-        MetaBlock {
-          metadata,
-          signatures,
-        }
+      let endorsed_metablock = {
+        let prev_hash = {
+          let d = NimbleDigest::from_bytes(&tail_hash);
+          if d.is_err() {
+            return Err(Status::invalid_argument(
+              "Incorrect tail hash size from Endorser",
+            ));
+          }
+          d.unwrap()
+        };
+        let metadata = MetaBlock::new(&prev_hash, &hash_of_block, height as usize);
+        let signatures = vec![signature];
+        EndorsedMetaBlock::new(&metadata, &signatures)
       };
 
       let mut metadata_store_handle = self
         .metadata_store
         .write()
         .expect("Failed to acquire lock on state");
-      let res = metadata_store_handle.append(&handle, &meta_block);
+      let res = metadata_store_handle.append(&handle_info, &endorsed_metablock);
       assert!(res.is_ok());
     }
 
@@ -225,10 +191,16 @@ impl Call for CoordinatorState {
   ) -> Result<Response<ReadLatestResp>, Status> {
     let ReadLatestReq { handle, nonce } = request.into_inner();
 
+    let handle_instance = NimbleDigest::from_bytes(&handle);
+    if handle_instance.is_err() {
+      return Err(Status::invalid_argument("Incorrect Handle Provided"));
+    }
+    let handle_info = handle_instance.unwrap();
+
     // 1. Read the information from the Endorser
     let mut conn = self.get_random_endorser_connection();
     let signature = conn
-      .call_endorser_read_latest(handle.clone(), nonce)
+      .read_latest(handle_info.to_bytes(), nonce)
       .await
       .unwrap();
 
@@ -237,23 +209,34 @@ impl Call for CoordinatorState {
       .data_store
       .read()
       .expect("Failed to acquire read lock on the data store");
-    let block = read_lock_state_data.read_latest(&handle).unwrap(); // TODO: do error handling
+    let block_op = read_lock_state_data.read_latest(&handle_info);
+    if block_op.is_err() {
+      return Err(Status::invalid_argument(
+        "No data exists for the given handle",
+      ));
+    }
+    let block = block_op.unwrap();
 
     // 3. Read latest metablock and signatures from Metadata structure
     let read_lock_state_metadata = self
       .metadata_store
       .read()
       .expect("Failed to acquire read lock on the metadata store");
-    let metavalue = read_lock_state_metadata.read_latest(&handle).unwrap(); // TODO: do error handling
-    let (tail_hash, _block_hash, height) = helper::unpack_metadata_information(metavalue.metadata);
+    let metavalue = read_lock_state_metadata.read_latest(&handle_info);
 
+    if metavalue.is_err() {
+      return Err(Status::invalid_argument(
+        "No metadata exists for the given handle",
+      ));
+    }
+    let metadata = metavalue.unwrap();
     // 4. Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
     let reply = ReadLatestResp {
-      block,
-      tail_hash,
-      height,
-      signature: signature.to_bytes().to_vec(),
+      block: block.to_bytes(),
+      tail_hash: metadata.get_tail_hash().to_bytes(),
+      height: metadata.get_height() as u64,
+      signature: signature.to_bytes().to_vec(), // Ideally collected signatures from majority endorsers
     };
 
     Ok(Response::new(reply))
@@ -265,11 +248,17 @@ impl Call for CoordinatorState {
   ) -> Result<Response<ReadByIndexResp>, Status> {
     let ReadByIndexReq { handle, index } = request.into_inner();
 
+    let handle_instance = NimbleDigest::from_bytes(&handle);
+    if handle_instance.is_err() {
+      return Err(Status::invalid_argument("Incorrect Handle Provided"));
+    }
+    let handle_info = handle_instance.unwrap();
+
     // 1. Retrieve the block data information from the main datastructure
     let block = {
       let read_data_instance = self.data_store.read().expect("Failed to acquire read lock");
       read_data_instance
-        .read_by_index(&handle, index as usize)
+        .read_by_index(&handle_info, index as usize)
         .unwrap() // TODO: perform error handling
     };
 
@@ -279,19 +268,21 @@ impl Call for CoordinatorState {
         .read()
         .expect("Failed to acquire read lock");
       read_metadata_instance
-        .read_by_index(&handle, index as usize)
+        .read_by_index(&handle_info, index as usize)
         .unwrap() // TODO: perform error handling
     };
 
     // 2. Retrieve the information from the metadata structure.
-    let (tail_hash, _block_hash, _height) = helper::unpack_metadata_information(metadata.metadata);
+    let tail_hash = metadata.get_tail_hash();
 
     // Force only one for now. TODO(@sudheesh): Multiple endorser case.
-    let signature = metadata.signatures.get(0).unwrap().to_bytes().to_vec();
+    let signatures = metadata.get_receipts();
+    // TEMP: There's only one signature for now until multiple endorsers are available
+    let signature = signatures.get(0).unwrap().to_bytes().to_vec();
     // 3. TODO(@sudheesh): Pack the information as necessary and submit the response.
     let reply = ReadByIndexResp {
-      block,
-      tail_hash,
+      block: block.to_bytes(),
+      tail_hash: tail_hash.to_bytes(),
       signature,
     };
 
@@ -301,8 +292,7 @@ impl Call for CoordinatorState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  #[rustfmt::skip]
-    let addr = "[::1]:8080".parse()?;
+  let addr = "[::1]:8080".parse()?;
   let server = CoordinatorState::new().await;
 
   println!("Running gRPC Coordinator Service at {:?}", addr);

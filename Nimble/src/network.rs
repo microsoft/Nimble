@@ -8,24 +8,19 @@ pub mod endorser_proto {
 
 use endorser_proto::endorser_call_client::EndorserCallClient;
 use endorser_proto::{
-  AppendReq, AppendResp, GetEndorserPublicKeyReq, GetEndorserPublicKeyResp, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
+  ReadLatestReq, ReadLatestResp,
 };
-
-#[derive(Clone, Debug)]
-pub struct EndorserKeyInformation {
-  publickey: PublicKey,
-}
 
 #[derive(Clone, Debug)]
 pub struct EndorserConnection {
   client: EndorserCallClient<Channel>,
-  keyinfo: EndorserKeyInformation,
+  pk: PublicKey,
 }
 
 impl EndorserConnection {
-  pub fn get_endorser_keyinformation(&self) -> Result<PublicKey, Box<dyn Error>> {
-    Ok(self.keyinfo.publickey)
+  pub fn get_public_key(&self) -> Result<PublicKey, Box<dyn Error>> {
+    Ok(self.pk)
   }
 
   pub async fn new(uri: String) -> Result<Self, Box<dyn Error>> {
@@ -33,23 +28,16 @@ impl EndorserConnection {
     let channel = endorser_endpoint.connect_lazy()?;
     let mut client = EndorserCallClient::new(channel);
 
-    let req = tonic::Request::new(GetEndorserPublicKeyReq {});
-    let GetEndorserPublicKeyResp { publickey } =
-      client.get_endorser_public_key(req).await?.into_inner();
+    let req = tonic::Request::new(GetPublicKeyReq {});
+    let GetPublicKeyResp { pk } = client.get_public_key(req).await?.into_inner();
 
-    let public_key_instance = PublicKey::from_bytes(&publickey).unwrap();
     Ok(EndorserConnection {
       client,
-      keyinfo: EndorserKeyInformation {
-        publickey: public_key_instance,
-      },
+      pk: PublicKey::from_bytes(&pk).unwrap(),
     })
   }
 
-  pub async fn call_endorser_new_ledger(
-    &mut self,
-    handle: Vec<u8>,
-  ) -> Result<Signature, Box<dyn Error>> {
+  pub async fn new_ledger(&mut self, handle: Vec<u8>) -> Result<Signature, Box<dyn Error>> {
     let req = tonic::Request::new(NewLedgerReq { handle });
     let NewLedgerResp { signature } = self.client.new_ledger(req).await?.into_inner();
 
@@ -59,7 +47,7 @@ impl EndorserConnection {
     Ok(signature_instance)
   }
 
-  pub async fn call_endorser_read_latest(
+  pub async fn read_latest(
     &mut self,
     handle: Vec<u8>,
     nonce: Vec<u8>,
@@ -78,7 +66,7 @@ impl EndorserConnection {
     Ok(signature_instance)
   }
 
-  pub async fn call_endorser_append(
+  pub async fn append(
     &mut self,
     handle: Vec<u8>,
     block_hash: Vec<u8>,
