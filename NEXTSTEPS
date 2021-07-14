@@ -1,25 +1,38 @@
 NimbleLedger
 -------------
-1. Maintain the log in Azure storage and expose NimbleLedger APIs
+1. Maintain the coordinator's state in Azure storage
 
-2. Support for multiple endorsers
-  * Coordinator interacts with endorsers over RPCs or using queues
-  * Support for introducing new endorsers 
+2. Reconfigurations for endorser addition/replacement
+  * A paper design and a proof/argument (a key constraint: the verifier's work
+  should be proportional to the number of reconfigurations and not on the number
+  of entries in the ledger)
 
-3. Low-TCB endorsers
-  * Option#1: Xingyang's and Weidong's enclave runtime 
-    Pro: Lowest TCB
-    Con: We need FFI to interact with enclave code
+3. Endorsers in SGX enclaves
+  * Run our current endorser code inside an enclave using Fortanix (this step is
+    optional, but this is a low-effort item to have an SGX-based endorser)
 
-  * Option#2: Extend Fortanix's enclave-runner to shed dependency on Rust's std
-    Pro: Fully Rust-based
-    Con: Might not be lowest TCB
+4. Low-TCB endorsers in SGX enclaves
+  * Split the endorser's hash map into hash map outside enclave and a
+    fixed-sized vector inside enclaves (operating on the in-enclave vector
+    requires untrusted hints/advice from untrusted host code)
+  * Use Xingyang's and Weidong's enclave runtime to get the lowest TCB
+
+5. Concurrency and fault-tolerance
+  * Coordinator interacts with endorsers in parallel
+  * Coordinator handles multiple requests in parallel (while ensuring behavior
+    equivalent to serial execution)
+  * Handle coordinator failures
+  * Handle endorser failures (e.g., an endorser is lagging behind)
+
+NimbleIndex for HDFS
+---------------------
+1. A paper design of the APIs and responses, and how to verify those responses
+  * lookup by a secondary index (i.e., a field in the entry)?
+
+2. Use an existing storage service (e.g., CosmosDB)? 
+  * A paper design for details of how this is done
 
 
-NimbleAdapter/Proxy
---------------------
-1. An index atop NimbleLedger
-  * lookup by the index of the entry in the ledger
-  * lookup by a secondary index (i.e., a field in the entry)
-
-2. Add HDFS APIs
+WebHDFS++
+---------
+* What's the base APIs and what are the extensions?
