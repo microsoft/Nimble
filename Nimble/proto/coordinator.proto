@@ -9,12 +9,21 @@ service Call {
   rpc ReadByIndex(ReadByIndexReq) returns (ReadByIndexResp);
 }
 
+message IdSig {
+  uint64 pk_idx = 1;
+  bytes sig = 2;
+}
+
+message Receipt {
+  repeated IdSig id_sigs = 1;
+}
+
 message NewLedgerReq {
 }
 
 message NewLedgerResp {
   bytes block = 1;
-  bytes signature = 2;
+  Receipt receipt = 2;
 }
 
 message AppendReq {
@@ -26,7 +35,7 @@ message AppendReq {
 message AppendResp {
   bytes tail_hash = 1;
   uint64 height = 2;
-  bytes signature = 3;
+  Receipt receipt = 3;
 }
 
 message ReadLatestReq {
@@ -38,7 +47,7 @@ message ReadLatestResp {
   bytes block = 1;
   bytes tail_hash = 2;
   uint64 height = 3;
-  bytes signature = 4;
+  Receipt receipt = 4;
 }
 
 message ReadByIndexReq {
@@ -49,5 +58,5 @@ message ReadByIndexReq {
 message ReadByIndexResp {
   bytes block = 1;
   bytes tail_hash = 2;
-  bytes signature = 3;
+  Receipt receipt = 3;
 }

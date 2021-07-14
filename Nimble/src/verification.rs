@@ -1,31 +1,50 @@
 use crate::errors::VerificationError;
-use crate::ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait};
-use ed25519_dalek::{PublicKey, Signature, Verifier};
+use crate::ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
+use ed25519_dalek::PublicKey;
+
+const PUBLIC_KEY_IN_BYTES: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
+const NONCE_IN_BYTES: usize = 16;
 
 #[derive(Debug, Clone, Default)]
 pub struct VerificationKey {
-  pk: PublicKey,
+  pk_vec: Vec<PublicKey>,
+}
+
+impl VerificationKey {
+  fn from_bytes(pk_vec_bytes: &[u8]) -> VerificationKey {
+    // parse the public keys into a vector and the code panics if a public key is invalid
+    let pk_vec = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
+      .map(|i| {
+        PublicKey::from_bytes(&pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES])
+          .unwrap()
+      })
+      .collect::<Vec<PublicKey>>();
+    VerificationKey { pk_vec }
+  }
+
+  pub fn get_public_keys(&self) -> &Vec<PublicKey> {
+    &self.pk_vec
+  }
 }
 
 ///
 /// The parameters of the VerifyNewLedger() are:
 /// 1. The Block Data
-/// 2. A signature from an endorser (the code currently assumes a single endorser)
+/// 2. A receipt
 pub fn verify_new_ledger(
   block_bytes: &[u8],
-  signature: &Signature,
+  receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
-  // check the length of block_bytes
-  if block_bytes.len() != 48 {
+  // check there is at least one public key for an endorser
+  if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES)
+    || (block_bytes.len() - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
+  {
     return Err(VerificationError::InvalidGenesisBlock);
   }
 
-  // parse the genesis block and extract the endorser's public key
-  let pk = {
-    let public_key_bytes = &block_bytes[0..32usize];
-    let _nonce_bytes = &block_bytes[32usize..(32usize + 16usize)];
-    PublicKey::from_bytes(public_key_bytes).unwrap()
-  };
+  // parse the genesis block and extract the endorser's public key to form a verification key
+  // the first `NONCE_IN_BYTES` bytes are the nonce, so the rest are a set of public keys
+  let vk = VerificationKey::from_bytes(&block_bytes[NONCE_IN_BYTES..]);
 
   // compute a handle as hash of the block
   let handle = {
@@ -35,16 +54,18 @@ pub fn verify_new_ledger(
 
   // verify the signature on the genesis metablock with `handle` as the genesis block's hash
   let genesis_metablock = MetaBlock::genesis(&handle);
-  let res = {
-    let hash = genesis_metablock.hash().to_bytes();
-    pk.verify(&hash, signature)
-  };
+  let hash = genesis_metablock.hash().to_bytes();
+
+  // construct a receipt object from the provided bytes
+  let receipt = Receipt::from_bytes(receipt_bytes);
+
+  let res = receipt.verify(&hash, vk.get_public_keys());
 
   if res.is_err() {
-    return Err(VerificationError::InvalidGenesisBlock);
+    Err(VerificationError::InvalidGenesisBlock)
+  } else {
+    Ok((handle.to_bytes(), vk))
   }
-
-  Ok((handle.to_bytes(), VerificationKey { pk }))
 }
 
 pub fn verify_read_latest(
@@ -53,12 +74,11 @@ pub fn verify_read_latest(
   tail_hash_bytes: &[u8],
   height: usize,
   nonce_bytes: &[u8],
-  signature: &Signature,
+  receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<Vec<u8>, VerificationError> {
   let block = Block::new(block_bytes);
 
   // construct a tail hash from `tail_hash_bytes`
-  // TODO: simplify error handling
   let res = NimbleDigest::from_bytes(tail_hash_bytes);
   if res.is_err() {
     return Err(VerificationError::IncorrectLength);
@@ -68,7 +88,12 @@ pub fn verify_read_latest(
   let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
   let nonced_tail_hash_prime = [tail_hash_prime.to_bytes(), nonce_bytes.to_vec()].concat();
-  let res = vk.pk.verify(&nonced_tail_hash_prime, signature);
+
+  // parse the receipt to construct a Receipt object
+  let receipt = Receipt::from_bytes(receipt_bytes);
+
+  // verify the receipt against the nonced tail hash
+  let res = receipt.verify(&nonced_tail_hash_prime, vk.get_public_keys());
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
@@ -81,7 +106,7 @@ pub fn verify_read_by_index(
   block_bytes: &[u8],
   tail_hash_bytes: &[u8],
   idx: usize,
-  signature: &Signature,
+  receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(), VerificationError> {
   let block = Block::new(block_bytes);
   let block_hash = block.hash();
@@ -94,7 +119,12 @@ pub fn verify_read_by_index(
   let metablock = MetaBlock::new(&tail_hash, &block_hash, idx);
   let tail_hash_prime = metablock.hash();
 
-  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), signature);
+  // parse the receipt to construct a Receipt object
+  let receipt = Receipt::from_bytes(receipt_bytes);
+
+  // verify the receipt against the nonced tail hash
+  let res = receipt.verify(&tail_hash_prime.to_bytes(), vk.get_public_keys());
+
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
@@ -107,7 +137,7 @@ pub fn verify_append(
   block_bytes: &[u8],
   tail_hash_bytes: &[u8],
   height: usize,
-  signature: &Signature,
+  receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<Vec<u8>, VerificationError> {
   let block = Block::new(block_bytes);
   let block_hash = block.hash();
@@ -120,7 +150,12 @@ pub fn verify_append(
   let metablock = MetaBlock::new(&tail_hash, &block_hash, height);
   let tail_hash_prime = metablock.hash();
 
-  let res = vk.pk.verify(&tail_hash_prime.to_bytes(), signature);
+  // parse the receipt to construct a Receipt object
+  let receipt = Receipt::from_bytes(receipt_bytes);
+
+  // verify the receipt against the nonced tail hash
+  let res = receipt.verify(&tail_hash_prime.to_bytes(), vk.get_public_keys());
+
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {

@@ -6,7 +6,6 @@ use crate::errors::ClientError;
 use crate::verification::{
   verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
 };
-use ed25519_dalek::ed25519::signature::Signature;
 use rand::Rng;
 use tonic::transport::{Channel, Endpoint};
 
@@ -17,7 +16,7 @@ pub mod coordinator_proto {
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp,
+  ReadLatestReq, ReadLatestResp, Receipt,
 };
 
 #[derive(Debug, Clone)]
@@ -42,6 +41,14 @@ impl CoordinatorConnection {
   }
 }
 
+fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(usize, Vec<u8>)> {
+  assert!(receipt.is_some());
+  let id_sigs = receipt.clone().unwrap().id_sigs;
+  (0..id_sigs.len())
+    .map(|i| (id_sigs[i].pk_idx as usize, id_sigs[i].sig.clone()))
+    .collect::<Vec<(usize, Vec<u8>)>>()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator_connection_attempt =
@@ -55,16 +62,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Step 1: NewLedger Request
   let request = tonic::Request::new(NewLedgerReq {});
-  let NewLedgerResp { block, signature } = coordinator_connection
+  let NewLedgerResp { block, receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&block, &Signature::from_bytes(&signature).unwrap());
+  let res = verify_new_ledger(&block, &reformat_receipt(&receipt));
+  println!("NewLedger: {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  // store the handle and verification key
   let (handle, vk) = res.unwrap();
 
   // Step 2: Read At Index
@@ -76,21 +83,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadByIndexResp {
     block,
     tail_hash,
-    signature,
+    receipt,
   } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(
-    &vk,
-    &block,
-    &tail_hash,
-    0usize,
-    &Signature::from_bytes(&signature).unwrap(),
-  );
-  println!("Verifying ReadByIndex Response: {:?}", res);
+  let res = verify_read_by_index(&vk, &block, &tail_hash, 0usize, &reformat_receipt(&receipt));
+  println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
   // Step 3: Read Latest with the Nonce generated
@@ -104,22 +105,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     block,
     tail_hash,
     height,
-    signature,
+    receipt,
   } = coordinator_connection
     .client
     .read_latest(req)
     .await?
     .into_inner();
+
   let res = verify_read_latest(
     &vk,
     &block,
     &tail_hash,
     height as usize,
     &nonce.to_vec(),
-    &Signature::from_bytes(&signature).unwrap(),
+    &reformat_receipt(&receipt),
   );
-  println!("Verifying ReadLatest Response : {:?}", res.is_ok());
+  println!("Read Latest : {:?}", res.is_ok());
   assert!(res.is_ok());
+
   let mut last_known_tail = res.unwrap();
 
   // Step 4: Append
@@ -138,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let AppendResp {
       tail_hash,
       height,
-      signature,
+      receipt,
     } = coordinator_connection
       .client
       .append(req)
@@ -154,11 +157,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       &message.to_vec(),
       &tail_hash,
       height as usize,
-      &Signature::from_bytes(&signature).unwrap(),
+      &reformat_receipt(&receipt),
     );
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
-
     last_known_tail = res.unwrap();
   }
 
@@ -173,20 +175,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     block,
     tail_hash,
     height,
-    signature,
+    receipt,
   } = coordinator_connection
     .client
     .read_latest(latest_state_query)
     .await?
     .into_inner();
   assert_eq!(block, m3.clone());
+
   let is_latest_valid = verify_read_latest(
     &vk,
     &block,
     &tail_hash,
     height as usize,
     &nonce.to_vec(),
-    &Signature::from_bytes(&signature).unwrap(),
+    &reformat_receipt(&receipt),
   );
   println!(
     "Verifying ReadLatest Response : {:?}",
@@ -203,21 +206,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadByIndexResp {
     block,
     tail_hash,
-    signature,
+    receipt,
   } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
   assert_eq!(block, m2.clone());
-  let res = verify_read_by_index(
-    &vk,
-    &block,
-    &tail_hash,
-    2usize,
-    &Signature::from_bytes(&signature).unwrap(),
-  );
+
+  let res = verify_read_by_index(&vk, &block, &tail_hash, 2usize, &reformat_receipt(&receipt));
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
+
   Ok(())
 }

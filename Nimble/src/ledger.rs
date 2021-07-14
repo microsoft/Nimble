@@ -1,10 +1,14 @@
 #![allow(dead_code)]
+use crate::errors::VerificationError;
 use core::fmt::Debug;
 use digest::Output;
-use ed25519_dalek::Signature;
+use ed25519_dalek::Verifier;
+use ed25519_dalek::{PublicKey, Signature};
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
+use itertools::concat;
 use sha3::{Digest, Sha3_256};
+use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// A cryptographic digest
@@ -39,6 +43,97 @@ impl NimbleDigest {
   }
 }
 
+#[derive(Clone, Debug)]
+pub struct IdSig {
+  id: usize,
+  sig: Signature,
+}
+
+impl IdSig {
+  pub fn get_id_and_sig(&self) -> (usize, Signature) {
+    (self.id, self.sig)
+  }
+
+  pub fn get_id(&self) -> usize {
+    self.id
+  }
+
+  pub fn get_sig(&self) -> Signature {
+    self.sig
+  }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Receipt {
+  id_sigs: Vec<IdSig>,
+}
+
+impl Receipt {
+  // TODO: return error in case `from_bytes` fails
+  pub fn from_bytes(receipt_bytes: &[(usize, Vec<u8>)]) -> Receipt {
+    Receipt {
+      id_sigs: (0..receipt_bytes.len())
+        .map(|i| {
+          let (id, sig_bytes) = receipt_bytes[i].clone();
+          IdSig {
+            id,
+            sig: ed25519_dalek::ed25519::signature::Signature::from_bytes(&sig_bytes).unwrap(),
+          }
+        })
+        .collect::<Vec<IdSig>>(),
+    }
+  }
+
+  pub fn to_bytes(&self) -> Vec<(usize, Vec<u8>)> {
+    self
+      .id_sigs
+      .iter()
+      .map(|x| (x.id, x.sig.to_bytes().to_vec()))
+      .collect()
+  }
+
+  pub fn verify(&self, msg: &[u8], pk_vec: &[PublicKey]) -> Result<(), VerificationError> {
+    // check if the indexes in the receipt are unique
+    let id_sigs = &self.id_sigs;
+    let unique_ids = {
+      let mut uniq = HashSet::new();
+      (0..id_sigs.len())
+        .map(|i| id_sigs[i].get_id())
+        .collect::<Vec<usize>>()
+        .into_iter()
+        .all(|x| uniq.insert(x));
+      uniq
+    };
+
+    if id_sigs.len() != unique_ids.len() {
+      return Err(VerificationError::DuplicateIds);
+    }
+
+    // verify the signatures in the receipt by indexing into the public keys in self.pk
+    let res = (0..id_sigs.len()).try_for_each(|i| {
+      let id = id_sigs[i].get_id();
+      let sig = id_sigs[i].get_sig();
+      if id < pk_vec.len() {
+        let pk = pk_vec[id];
+        let res = pk.verify(msg, &sig);
+        if res.is_err() {
+          Err(VerificationError::InvalidSignature)
+        } else {
+          Ok(())
+        }
+      } else {
+        Err(VerificationError::IndexOutofBounds)
+      }
+    });
+
+    if res.is_err() {
+      Err(VerificationError::InvalidReceipt)
+    } else {
+      Ok(())
+    }
+  }
+}
+
 /// A block in a ledger is a byte array
 #[derive(Clone, Debug, Default)]
 pub struct Block {
@@ -49,6 +144,16 @@ impl Block {
   pub fn new(bytes: &[u8]) -> Self {
     Block {
       block: bytes.to_vec(),
+    }
+  }
+
+  pub fn genesis(pk_vec: &[PublicKey], nonce_bytes: &[u8]) -> Self {
+    let pk_vec_bytes = (0..pk_vec.len())
+      .map(|i| pk_vec[i].to_bytes().to_vec())
+      .collect::<Vec<Vec<u8>>>();
+
+    Block {
+      block: concat(vec![nonce_bytes.to_vec(), concat(pk_vec_bytes)]),
     }
   }
 }
@@ -67,27 +172,23 @@ pub struct MetaBlock {
 #[derive(Clone, Debug, Default)]
 pub struct EndorsedMetaBlock {
   metablock: MetaBlock,
-  receipt: Vec<Signature>,
+  receipt: Receipt,
 }
 
 impl EndorsedMetaBlock {
-  pub fn new(metablock: &MetaBlock, receipt: &[Signature]) -> Self {
+  pub fn new(metablock: &MetaBlock, receipt: &Receipt) -> Self {
     EndorsedMetaBlock {
       metablock: metablock.clone(),
-      receipt: receipt.to_vec(),
+      receipt: receipt.clone(),
     }
   }
 
-  pub fn get_tail_hash(&self) -> NimbleDigest {
-    self.metablock.prev.clone()
+  pub fn get_metablock(&self) -> &MetaBlock {
+    &self.metablock
   }
 
-  pub fn get_height(&self) -> usize {
-    self.metablock.height
-  }
-
-  pub fn get_receipts(&self) -> Vec<Signature> {
-    self.receipt.clone()
+  pub fn get_receipt(&self) -> &Receipt {
+    &self.receipt
   }
 }
 
@@ -109,6 +210,14 @@ impl MetaBlock {
       block_hash: block_hash.clone(),
       height,
     }
+  }
+
+  pub fn get_height(&self) -> usize {
+    self.height
+  }
+
+  pub fn get_prev(&self) -> &NimbleDigest {
+    &self.prev
   }
 }
 
@@ -203,7 +312,7 @@ mod tests {
   pub fn test_nimble_digest_equality() {
     let hash_bytes_1 = rand::thread_rng().gen::<[u8; 32]>();
     let hash_bytes_2 = rand::thread_rng().gen::<[u8; 32]>();
-    let duplicate_hash_bytes_1 = hash_bytes_1.clone();
+    let duplicate_hash_bytes_1 = hash_bytes_1;
     let nimble_digest_1 = NimbleDigest::from_bytes(&hash_bytes_1);
     let nimble_digest_2 = NimbleDigest::from_bytes(&hash_bytes_2);
     let nimble_digest_1_dupe = NimbleDigest::from_bytes(&duplicate_hash_bytes_1);

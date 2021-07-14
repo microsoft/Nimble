@@ -69,7 +69,13 @@ impl EndorserState {
         return Err(EndorserError::TailDoesNotMatch);
       }
 
-      *height += 1;
+      *height = {
+        let height_op = height.checked_add(1);
+        if height_op.is_none() {
+          return Err(EndorserError::LedgerHeightOverflow);
+        }
+        height_op.unwrap()
+      };
 
       // save the previous tail
       let prev_tail = tail_hash.clone();
@@ -112,7 +118,7 @@ mod tests {
     let coordinator_handle = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      if !n.is_ok() {
+      if n.is_err() {
         panic!("Should not have occured");
       }
       n.unwrap()
@@ -120,31 +126,26 @@ mod tests {
     let genesis_tail_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      if !n.is_ok() {
+      if n.is_err() {
         panic!("Should not have occured");
       }
       n.unwrap()
     };
-    let create_ledger_endorser_response =
-      endorser_state.new_ledger(&coordinator_handle, &genesis_tail_hash);
-    if create_ledger_endorser_response.is_ok() {
-      let signature = create_ledger_endorser_response.unwrap();
-      let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash.to_bytes());
-      assert_eq!(signature, signature_expected);
+    let res = endorser_state.new_ledger(&coordinator_handle, &genesis_tail_hash);
+    assert!(res.is_ok());
 
-      // Fetch the value currently in the tail.
-      let tail_result = endorser_state.read_latest(&coordinator_handle, &vec![0]);
-      if tail_result.is_ok() {
-        let (tail_hash_data, height, _signature) = tail_result.unwrap();
-        assert_eq!(height, 0usize);
-        let tail_hash = NimbleDigest::from_bytes(&tail_hash_data).unwrap();
-        assert_eq!(tail_hash, genesis_tail_hash);
-      } else {
-        panic!("Failed to retrieve correct tail hash on genesis ledger state creation");
-      }
-    } else {
-      panic!("Failed to create ledger using genesis hash at the ledger");
-    }
+    let signature = res.unwrap();
+    let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash.to_bytes());
+    assert_eq!(signature, signature_expected);
+
+    // Fetch the value currently in the tail.
+    let tail_result = endorser_state.read_latest(&coordinator_handle, &[0]);
+    assert!(tail_result.is_ok());
+
+    let (tail_hash_data, height, _signature) = tail_result.unwrap();
+    assert_eq!(height, 0usize);
+    let tail_hash = NimbleDigest::from_bytes(&tail_hash_data).unwrap();
+    assert_eq!(tail_hash, genesis_tail_hash);
   }
 
   #[test]
@@ -192,7 +193,7 @@ mod tests {
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
       let (tail_result_data, _height, _signature) = endorser_state
-        .read_latest(&coordinator_handle, &vec![0])
+        .read_latest(&coordinator_handle, &[0])
         .unwrap();
       let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
 

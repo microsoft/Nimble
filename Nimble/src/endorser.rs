@@ -4,6 +4,7 @@ mod ledger;
 
 use crate::endorser_state::EndorserState;
 use crate::ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
+use clap::{App, Arg};
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
   AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
@@ -152,7 +153,23 @@ impl EndorserCall for EndorserServiceState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let addr = "[::1]:9090".parse()?;
+  let config = App::new("endorser")
+    .arg(
+      Arg::with_name("host")
+        .help("The hostname to run the Service On. Default: [::1]")
+        .default_value("[::1]")
+        .index(2),
+    )
+    .arg(
+      Arg::with_name("port")
+        .help("The port number to run the Service On. Default: 9000")
+        .default_value("9000")
+        .index(1),
+    );
+  let cli_matches = config.get_matches();
+  let hostname = cli_matches.value_of("host").unwrap();
+  let port_number = cli_matches.value_of("port").unwrap();
+  let addr = format!("{}:{}", hostname, port_number).parse()?;
   let server = EndorserServiceState::new();
 
   println!("Running gRPC Endorser Service at {:?}", addr);

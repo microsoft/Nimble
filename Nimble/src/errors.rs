@@ -11,6 +11,8 @@ pub enum EndorserError {
   TailDoesNotMatch,
   /// returned if the creation of the endorser state fails
   StateCreationError,
+  /// returned if the increment results in overflow of ledger height
+  LedgerHeightOverflow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +25,12 @@ pub enum VerificationError {
   IncorrectLength,
   /// returned if the supplied receipt is invalid
   InvalidReceipt,
+  /// returned if the supplied signature is invalid
+  InvalidSignature,
+  /// returned if the index is out of bounds
+  IndexOutofBounds,
+  /// returned if the identities are not unique
+  DuplicateIds,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +41,24 @@ pub enum StorageError {
   DuplicateKey,
   /// returned if the requested index is not in the vector associated with a key
   InvalidIndex,
+  /// returned if the latest value does not match the conditional value provided
+  IncorrectConditionalData,
+  /// returned if the key does not exist
+  KeyDoesNotExist,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CoordinatorError {
+  /// returned if the coordinator does not have the handle
+  UnableToFindHandle,
+  /// returned if the coordinator fails to find the index of the endorser key
+  UnableToFindPublicKeyIndex,
+  /// returned if the Endorser Connection Client already exists in the Connection Store
+  EndorserAlreadyExists,
+  /// returned if the connection clients to the endorser cannot be made by the coordinator
+  UnableToConnectToEndorser,
+  /// returned if the multi-get fails to return any endorser client.
+  UnableToFindEndorserClient,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

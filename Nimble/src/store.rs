@@ -20,6 +20,13 @@ where
     }
   }
 
+  pub fn contains_key(&self, key: &K) -> Result<(), StorageError> {
+    if !self.map.contains_key(key) {
+      return Err(StorageError::KeyDoesNotExist);
+    }
+    Ok(())
+  }
+
   pub fn insert(&mut self, key: &K, val: &V) -> Result<(), StorageError> {
     // check if `map` already contains an entry for the supplied `key`
     if self.map.contains_key(key) {
