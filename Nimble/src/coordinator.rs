@@ -82,10 +82,40 @@ impl ConnectionStore {
 }
 
 #[derive(Debug, Default)]
+pub struct CommitteeStore {
+  store: HashMap<Handle, Vec<PublicKey>>,
+}
+
+impl CommitteeStore {
+  pub fn new() -> Self {
+    CommitteeStore {
+      store: HashMap::new(),
+    }
+  }
+
+  pub fn insert(&mut self, key: &Handle, val: &[PublicKey]) -> Result<(), CoordinatorError> {
+    if self.store.contains_key(key) {
+      return Err(CoordinatorError::HandleAlreadyExists);
+    }
+
+    self.store.insert(key.clone(), val.to_vec());
+    Ok(())
+  }
+
+  pub fn get(&self, key: &Handle) -> Result<Vec<PublicKey>, CoordinatorError> {
+    if !self.store.contains_key(key) {
+      return Err(CoordinatorError::UnableToFindHandle);
+    }
+
+    Ok(self.store.get(key).unwrap().to_vec())
+  }
+}
+
+#[derive(Debug, Default)]
 pub struct CoordinatorState {
   data: Arc<RwLock<DataStore>>,
   metadata: Arc<RwLock<MetadataStore>>,
-  committee: Arc<RwLock<HashMap<Handle, Vec<PublicKey>>>>, // a map from a handle to a vector of public keys
+  committee: Arc<RwLock<CommitteeStore>>, // a map from a handle to a vector of public keys
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
 }
 
@@ -123,7 +153,7 @@ impl CoordinatorState {
     CoordinatorState {
       data: Arc::new(RwLock::new(DataStore::new())),
       metadata: Arc::new(RwLock::new(MetadataStore::new())),
-      committee: Arc::new(RwLock::new(HashMap::new())),
+      committee: Arc::new(RwLock::new(CommitteeStore::new())),
       connections: Arc::new(RwLock::new(connections)),
     }
   }
@@ -190,10 +220,10 @@ impl Call for CoordinatorState {
         .committee
         .write()
         .expect("Failed to acquire lock on handle connections map");
-      if handle_committee.contains_key(&handle) {
+      let handle_ins_op = handle_committee.insert(&handle, &chosen_public_keys);
+      if handle_ins_op.is_err() {
         return Err(Status::aborted("Aborted due to Handle Already Existing"));
       }
-      handle_committee.insert(handle.clone(), chosen_public_keys.clone());
     }
 
     // Write the genesis block to data store
@@ -273,14 +303,17 @@ impl Call for CoordinatorState {
       assert!(res.is_ok());
     }
 
-    let chosen_public_keys = self
-      .connections
-      .read()
-      .expect("Unable to obtain read lock on connections")
-      .get_all_keys();
+    let committee_public_keys = {
+      let handle_committee = self.committee.read().expect("Unable to obtain Readlock");
+      let res = handle_committee.get(&handle);
+      if res.is_err() {
+        return Err(Status::invalid_argument("Unknown Handle"));
+      }
+      res.unwrap()
+    };
 
     let connections: Vec<EndorserConnection> = {
-      let res = self.get_endorser_connections(&chosen_public_keys);
+      let res = self.get_endorser_connections(&committee_public_keys);
       if res.is_err() {
         return Err(Status::aborted("Failed to Obtain Endorser Connection"));
       }
@@ -342,18 +375,21 @@ impl Call for CoordinatorState {
       h.unwrap()
     };
 
-    let chosen_public_keys = self
-      .connections
-      .read()
-      .expect("Unable to obtain read lock on connections")
-      .get_all_keys();
+    let committee_public_keys = {
+      let handle_committee = self.committee.read().expect("Unable to obtain Readlock");
+      let res = handle_committee.get(&handle);
+      if res.is_err() {
+        return Err(Status::invalid_argument("Unknown Handle"));
+      }
+      res.unwrap()
+    };
 
     let connections: Vec<EndorserConnection> = {
-      let ec_res = self.get_endorser_connections(&chosen_public_keys);
-      if ec_res.is_err() {
+      let res = self.get_endorser_connections(&committee_public_keys);
+      if res.is_err() {
         return Err(Status::aborted("Failed to Obtain Endorser Connection"));
       }
-      ec_res.unwrap()
+      res.unwrap()
     };
 
     // 1. Read the information from the Endorsers

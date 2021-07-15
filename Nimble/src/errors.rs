@@ -59,6 +59,8 @@ pub enum CoordinatorError {
   UnableToConnectToEndorser,
   /// returned if the multi-get fails to return any endorser client.
   UnableToFindEndorserClient,
+  /// returned if the handle managed by Endorsers already exists
+  HandleAlreadyExists,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
