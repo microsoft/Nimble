@@ -18,6 +18,7 @@ pub mod coordinator_proto {
 }
 
 use crate::errors::CoordinatorError;
+use clap::{App, Arg};
 use coordinator_proto::call_server::{Call, CallServer};
 use coordinator_proto::{
   AppendReq, AppendResp, IdSig, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
@@ -123,21 +124,20 @@ pub struct CoordinatorState {
 pub struct CallServiceStub {}
 
 impl CoordinatorState {
-  pub async fn new() -> Self {
+  pub async fn new(hostnames: Vec<&str>) -> Self {
     let mut connections = ConnectionStore::new();
 
     // Connect in series. TODO: Make these requests async and concurrent and read from a config file.
-    for hostname in [
-      "http://[::1]:9090",
-      "http://[::1]:9091",
-      "http://[::1]:9092",
-      "http://[::1]:9093",
-      "http://[::1]:9094",
-    ] {
+    for hostname in hostnames {
       let conn = EndorserConnection::new(hostname.to_string()).await;
       if conn.is_err() {
-        panic!("Unable to connect to an {:?}", hostname.to_string());
+        panic!(
+          "Unable to connect to an endorser service at {:?} with err: {:?}",
+          hostname.to_string(),
+          conn
+        );
       }
+      println!("Connected Successfully to {:?}", &hostname);
 
       let conn = conn.unwrap();
       let pk = conn.get_public_key().unwrap();
@@ -490,8 +490,27 @@ impl Call for CoordinatorState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let addr = "[::1]:8080".parse()?;
-  let server = CoordinatorState::new().await;
+  let config = App::new("coordinator")
+      .arg(Arg::with_name("host").help("The hostname to run the service on. Default: [::1]")
+          .default_value("[::1]")
+          .index(2),
+      )
+      .arg(Arg::with_name("port").help("The port number to run the coordinator service on. Default: 8080")
+          .default_value("8080").index(1),)
+      .arg(Arg::with_name("endorser")
+          .short("e")
+          .long("endorser")
+          .help("List of URLs to Endorser Services")
+          .use_delimiter(true)
+          .default_value("http://[::1]:9090,http://[::1]:9091,http://[::1]:9092,http://[::1]:9093,http://[::1]:9094")
+          .required(true));
+  let cli_matches = config.get_matches();
+  let hostname = cli_matches.value_of("host").unwrap();
+  let port_number = cli_matches.value_of("port").unwrap();
+  let addr = format!("{}:{}", hostname, port_number).parse()?;
+  let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+  println!("Endorser_hostnames: {:?}", endorser_hostnames);
+  let server = CoordinatorState::new(endorser_hostnames).await;
 
   println!("Running gRPC Coordinator Service at {:?}", addr);
 

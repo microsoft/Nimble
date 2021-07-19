@@ -1,0 +1,90 @@
+version: "3.9"
+
+networks:
+  basic:
+
+services:
+  endorser-1:
+    build: .
+    command: cargo run --bin endorser -- 9090 0.0.0.0
+    volumes:
+    - .:/Nimble/Nimble
+    ports:
+    - "9090:9090"
+    container_name: endorser-1
+    networks:
+      - basic
+
+  endorser-2:
+    build: .
+    command: cargo run --bin endorser -- 9091 0.0.0.0
+    volumes:
+    - .:/Nimble/Nimble
+    ports:
+    - "9091:9091"
+    container_name: endorser-2
+    networks:
+      - basic
+
+  endorser-3:
+    build: .
+    command: cargo run --bin endorser -- 9092 0.0.0.0
+    volumes:
+    - .:/Nimble/Nimble
+    ports:
+    - "9092:9092"
+    container_name: endorser-3
+    networks:
+      - basic
+
+  endorser-4:
+    build: .
+    command: cargo run --bin endorser -- 9093 0.0.0.0
+    volumes:
+    - .:/Nimble/Nimble
+    ports:
+    - "9093:9093"
+    container_name: endorser-4
+    networks:
+      - basic
+
+  endorser-5:
+    build: .
+    command: cargo run --bin endorser -- 9094 0.0.0.0
+    volumes:
+    - .:/Nimble/Nimble
+    ports:
+    - "9094:9094"
+    container_name: endorser-5
+    networks:
+      - basic
+
+  coordinator:
+    build: .
+    command: cargo run --bin coordinator -- 8080 0.0.0.0 -e "http://endorser-1:9090,http://endorser-2:9091,http://endorser-3:9092,http://endorser-4:9093,http://endorser-5:9094"
+    volumes:
+      - .:/Nimble/Nimble
+    ports:
+      - "8080:8080"
+    depends_on:
+      - endorser-1
+      - endorser-2
+      - endorser-3
+      - endorser-4
+      - endorser-5
+    container_name: coordinator
+    networks:
+      - basic
+
+  # SSH Into the docker to run cargo run --bin client
+  client:
+    build: .
+    tty: true
+    command: /bin/bash
+    volumes:
+    - .:/Nimble/Nimble
+    depends_on:
+      - coordinator
+    container_name: client
+    networks:
+      - basic

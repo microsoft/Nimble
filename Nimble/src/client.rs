@@ -13,6 +13,7 @@ pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
+use clap::{App, Arg};
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
@@ -51,8 +52,17 @@ fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(usize, Vec<u8>)> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+  let config = App::new("client").arg(
+    Arg::with_name("coordinator")
+      .help("The hostname of the coordinator")
+      .default_value("http://[::1]:8080")
+      .index(1),
+  );
+  let cli_matches = config.get_matches();
+  let coordinator_endpoint_addr = cli_matches.value_of("coordinator").unwrap();
+
   let coordinator_connection_attempt =
-    CoordinatorConnection::new("http://[::1]:8080".to_string()).await;
+    CoordinatorConnection::new(coordinator_endpoint_addr.to_string()).await;
   let mut coordinator_connection = match coordinator_connection_attempt {
     Ok(coordinator_connection) => coordinator_connection,
     Err(e) => {
