@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// A cryptographic digest
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Copy)]
 pub struct NimbleDigest {
   digest: Output<Sha3_256>,
 }
@@ -22,7 +22,7 @@ impl NimbleDigest {
     <Sha3_256 as Digest>::output_size()
   }
 
-  pub fn to_bytes(&self) -> Vec<u8> {
+  pub fn to_bytes(self) -> Vec<u8> {
     self.digest.as_slice().to_vec()
   }
 
@@ -40,6 +40,28 @@ impl NimbleDigest {
     NimbleDigest {
       digest: Sha3_256::digest(bytes),
     }
+  }
+}
+
+/// A cryptographic Nonce
+#[derive(Clone, Debug, Copy)]
+pub struct Nonce {
+  data: [u8; 16],
+}
+
+impl Nonce {
+  pub fn new(nonce: &[u8]) -> Result<Nonce, CustomSerdeError> {
+    if nonce.len() != 16 {
+      Err(CustomSerdeError::IncorrectLength)
+    } else {
+      Ok(Nonce {
+        data: nonce.try_into().unwrap(),
+      })
+    }
+  }
+
+  pub fn get(&self) -> Vec<u8> {
+    self.data.to_vec()
   }
 }
 
@@ -195,8 +217,8 @@ impl EndorsedMetaBlock {
 impl MetaBlock {
   pub fn new(prev: &NimbleDigest, block_hash: &NimbleDigest, height: usize) -> Self {
     MetaBlock {
-      prev: prev.clone(),
-      block_hash: block_hash.clone(),
+      prev: *prev,
+      block_hash: *block_hash,
       height,
     }
   }
@@ -207,7 +229,7 @@ impl MetaBlock {
     let height = 0usize;
     MetaBlock {
       prev,
-      block_hash: block_hash.clone(),
+      block_hash: *block_hash,
       height,
     }
   }

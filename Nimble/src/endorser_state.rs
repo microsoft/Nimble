@@ -31,9 +31,7 @@ impl EndorserState {
     if self.ledgers.contains_key(handle) {
       Err(EndorserError::LedgerExists)
     } else {
-      self
-        .ledgers
-        .insert(handle.clone(), (tail_hash.clone(), 0usize));
+      self.ledgers.insert(*handle, (*tail_hash, 0usize));
 
       let signature = self.keypair.sign(tail_hash.to_bytes().as_slice());
       Ok(signature)
@@ -78,7 +76,7 @@ impl EndorserState {
       };
 
       // save the previous tail
-      let prev_tail = tail_hash.clone();
+      let prev_tail = *tail_hash;
 
       let metadata = MetaBlock::new(&prev_tail, block_hash, *height);
       *tail_hash = metadata.hash();

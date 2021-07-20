@@ -4,7 +4,7 @@ mod network;
 mod store;
 
 use crate::ledger::{
-  Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait,
+  Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
 };
 use crate::network::EndorserConnection;
 use crate::store::AppendOnlyStore;
@@ -99,7 +99,7 @@ impl CommitteeStore {
       return Err(CoordinatorError::HandleAlreadyExists);
     }
 
-    self.store.insert(key.clone(), val.to_vec());
+    self.store.insert(*key, val.to_vec());
     Ok(())
   }
 
@@ -238,11 +238,20 @@ impl Call for CoordinatorState {
 
     // Make a request to the endorsers for NewLedger using the handle which returns a signature.
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+
+    let mut responses = Vec::with_capacity(endorser_connections.len());
     for (index, ec) in endorser_connections.iter().enumerate() {
       let mut conn = ec.clone();
-      let res = conn.new_ledger(handle.to_bytes()).await;
-      if let Ok(sig) = res {
-        receipt_bytes.push((index, sig));
+
+      responses.push(tokio::spawn(async move {
+        (index, conn.new_ledger(&handle).await)
+      }));
+    }
+
+    for resp in responses {
+      let res = resp.await;
+      if let Ok((index, Ok(sig))) = res {
+        receipt_bytes.push((index, sig))
       }
     }
 
@@ -284,7 +293,7 @@ impl Call for CoordinatorState {
     let data_block = Block::new(&block);
     let hash_of_block = data_block.hash();
 
-    let _cond_tail_hash_info = {
+    let cond_tail_hash_info = {
       let d = NimbleDigest::from_bytes(&cond_tail_hash);
       if d.is_err() {
         return Err(Status::invalid_argument("Incorrect tail hash provided"));
@@ -323,18 +332,32 @@ impl Call for CoordinatorState {
     let mut receipt = Vec::new();
     let mut height: u64 = 0;
     let mut prev_hash = NimbleDigest::default();
+
+    let mut responses = Vec::with_capacity(connections.len());
+
     for (index, ec) in connections.iter().enumerate() {
       let mut conn = ec.clone();
-      let endorser_append_op = conn
-        .append(
-          handle.to_bytes(),
-          hash_of_block.to_bytes(),
-          cond_tail_hash.clone(),
+
+      responses.push(tokio::spawn(async move {
+        (
+          index,
+          conn
+            .append(
+              handle.to_bytes(),
+              hash_of_block.to_bytes(),
+              cond_tail_hash_info.to_bytes(),
+            )
+            .await,
         )
-        .await;
-      if let Ok((tail_hash_data, height_data, signature)) = endorser_append_op {
-        prev_hash = NimbleDigest::from_bytes(&tail_hash_data).unwrap(); // TODO error checking
+      }));
+    }
+
+    for resp in responses {
+      let endorser_append_op = resp.await;
+      if let Ok((index, Ok((tail_hash_data, height_data, signature)))) = endorser_append_op {
+        prev_hash = NimbleDigest::from_bytes(&tail_hash_data).unwrap();
         height = height_data;
+        // TODO: Error Checking.
         receipt.push((index, signature));
       }
     }
@@ -367,6 +390,14 @@ impl Call for CoordinatorState {
   ) -> Result<Response<ReadLatestResp>, Status> {
     let ReadLatestReq { handle, nonce } = request.into_inner();
 
+    let nonce_data = {
+      let nonce_op = Nonce::new(&nonce);
+      if nonce_op.is_err() {
+        return Err(Status::invalid_argument("Nonce Invalid"));
+      }
+      nonce_op.unwrap().to_owned()
+    };
+
     let handle = {
       let h = NimbleDigest::from_bytes(&handle);
       if h.is_err() {
@@ -394,13 +425,24 @@ impl Call for CoordinatorState {
 
     // 1. Read the information from the Endorsers
     let mut receipt_bytes = Vec::new();
+    let mut responses = Vec::with_capacity(connections.len());
+
     for (index, ec) in connections.iter().enumerate() {
       let mut conn = ec.clone();
-      let signature = conn
-        .read_latest(handle.to_bytes(), nonce.clone())
-        .await
-        .unwrap();
-      receipt_bytes.push((index, signature));
+
+      responses.push(tokio::spawn(async move {
+        (
+          index,
+          conn.read_latest(handle.to_bytes(), &nonce_data).await,
+        )
+      }));
+    }
+
+    for resp in responses {
+      let sig_op = resp.await;
+      if let Ok((index, Ok(sig))) = sig_op {
+        receipt_bytes.push((index, sig));
+      }
     }
 
     // 2. ReadLatest Block data from the Data structure.
