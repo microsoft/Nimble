@@ -1,12 +1,11 @@
-# Nimble: Rollback protection for cloud storage
+# NimbleLedger: An append-only ledger with minimal TCB
 
-## Building `nimble`
+## Building and running tests
 Install [`rustup`](https://rustup.rs/)
 
 Clone the repository:
 ```text
-git clone https://github.com/srinathsetty/Nimble
-cd Nimble/Nimble
+git clone https://github.com/MSRSSP/NimbleLedger
 ```
 
 To run tests:
@@ -14,7 +13,7 @@ To run tests:
 cargo test
 ```
 
-To build `nimble`:
+To build:
 ```text
 cargo build --release
 ```
