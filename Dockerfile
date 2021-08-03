@@ -3,7 +3,7 @@
 # Build container to compile Nimble
 FROM rustlang/rust:nightly as build
 MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
-COPY Nimble /Nimble
+COPY . /Nimble
 WORKDIR /Nimble
 CMD echo "[Nimble] Building Nimble Endorser"
 RUN cargo build --release --bin endorser

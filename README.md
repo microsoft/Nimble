@@ -1,4 +1,25 @@
-# Docker Deployment
+# Nimble: Rollback protection for cloud storage
+
+## Building `nimble`
+Install [`rustup`](https://rustup.rs/)
+
+Clone the repository:
+```text
+git clone https://github.com/srinathsetty/Nimble
+cd Nimble/Nimble
+```
+
+To run tests:
+```text
+cargo test
+```
+
+To build `nimble`:
+```text
+cargo build --release
+```
+
+## Docker Deployment
 
 The `Nimble` project contains three components:
 1. Nimble `endorser`
