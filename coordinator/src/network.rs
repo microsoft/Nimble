@@ -1,19 +1,19 @@
+use crate::Handle;
 use ed25519_dalek::PublicKey;
+use ledger::Nonce;
 use std::error::Error;
 use tonic::transport::{Channel, Endpoint};
+use tonic::Status;
 
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
 }
 
-use crate::ledger::Nonce;
-use crate::Handle;
 use endorser_proto::endorser_call_client::EndorserCallClient;
 use endorser_proto::{
   AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
   ReadLatestReq, ReadLatestResp,
 };
-use tonic::Status;
 
 #[derive(Clone, Debug)]
 pub struct EndorserConnection {

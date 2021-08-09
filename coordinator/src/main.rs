@@ -1,13 +1,14 @@
 mod errors;
-mod ledger;
 mod network;
-mod store;
 
-use crate::ledger::{
+use crate::errors::CoordinatorError;
+use crate::network::EndorserConnection;
+use ed25519_dalek::PublicKey;
+use ledger::store::AppendOnlyStore;
+use ledger::{
   Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
 };
-use crate::network::EndorserConnection;
-use crate::store::AppendOnlyStore;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -17,18 +18,14 @@ pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
-use crate::errors::CoordinatorError;
 use clap::{App, Arg};
 use coordinator_proto::call_server::{Call, CallServer};
 use coordinator_proto::{
   AppendReq, AppendResp, IdSig, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, Receipt,
 };
-use ed25519_dalek::PublicKey;
-use std::collections::HashMap;
 
 type Handle = NimbleDigest;
-
 pub type DataStore = AppendOnlyStore<Handle, Block>;
 pub type MetadataStore = AppendOnlyStore<Handle, EndorsedMetaBlock>;
 
@@ -534,11 +531,11 @@ impl Call for CoordinatorState {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
       .arg(Arg::with_name("host").help("The hostname to run the service on. Default: [::1]")
-          .default_value("[::1]")
-          .index(2),
+               .default_value("[::1]")
+               .index(2),
       )
       .arg(Arg::with_name("port").help("The port number to run the coordinator service on. Default: 8080")
-          .default_value("8080").index(1),)
+               .default_value("8080").index(1),)
       .arg(Arg::with_name("endorser")
           .short("e")
           .long("endorser")

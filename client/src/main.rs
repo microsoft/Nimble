@@ -1,24 +1,20 @@
 mod errors;
-mod ledger;
-mod verification;
 
-use crate::errors::ClientError;
-use crate::verification::{
-  verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
-};
-use rand::Rng;
 use tonic::transport::{Channel, Endpoint};
 
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
+use crate::errors::ClientError;
 use clap::{App, Arg};
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, Receipt,
 };
+use rand::Rng;
+use verifier::{verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest};
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConnection {

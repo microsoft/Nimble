@@ -1,0 +1,11 @@
+[package]
+name = "verifier"
+version = "0.1.0"
+edition = "2018"
+authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-sudheeshs@microsoft.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ledger = { path = "../ledger" }
+ed25519-dalek = "1"

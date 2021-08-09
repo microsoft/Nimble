@@ -1,6 +1,6 @@
 use crate::errors::EndorserError;
-use crate::ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
 use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
+use ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
 use rand::rngs::OsRng;
 use std::collections::HashMap;
 

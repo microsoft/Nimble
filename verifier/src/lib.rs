@@ -1,6 +1,8 @@
+mod errors;
+
 use crate::errors::VerificationError;
-use crate::ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use ed25519_dalek::PublicKey;
+use ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 
 const PUBLIC_KEY_IN_BYTES: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 const NONCE_IN_BYTES: usize = 16;

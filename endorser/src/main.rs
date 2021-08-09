@@ -1,22 +1,22 @@
+use crate::endorser_state::EndorserState;
+use clap::{App, Arg};
+use ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
+use std::sync::{Arc, RwLock};
+use tonic::transport::Server;
+use tonic::{Request, Response, Status};
+
 mod endorser_state;
 mod errors;
-mod ledger;
 
-use crate::endorser_state::EndorserState;
-use crate::ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
-use clap::{App, Arg};
+pub mod endorser_proto {
+  tonic::include_proto!("endorser_proto");
+}
+
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
   AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
   ReadLatestReq, ReadLatestResp,
 };
-use std::sync::{Arc, RwLock};
-use tonic::transport::Server;
-use tonic::{Request, Response, Status};
-
-pub mod endorser_proto {
-  tonic::include_proto!("endorser_proto");
-}
 
 pub struct EndorserServiceState {
   state: Arc<RwLock<EndorserState>>,

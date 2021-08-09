@@ -1,9 +1,9 @@
-#![allow(dead_code)]
+mod errors;
+pub mod store;
+
 use crate::errors::VerificationError;
-use core::fmt::Debug;
 use digest::Output;
-use ed25519_dalek::Verifier;
-use ed25519_dalek::{PublicKey, Signature};
+use ed25519_dalek::{PublicKey, Signature, Verifier};
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
 use itertools::concat;
