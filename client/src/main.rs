@@ -14,7 +14,10 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp, Receipt,
 };
 use rand::Rng;
-use verifier::{verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest};
+use verifier::{
+  get_conditional_tail_hash, verify_append, verify_new_ledger, verify_read_by_index,
+  verify_read_latest,
+};
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConnection {
@@ -202,6 +205,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     is_latest_valid.is_ok()
   );
   assert!(is_latest_valid.is_ok());
+  // Check the tail hash generation from the read_latest response
+  let conditional_tail_hash_expected =
+    get_conditional_tail_hash(&block, &tail_hash, height as usize);
+  assert!(conditional_tail_hash_expected.is_ok());
+  assert_eq!(
+    conditional_tail_hash_expected.unwrap(),
+    is_latest_valid.unwrap()
+  );
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
@@ -223,6 +234,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = verify_read_by_index(&vk, &block, &tail_hash, 2usize, &reformat_receipt(&receipt));
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
+
+  // Step 6: Append without a condition
+  let message = "no_condition_data_block_append".as_bytes();
+  let req = tonic::Request::new(AppendReq {
+    handle: handle.clone(),
+    block: message.to_vec(),
+    cond_tail_hash: [0u8; 32].to_vec(),
+  });
+
+  let AppendResp {
+    tail_hash,
+    height,
+    receipt,
+  } = coordinator_connection
+    .client
+    .append(req)
+    .await?
+    .into_inner();
+
+  let res = verify_append(
+    &vk,
+    &message.to_vec(),
+    &tail_hash,
+    height as usize,
+    &reformat_receipt(&receipt),
+  );
+  println!("Append verification no condition: {:?}", res.is_ok());
+  assert!(res.is_ok());
+
+  // Step 7: Read Latest with the Nonce generated and check for new data appended without condition
+  let nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let latest_state_query = tonic::Request::new(ReadLatestReq {
+    handle: handle.clone(),
+    nonce: nonce.to_vec(),
+  });
+
+  let ReadLatestResp {
+    block,
+    tail_hash,
+    height,
+    receipt,
+  } = coordinator_connection
+    .client
+    .read_latest(latest_state_query)
+    .await?
+    .into_inner();
+  assert_eq!(block, message);
+
+  let is_latest_valid = verify_read_latest(
+    &vk,
+    &block,
+    &tail_hash,
+    height as usize,
+    &nonce.to_vec(),
+    &reformat_receipt(&receipt),
+  );
+  println!(
+    "Verifying ReadLatest Response : {:?}",
+    is_latest_valid.is_ok()
+  );
+  assert!(is_latest_valid.is_ok());
 
   Ok(())
 }

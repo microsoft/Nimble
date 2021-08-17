@@ -1,4 +1,4 @@
-name: Build and Test Nimble
+name: Build and Test NimbleLedger
 
 on:
   push:

@@ -70,6 +70,23 @@ pub fn verify_new_ledger(
   }
 }
 
+pub fn get_conditional_tail_hash(
+  block_bytes: &[u8],
+  tail_hash_bytes: &[u8],
+  height: usize,
+) -> Result<Vec<u8>, VerificationError> {
+  let block = Block::new(block_bytes);
+  let tail_hash = {
+    let res = NimbleDigest::from_bytes(tail_hash_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
+  let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
+  Ok(metablock.hash().to_bytes())
+}
+
 pub fn verify_read_latest(
   vk: &VerificationKey,
   block_bytes: &[u8],

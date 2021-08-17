@@ -60,10 +60,12 @@ impl EndorserState {
     block_hash: &NimbleDigest,
     conditional_tail_hash: &NimbleDigest,
   ) -> Result<(Vec<u8>, usize, Signature), EndorserError> {
+    let default_cond_tail_hash = NimbleDigest::from_bytes(&[0u8; 32]).unwrap();
+
     if self.ledgers.contains_key(handle) {
       let (tail_hash, height) = self.ledgers.get_mut(handle).unwrap();
 
-      if tail_hash != conditional_tail_hash {
+      if *conditional_tail_hash != default_cond_tail_hash && tail_hash != conditional_tail_hash {
         return Err(EndorserError::TailDoesNotMatch);
       }
 
