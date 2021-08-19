@@ -132,7 +132,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Read Latest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let mut last_known_tail = res.unwrap();
+  let (mut last_known_tail, block_data_verified) = res.unwrap();
+  assert_eq!(block_data_verified, vec![]); // This is empty since the block is genesis.
 
   // Step 4: Append
   let m1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
@@ -205,14 +206,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     is_latest_valid.is_ok()
   );
   assert!(is_latest_valid.is_ok());
+  let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
   // Check the tail hash generation from the read_latest response
   let conditional_tail_hash_expected =
     get_conditional_tail_hash(&block, &tail_hash, height as usize);
   assert!(conditional_tail_hash_expected.is_ok());
-  assert_eq!(
-    conditional_tail_hash_expected.unwrap(),
-    is_latest_valid.unwrap()
-  );
+  assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
+  assert_ne!(latest_block_verified, vec![]); // This should not be empty since the block is returned
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {

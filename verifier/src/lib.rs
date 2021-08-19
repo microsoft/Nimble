@@ -1,7 +1,7 @@
 mod errors;
 
 use crate::errors::VerificationError;
-use ed25519_dalek::PublicKey;
+use ed25519_dalek::{PublicKey, SignatureError};
 use ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 
 const PUBLIC_KEY_IN_BYTES: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
@@ -13,15 +13,23 @@ pub struct VerificationKey {
 }
 
 impl VerificationKey {
-  fn from_bytes(pk_vec_bytes: &[u8]) -> VerificationKey {
+  fn from_bytes(pk_vec_bytes: &[u8]) -> Result<VerificationKey, VerificationError> {
     // parse the public keys into a vector and the code panics if a public key is invalid
-    let pk_vec = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
-      .map(|i| {
-        PublicKey::from_bytes(&pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES])
-          .unwrap()
-      })
-      .collect::<Vec<PublicKey>>();
-    VerificationKey { pk_vec }
+    let pk_vec = {
+      let res = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
+        .map(|i| {
+          PublicKey::from_bytes(
+            &pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES],
+          )
+        })
+        .collect::<Result<Vec<PublicKey>, SignatureError>>();
+      if res.is_err() {
+        return Err(VerificationError::InvalidGenesisBlock);
+      }
+
+      res.unwrap()
+    };
+    Ok(VerificationKey { pk_vec })
   }
 
   pub fn get_public_keys(&self) -> &Vec<PublicKey> {
@@ -37,16 +45,18 @@ pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
-  // check there is at least one public key for an endorser
-  if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES)
-    || (block_bytes.len() - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
-  {
-    return Err(VerificationError::InvalidGenesisBlock);
-  }
-
-  // parse the genesis block and extract the endorser's public key to form a verification key
-  // the first `NONCE_IN_BYTES` bytes are the nonce, so the rest are a set of public keys
-  let vk = VerificationKey::from_bytes(&block_bytes[NONCE_IN_BYTES..]);
+  let vk = {
+    // check there is at least one public key for an endorser
+    if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES)
+      || (block_bytes.len() - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
+    {
+      Err(VerificationError::InvalidGenesisBlock)
+    } else {
+      // parse the genesis block and extract the endorser's public key to form a verification key
+      // the first `NONCE_IN_BYTES` bytes are the nonce, so the rest are a set of public keys
+      VerificationKey::from_bytes(&block_bytes[NONCE_IN_BYTES..])
+    }
+  }?;
 
   // compute a handle as hash of the block
   let handle = {
@@ -94,7 +104,7 @@ pub fn verify_read_latest(
   height: usize,
   nonce_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
-) -> Result<Vec<u8>, VerificationError> {
+) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
   let block = Block::new(block_bytes);
 
   // construct a tail hash from `tail_hash_bytes`
@@ -113,11 +123,16 @@ pub fn verify_read_latest(
 
   // verify the receipt against the nonced tail hash
   let res = receipt.verify(&nonced_tail_hash_prime, vk.get_public_keys());
+
   if res.is_err() {
-    Err(VerificationError::InvalidReceipt)
-  } else {
-    Ok(tail_hash_prime.to_bytes())
+    return Err(VerificationError::InvalidReceipt);
   }
+  let filtered_block_data = if height == 0 {
+    vec![]
+  } else {
+    block_bytes.to_vec()
+  };
+  Ok((tail_hash_prime.to_bytes(), filtered_block_data))
 }
 
 pub fn verify_read_by_index(
