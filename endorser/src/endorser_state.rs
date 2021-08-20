@@ -23,15 +23,12 @@ impl EndorserState {
     }
   }
 
-  pub fn new_ledger(
-    &mut self,
-    handle: &NimbleDigest,
-    tail_hash: &NimbleDigest,
-  ) -> Result<Signature, EndorserError> {
+  pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Signature, EndorserError> {
     if self.ledgers.contains_key(handle) {
       Err(EndorserError::LedgerExists)
     } else {
-      self.ledgers.insert(*handle, (*tail_hash, 0usize));
+      let tail_hash = MetaBlock::genesis(handle).hash();
+      self.ledgers.insert(*handle, (tail_hash, 0usize));
 
       let signature = self.keypair.sign(tail_hash.to_bytes().as_slice());
       Ok(signature)
@@ -123,18 +120,11 @@ mod tests {
       }
       n.unwrap()
     };
-    let genesis_tail_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
-      let n = NimbleDigest::from_bytes(&t);
-      if n.is_err() {
-        panic!("Should not have occured");
-      }
-      n.unwrap()
-    };
-    let res = endorser_state.new_ledger(&coordinator_handle, &genesis_tail_hash);
+    let res = endorser_state.new_ledger(&coordinator_handle);
     assert!(res.is_ok());
 
     let signature = res.unwrap();
+    let genesis_tail_hash = MetaBlock::genesis(&coordinator_handle).hash();
     let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash.to_bytes());
     assert_eq!(signature, signature_expected);
 
@@ -155,10 +145,7 @@ mod tests {
     // The coordinator sends the hashed contents of the block to the
     let coordinator_handle_data = rand::thread_rng().gen::<[u8; 32]>();
     let coordinator_handle = NimbleDigest::from_bytes(&coordinator_handle_data).unwrap();
-    let genesis_tail_hash_data = rand::thread_rng().gen::<[u8; 32]>();
-    let genesis_tail_hash = NimbleDigest::from_bytes(&genesis_tail_hash_data).unwrap();
-    let create_ledger_endorser_response =
-      endorser_state.new_ledger(&coordinator_handle, &genesis_tail_hash);
+    let create_ledger_endorser_response = endorser_state.new_ledger(&coordinator_handle);
 
     assert!(create_ledger_endorser_response.is_ok());
     let _signature = create_ledger_endorser_response.unwrap();

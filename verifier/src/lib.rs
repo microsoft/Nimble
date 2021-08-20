@@ -127,6 +127,7 @@ pub fn verify_read_latest(
   if res.is_err() {
     return Err(VerificationError::InvalidReceipt);
   }
+
   let filtered_block_data = if height == 0 {
     vec![]
   } else {

@@ -1,6 +1,6 @@
 use crate::endorser_state::EndorserState;
 use clap::{App, Arg};
-use ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
+use ledger::NimbleDigest;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -67,16 +67,13 @@ impl EndorserCall for EndorserServiceState {
       return Err(Status::invalid_argument("Handle size is invalid"));
     }
     let handle = handle_instance.unwrap();
-    let metadata = MetaBlock::genesis(&handle);
-    let tail_hash = metadata.hash();
-
     let mut endorser = self
       .state
       .write()
       .expect("Unable to get a write lock on EndorserState");
 
     let signature = endorser
-      .new_ledger(&handle, &tail_hash)
+      .new_ledger(&handle)
       .expect("Unable to get the signature on genesis handle");
 
     let reply = NewLedgerResp {
