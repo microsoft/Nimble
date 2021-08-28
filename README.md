@@ -25,6 +25,10 @@ cargo build --release
 ## Docker Deployment
 
 > Note: The project requires a minimum docker-compose version v1.29.2. Please follow instructions [here](https://docs.docker.com/compose/install/#install-compose) to install/update `docker` and `docker-compose`.
+> 
+> :warning: The default installation of `docker` (`docker-ce`) needs `sudo` permissions to execute the commands. To avoid
+> using elevated permissions, please follow the post-install steps to manage docker as a non-root user [here](https://docs.docker.com/engine/install/linux-postinstall/).
+> This allows the `docker` commands listed in this file to be executed without `sudo`. Please use `sudo` otherwise with the commands.
 
 The `Nimble` project contains three components:
 
@@ -35,7 +39,7 @@ The `Nimble` project contains three components:
 The image containing the three binaries above can be constructed by running the following command:
 
 ```shell
-$ sudo docker build .
+$ docker build .
 ```
 
 We use `docker-compose` to set up a network containing 5 endorsers, a client, and a coordinator.
@@ -51,7 +55,7 @@ by `cargo run --bin client` after starting a shell
 into the `client` docker instance.
 
 ```shell
-$ sudo docker-compose up
+$ docker-compose up
 ```
 
 The `docker-compose up` command will automatically `build` and create the necessary docker images and run the services.
@@ -62,13 +66,13 @@ The services can be selectively spun up by passing the service name to the
 `docker-compose up/run` command. eg.
 
 ```shell
-$ sudo docker-compose run client
+$ docker-compose run client
 ```
 
 To start a shell in the `client` docker instance, first find the name of the container by running
 
 ```shell
-$ sudo docker ps
+$ docker ps
 
 CONTAINER ID   IMAGE          COMMAND                  CREATED             STATUS              PORTS     NAMES
 f25f3d14abfa   5b1278c85080   "/bin/bash"              About an hour ago   Up About a minute             client
