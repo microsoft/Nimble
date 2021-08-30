@@ -28,4 +28,6 @@ pub enum VerificationError {
   IndexOutofBounds,
   /// returned if the identities are not unique
   DuplicateIds,
+  /// returned when the nonce is of an incorrect length
+  InvalidNonceSize,
 }

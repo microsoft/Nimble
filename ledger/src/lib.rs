@@ -173,18 +173,22 @@ impl Block {
     pk_vec: &[PublicKey],
     service_nonce_bytes: &[u8],
     client_nonce_bytes: &[u8],
-  ) -> Self {
+  ) -> Result<Self, VerificationError> {
+    let (nonce, client_nonce) = {
+      let nonce_res = Nonce::new(service_nonce_bytes);
+      let client_res = Nonce::new(client_nonce_bytes);
+      if nonce_res.is_err() || client_res.is_err() {
+        return Err(VerificationError::InvalidNonceSize);
+      }
+      (nonce_res.unwrap(), client_res.unwrap())
+    };
     let pk_vec_bytes = (0..pk_vec.len())
       .map(|i| pk_vec[i].to_bytes().to_vec())
       .collect::<Vec<Vec<u8>>>();
 
-    Block {
-      block: concat(vec![
-        service_nonce_bytes.to_vec(),
-        client_nonce_bytes.to_vec(),
-        concat(pk_vec_bytes),
-      ]),
-    }
+    Ok(Block {
+      block: concat(vec![nonce.get(), client_nonce.get(), concat(pk_vec_bytes)]),
+    })
   }
 }
 

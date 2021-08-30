@@ -210,7 +210,13 @@ impl Call for CoordinatorState {
     };
 
     // Package the contents into a Block
-    let genesis_block = Block::genesis(&chosen_public_keys, &service_nonce, &client_nonce);
+    let genesis_block = {
+      let genesis_op = Block::genesis(&chosen_public_keys, &service_nonce, &client_nonce);
+      if genesis_op.is_err() {
+        return Err(Status::aborted("Failed to create a genesis block"));
+      }
+      genesis_op.unwrap()
+    };
 
     // Hash the contents of the block to use as the handle.
     let handle = genesis_block.hash();
