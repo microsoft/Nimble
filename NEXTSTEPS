@@ -23,17 +23,3 @@ NimbleLedger
     equivalent to serial execution)
   * Handle coordinator failures
   * Handle endorser failures (e.g., an endorser is lagging behind)
-
-NimbleIndex for HDFS
----------------------
-1. A paper design of the APIs and responses, and how to verify those responses
-  * lookup by a secondary index (i.e., a field in the entry)?
-
-2. A prototype with the index in an in-memory BTreeHashMap
-  * A paper design for details of how this is done
-
-3. Move the index an existing storage service (e.g., CosmosDB)? 
-
-WebHDFS++
----------
-* What's the base APIs and what are the extensions?
