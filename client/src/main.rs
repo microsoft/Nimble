@@ -70,14 +70,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   // Step 1: NewLedger Request
-  let request = tonic::Request::new(NewLedgerReq {});
+  let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let request = tonic::Request::new(NewLedgerReq {
+    nonce: client_nonce.to_vec(),
+  });
   let NewLedgerResp { block, receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&block, &reformat_receipt(&receipt));
+  let res = verify_new_ledger(&block, &reformat_receipt(&receipt), &client_nonce);
   println!("NewLedger: {:?}", res.is_ok());
   assert!(res.is_ok());
 

@@ -169,13 +169,21 @@ impl Block {
     }
   }
 
-  pub fn genesis(pk_vec: &[PublicKey], nonce_bytes: &[u8]) -> Self {
+  pub fn genesis(
+    pk_vec: &[PublicKey],
+    service_nonce_bytes: &[u8],
+    client_nonce_bytes: &[u8],
+  ) -> Self {
     let pk_vec_bytes = (0..pk_vec.len())
       .map(|i| pk_vec[i].to_bytes().to_vec())
       .collect::<Vec<Vec<u8>>>();
 
     Block {
-      block: concat(vec![nonce_bytes.to_vec(), concat(pk_vec_bytes)]),
+      block: concat(vec![
+        service_nonce_bytes.to_vec(),
+        client_nonce_bytes.to_vec(),
+        concat(pk_vec_bytes),
+      ]),
     }
   }
 }

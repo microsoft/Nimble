@@ -19,6 +19,7 @@ message Receipt {
 }
 
 message NewLedgerReq {
+  bytes nonce = 1;  // This is a client chosen nonce.
 }
 
 message NewLedgerResp {

@@ -182,10 +182,13 @@ fn reformat_receipt(receipt: &[(usize, Vec<u8>)]) -> Receipt {
 impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
-    _req: Request<NewLedgerReq>,
+    req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
-    // Generate a Unique Value
-    let nonce = Uuid::new_v4().as_bytes().to_vec();
+    let NewLedgerReq {
+      nonce: client_nonce,
+    } = req.into_inner();
+    // Generate a Unique Value, this is the coordinator chosen nonce.
+    let service_nonce = Uuid::new_v4().as_bytes().to_vec();
 
     // Retrieve all PublicKeys for endorsers
     // Ideally, the coordinator randomly chooses Quorum from the set of active endorsers
@@ -207,7 +210,7 @@ impl Call for CoordinatorState {
     };
 
     // Package the contents into a Block
-    let genesis_block = Block::genesis(&chosen_public_keys, &nonce);
+    let genesis_block = Block::genesis(&chosen_public_keys, &service_nonce, &client_nonce);
 
     // Hash the contents of the block to use as the handle.
     let handle = genesis_block.hash();

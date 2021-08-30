@@ -159,8 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("port")
-        .help("The port number to run the Service On. Default: 9000")
-        .default_value("9000")
+        .help("The port number to run the Service On. Default: 9090")
+        .default_value("9090")
         .index(1),
     );
   let cli_matches = config.get_matches();

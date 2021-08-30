@@ -44,17 +44,23 @@ impl VerificationKey {
 pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
+  nonce: &[u8],
 ) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
   let vk = {
     // check there is at least one public key for an endorser
-    if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES)
-      || (block_bytes.len() - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
+    if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES + NONCE_IN_BYTES)
+      || (block_bytes.len() - NONCE_IN_BYTES - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
     {
       Err(VerificationError::InvalidGenesisBlock)
     } else {
       // parse the genesis block and extract the endorser's public key to form a verification key
-      // the first `NONCE_IN_BYTES` bytes are the nonce, so the rest are a set of public keys
-      VerificationKey::from_bytes(&block_bytes[NONCE_IN_BYTES..])
+      // the first `NONCE_IN_BYTES` bytes are the service chosen nonce, followed by the client nonce,
+      // so the rest are a set of public keys.
+      let client_nonce = &block_bytes[NONCE_IN_BYTES..(NONCE_IN_BYTES + NONCE_IN_BYTES)];
+      if client_nonce != nonce {
+        return Err(VerificationError::InvalidGenesisBlock);
+      }
+      VerificationKey::from_bytes(&block_bytes[(NONCE_IN_BYTES + NONCE_IN_BYTES)..])
     }
   }?;
 
