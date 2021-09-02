@@ -86,7 +86,7 @@ pub fn verify_new_ledger(
   }
 }
 
-pub fn get_conditional_tail_hash(
+pub fn get_tail_hash(
   block_bytes: &[u8],
   tail_hash_bytes: &[u8],
   height: usize,
