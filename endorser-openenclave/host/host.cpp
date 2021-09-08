@@ -4,7 +4,24 @@
 #include <openenclave/host.h>
 #include "endorser_u.h"
 
+#include <grpcpp/grpcpp.h>
+#include "endorser.grpc.pb.h"
+
 using namespace std;
+using grpc::Server;
+using grpc::ServerContext;
+using grpc::Status;
+using grpc::ServerBuilder;
+
+using endorser_proto::EndorserCall;
+using endorser_proto::GetPublicKeyReq;
+using endorser_proto::GetPublicKeyResp;
+using endorser_proto::NewLedgerReq;
+using endorser_proto::NewLedgerResp;
+using endorser_proto::ReadLatestReq;
+using endorser_proto::ReadLatestResp;
+using endorser_proto::AppendReq;
+using endorser_proto::AppendResp;
 
 oe_enclave_t *enclave = NULL;
 
@@ -20,6 +37,40 @@ bool check_simulate_opt(int *argc, const char *argv[]) {
   return false;
 }
 
+class EndorserCallServiceImpl final: public EndorserCall::Service {
+    Status GetPublicKey(ServerContext* context, const GetPublicKeyReq* request, GetPublicKeyResp* reply) override {
+        char pk_bytes[] = "this_is_a_public_key";
+        reply->set_pk(pk_bytes);
+        return Status::OK;
+    }
+
+    Status NewLedger(ServerContext *context, const NewLedgerReq* request, NewLedgerResp* reply) override {
+        char sig_bytes[] = "this_is_a_signature_byte_response";
+        reply->set_signature(sig_bytes);
+        return Status::OK;
+    }
+
+    Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
+        char tail_hash[] = "this_is_a_tail_hash_response";
+        uint64_t height = std::numeric_limits<uint64_t>::max();
+        char sig_bytes[] = "this_is_a_signature_byte_response";
+        reply->set_tail_hash(tail_hash);
+        reply->set_height(height);
+        reply->set_signature(sig_bytes);
+        return Status::OK;
+    }
+
+    Status Append(ServerContext *context, const AppendReq* request, AppendResp* reply) override {
+        char tail_hash[] = "this_is_a_tail_hash_response";
+        uint64_t height = std::numeric_limits<uint64_t>::max();
+        char sig_bytes[] = "this_is_a_signature_byte_response";
+        reply->set_tail_hash(tail_hash);
+        reply->set_height(height);
+        reply->set_signature(sig_bytes);
+        return Status::OK;
+    }
+};
+
 void print_hex(unsigned char* d, unsigned int len) {
   printf("0x");
   for (int i = 0; i < len; i++) {
@@ -30,7 +81,7 @@ void print_hex(unsigned char* d, unsigned int len) {
 }
 
 int main(int argc, const char *argv[]) {
-    oe_result_t result;
+  oe_result_t result;
   int ret = 0;
   uint32_t flags = OE_ENCLAVE_FLAG_DEBUG;
 
@@ -121,7 +172,17 @@ int main(int argc, const char *argv[]) {
   }
   cout << "Host: Latest tail hash is: ";
   print_hex(tail.v, HASH_VALUE_SIZE_IN_BYTES);
-
+  {
+      std::cout << "Attempting to run Endorser at Address 0.0.0.0:9096" << std::endl;
+      std::string server_address("0.0.0.0:9096");
+      EndorserCallServiceImpl service;
+      ServerBuilder builder;
+      builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
+      builder.RegisterService(&service);
+      std::unique_ptr<Server> server(builder.BuildAndStart());
+      std::cout << "Server listening on " << server_address << std::endl;
+      server->Wait();
+  }
   return 0;
 
 exit:
@@ -129,5 +190,5 @@ exit:
   cout << "Host: Endorser completed successfully." << endl;
   oe_terminate_enclave(enclave);
   return ret;
-  
+
 }
