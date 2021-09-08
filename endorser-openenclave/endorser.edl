@@ -5,11 +5,14 @@ enclave {
     include "../shared.h"
 
     trusted {
-        public int initialize([in] ledger_identity_t* ledger_identity, [out] endorser_identity_t* endorser_identity);
-        public int endorse([in] block_t* block, [out] endorsement_t* endorsement);
-        public int read([in] block_t* nonce, [out] endorsement_t* endorsement);
-        public void close_endorser();
-    };
+        public int setup([out] endorser_id_t* endorser_id);
+        public int new_ledger([in] handle_t* handle, [out] signature_t* signature);
+        public int read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] digest_t* tail, [out] signature_t* signature);
+        public int append([in] handle_t* handle, [in] digest_t* block_hash, [out] signature_t* signature);
+        public int get_public_key([out] endorser_id_t* endorser_id);
+        public void terminate();
+        public int verify_append([in] endorser_id_t* endorser_id, [in] handle_t* handle, [in] digest_t* block_hash, [out] signature_t* signature);
+};
 
     //untrusted {
     //    no untrusted functions in the endorser 

@@ -1,7 +1,7 @@
 #include "../shared.h"
 #include <iostream>
-#include <openenclave/host.h>
 
+#include <openenclave/host.h>
 #include "endorser_u.h"
 
 using namespace std;
@@ -20,8 +20,17 @@ bool check_simulate_opt(int *argc, const char *argv[]) {
   return false;
 }
 
+void print_hex(unsigned char* d, unsigned int len) {
+  printf("0x");
+  for (int i = 0; i < len; i++) {
+    printf("%c%c", "0123456789ABCDEF"[d[i] / 16],
+           "0123456789ABCDEF"[d[i] % 16]);
+  }
+  cout << endl;
+}
+
 int main(int argc, const char *argv[]) {
-  oe_result_t result;
+    oe_result_t result;
   int ret = 0;
   uint32_t flags = OE_ENCLAVE_FLAG_DEBUG;
 
@@ -30,7 +39,7 @@ int main(int argc, const char *argv[]) {
     flags |= OE_ENCLAVE_FLAG_SIMULATE;
   }
 
-  cout << "Host: enter main" << endl;
+  cout << "Host: Entering main" << endl;
   if (argc != 2) {
     cerr << "Usage: " << argv[0] << " enclave_image_path [ --simulate  ]"
          << endl;
@@ -44,16 +53,12 @@ int main(int argc, const char *argv[]) {
     cerr << "oe_create_endorser_enclave() failed with " << argv[0] << " "
          << result << endl;
     ret = 1;
-    goto exit;
   }
 
-  // set the name of the ledger
-  ledger_identity_t ledger_identity;
-  memset(ledger_identity.name, 0x25, sizeof(ledger_identity.name));
-
-  endorser_identity_t endorser_identity;
-  result = initialize(enclave, &ret, &ledger_identity, &endorser_identity);
-
+  // set the endorser 
+  endorser_id_t endorser_id;
+  result = setup(enclave, &ret, &endorser_id);
+ 
   if (result != OE_OK) {
     ret = 1;
     goto exit;
@@ -63,34 +68,66 @@ int main(int argc, const char *argv[]) {
     goto exit;
   }
 
-  cout << "Host: Identity of the endorser is: 0x";
-  for (int i = 0; i < PUBLIC_KEY_SIZE_IN_BYTES; i++) {
-    printf("%c%c", "0123456789ABCDEF"[endorser_identity.public_key[i] / 16],
-           "0123456789ABCDEF"[endorser_identity.public_key[i] % 16]);
-  }
+  cout << "Host: PK of the endorser is: 0x";
+  print_hex(endorser_id.pk, PUBLIC_KEY_SIZE_IN_BYTES);
   cout << endl;
 
-  cout << "Host: Asking the endorser to endorse a block" << endl;
+  // call new_ledger with a handle
+  cout << "Host: Asking the endorser to create a new ledger" << endl;
+  handle_t handle;
+  memset(handle.v, 0x21, HASH_VALUE_SIZE_IN_BYTES);
+  signature_t signature;
+  result = new_ledger(enclave, &ret, &handle, &signature);
+  if (result != OE_OK) {
+    ret = 1;
+    goto exit;
+  }
+  if (ret != 0) {
+    cerr << "Host: new_ledger failed with " << ret << endl;
+    goto exit;
+  }
 
-  // set an arbitrary message in the block
-  block_t block;
-  memset(block.block, 0x42, sizeof(block.block));
+  cout << "Host: Handle is: ";
+  print_hex(handle.v, HASH_VALUE_SIZE_IN_BYTES);
 
-  endorsement_t endorsement;
-  result = endorse(enclave, &ret, &block, &endorsement);
+  // call append with an arbitrary message in the block_hash
+  digest_t block_hash;
+  memset(block_hash.v, 0x42, sizeof(block_hash.v));
+
+  result = append(enclave, &ret, &handle, &block_hash, &signature);
 
   if (result != OE_OK) {
     ret = 1;
     goto exit;
   }
   if (ret != 0) {
-    cerr << "Host: endorse failed with " << ret << endl;
+    cerr << "Host: append failed with " << ret << endl;
     goto exit;
   }
+  
+  // call read_latest with a nonce
+  nonce_t nonce;
+  memset(nonce.v, 0x84, sizeof(nonce.v));
+  digest_t tail;
+
+  result = read_latest(enclave, &ret, &handle, &nonce, &tail, &signature);
+  if (result != OE_OK) {
+    ret = 1;
+    goto exit;
+  }
+  if (ret != 0) {
+    cerr << "Host: read_latest failed with " << ret << endl;
+    goto exit;
+  }
+  cout << "Host: Latest tail hash is: ";
+  print_hex(tail.v, HASH_VALUE_SIZE_IN_BYTES);
+
+  return 0;
 
 exit:
   cout << "Host: terminate the enclave" << endl;
   cout << "Host: Endorser completed successfully." << endl;
   oe_terminate_enclave(enclave);
   return ret;
+  
 }

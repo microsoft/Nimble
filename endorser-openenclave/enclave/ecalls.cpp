@@ -5,24 +5,28 @@
 
 static ecall_dispatcher dispatcher;
 
-int initialize(ledger_identity_t *ledger_identity,
-               endorser_identity_t *endorser_identity) {
-  return dispatcher.initialize(ledger_identity, endorser_identity);
+int setup(endorser_id_t* endorser_id) {
+  return dispatcher.setup(endorser_id);
 }
 
-int endorse(block_t *block, endorsement_t *endorsement) {
-  return dispatcher.endorse(block, endorsement);
+int new_ledger(handle_t* handle, signature_t* signature) {
+  return dispatcher.new_ledger(handle, signature);
 }
 
-int read(nonce_t *nonce, endorsement_t *endorsement) {
-  return dispatcher.read(nonce, endorsement);
+int read_latest(handle_t* handle, nonce_t* nonce, digest_t* tail, signature_t* signature) {
+  return dispatcher.read_latest(handle, nonce, tail, signature);
 }
 
-void close_endorser() { return dispatcher.close(); }
+int append(handle_t* handle, digest_t* block_hash, signature_t* signature) {
+  return dispatcher.append(handle, block_hash, signature);
+}
 
-int verify_endorse(ledger_identity_t *ledger_identity,
-                   endorser_identity_t *endorser_identity, block_t *block,
-                   endorsement_t *endorsement) {
-  return dispatcher.verify_endorse(ledger_identity, endorser_identity, block,
-                                   endorsement);
+int get_public_key(endorser_id_t* endorser_id) {
+  return dispatcher.get_public_key(endorser_id);
+}
+
+void terminate() { return dispatcher.terminate(); }
+
+int verify_append(endorser_id_t *endorser_id, handle_t *handle, digest_t *block_hash, signature_t *signature) {
+  return dispatcher.verify_append(endorser_id, handle, block_hash, signature);
 }

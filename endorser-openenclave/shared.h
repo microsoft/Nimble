@@ -6,28 +6,33 @@
 #define SIGNATURE_SIZE_IN_BYTES 72
 #define NONCE_SIZE_IN_BYTES 16
 
-// ledger_identity_t contains the identity of a ledger
-typedef struct _ledger_identity {
-  unsigned char name[HASH_VALUE_SIZE_IN_BYTES];
-} ledger_identity_t;
+// endorser_id_t contains the name of an endorser
+typedef struct _endorser_id {
+  unsigned char pk[PUBLIC_KEY_SIZE_IN_BYTES];
+} endorser_id_t;
 
-// endorser_identity_t contains the identity of an endorser
-typedef struct _endorser_identity {
-  unsigned char public_key[PUBLIC_KEY_SIZE_IN_BYTES];
-} endorser_identity_t;
+// handle_t contains the name of a ledger
+typedef struct _handle {
+  unsigned char v[HASH_VALUE_SIZE_IN_BYTES];
+} handle_t;
 
-typedef struct _block {
-  unsigned char block[HASH_VALUE_SIZE_IN_BYTES];
-} block_t;
+typedef struct _digest {
+  unsigned char v[HASH_VALUE_SIZE_IN_BYTES];
+} digest_t;
+
+typedef struct _meta_block {
+  unsigned char prev[HASH_VALUE_SIZE_IN_BYTES];
+  unsigned char cur[HASH_VALUE_SIZE_IN_BYTES];
+  unsigned int height;
+} meta_block_t;
 
 typedef struct _nonce {
-  unsigned char nonce[NONCE_SIZE_IN_BYTES];
+  unsigned char v[NONCE_SIZE_IN_BYTES];
 } nonce_t;
 
-typedef struct _endorsement {
-  unsigned char hash[HASH_VALUE_SIZE_IN_BYTES];
-  unsigned char sig[SIGNATURE_SIZE_IN_BYTES];
-  unsigned int sig_len;
-} endorsement_t;
+typedef struct _signature {
+  unsigned char v[SIGNATURE_SIZE_IN_BYTES];
+  unsigned int v_len;
+} signature_t;
 
 #endif /* _SHARED_H */

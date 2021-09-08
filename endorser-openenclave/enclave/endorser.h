@@ -8,24 +8,37 @@
 #include <openssl/objects.h>
 #include <openssl/sha.h>
 #include <string>
+#include <map>
+#include <tuple>
 
 using namespace std;
 
+#ifndef _OPLT
+#define _OPLT
+inline bool operator<(const handle_t& l, const handle_t& r) {
+  bool s = true;
+  for (int i=0; i< HASH_VALUE_SIZE_IN_BYTES; i++) { 
+    s = s & (l.v[i] < r.v[i]);
+  }
+}
+#endif
+
 class ecall_dispatcher {
 private:
-  // ECDSA key
-  EC_KEY *eckey;
+  // ECDSA key of the endorser
+  EC_KEY* eckey;
 
-  // tail hash
-  unsigned char hash[HASH_VALUE_SIZE_IN_BYTES];
+  // tail hash for each ledger
+  map<handle_t, tuple<digest_t, unsigned int>> endorser_state;
 
 public:
-  int initialize(ledger_identity_t *ledger_identity,
-                 endorser_identity_t *endorser_identity);
-  int endorse(block_t *block, endorsement_t *endorsement);
-  int read(nonce_t *block, endorsement_t *endorsement);
-  void close();
-  int verify_endorse(ledger_identity_t *ledger_identity,
-                     endorser_identity_t *endorser_identity, block_t *block,
-                     endorsement_t *endorsement);
+  int setup(endorser_id_t* endorser_id);
+  int new_ledger(handle_t* handle, signature_t* signature);
+  int read_latest(handle_t* handle, nonce_t* nonce, digest_t* tail, signature_t* signature);
+  int append(handle_t *handle, digest_t* block_hash, signature_t* signature);
+  int get_public_key(endorser_id_t* endorser_id);
+  void terminate();
+
+  // for testing purposes; TODO: delete
+  int verify_append(endorser_id_t* endorser_id, handle_t* handle, digest_t* block_hash, signature_t* signature);
 };
