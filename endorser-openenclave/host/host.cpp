@@ -123,6 +123,16 @@ int main(int argc, const char *argv[]) {
   print_hex(endorser_id.pk, PUBLIC_KEY_SIZE_IN_BYTES);
   cout << endl;
 
+  // Call get_public_key
+  endorser_id_t get_id_info;
+  result = get_public_key(enclave, &ret,  &get_id_info);
+  if (result != 0) {
+      cerr << "Host: Failed to retrieve public key" << result << endl;
+      goto exit;
+  }
+  printf("Host: Get PK: ");
+  print_hex(get_id_info.pk, PUBLIC_KEY_SIZE_IN_BYTES);
+
   // call new_ledger with a handle
   cout << "Host: Asking the endorser to create a new ledger" << endl;
   handle_t handle;
@@ -140,6 +150,8 @@ int main(int argc, const char *argv[]) {
 
   cout << "Host: Handle is: ";
   print_hex(handle.v, HASH_VALUE_SIZE_IN_BYTES);
+  cout << "Host: Signature is : ";
+  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
 
   // call append with an arbitrary message in the block_hash
   digest_t block_hash;
@@ -155,7 +167,9 @@ int main(int argc, const char *argv[]) {
     cerr << "Host: append failed with " << ret << endl;
     goto exit;
   }
-  
+  printf("Host: Append Signature : ");
+  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
+
   // call read_latest with a nonce
   nonce_t nonce;
   memset(nonce.v, 0x84, sizeof(nonce.v));
@@ -172,6 +186,10 @@ int main(int argc, const char *argv[]) {
   }
   cout << "Host: Latest tail hash is: ";
   print_hex(tail.v, HASH_VALUE_SIZE_IN_BYTES);
+  cout << "Host: Latest tail signature is: ";
+  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
+
+  // Spinning up gRPC Services.
   {
       std::cout << "Attempting to run Endorser at Address 0.0.0.0:9096" << std::endl;
       std::string server_address("0.0.0.0:9096");

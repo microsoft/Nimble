@@ -25,8 +25,9 @@ inline bool operator<(const handle_t& l, const handle_t& r) {
 
 class ecall_dispatcher {
 private:
-  // ECDSA key of the endorser
-  EC_KEY* eckey;
+  // EdDSA KeyPair of the endorser
+  uint8_t private_key[PRIVATE_KEY_SIZE_IN_BYTES];
+  uint8_t public_key[PUBLIC_KEY_SIZE_IN_BYTES];
 
   // tail hash for each ledger
   map<handle_t, tuple<digest_t, unsigned int>> endorser_state;

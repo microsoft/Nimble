@@ -1,0 +1,3 @@
+[submodule "endorser-openenclave/enclave/hacl"]
+	path = endorser-openenclave/enclave/hacl
+	url = git@github.com:MSRSSP/NimbleEverCrypt.git

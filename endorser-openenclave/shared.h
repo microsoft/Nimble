@@ -1,9 +1,10 @@
 #ifndef _SHARED_H
 #define _SHARED_H
 
+#define PRIVATE_KEY_SIZE_IN_BYTES 32
 #define HASH_VALUE_SIZE_IN_BYTES 32
-#define PUBLIC_KEY_SIZE_IN_BYTES 33
-#define SIGNATURE_SIZE_IN_BYTES 72
+#define PUBLIC_KEY_SIZE_IN_BYTES 32
+#define SIGNATURE_SIZE_IN_BYTES 64
 #define NONCE_SIZE_IN_BYTES 16
 
 // endorser_id_t contains the name of an endorser

@@ -1,3 +1,6 @@
+# Add the HACL* Verified Cryptographic Libraries
+add_subdirectory(hacl)
+
 # Use the edger8r to generate C bindings from the EDL file.
 add_custom_command(
   OUTPUT endorser_t.h endorser_t.c endorser_args.h
@@ -18,4 +21,4 @@ target_include_directories(
 
 target_link_libraries(
   enclave openenclave::oeenclave openenclave::oecrypto${OE_CRYPTO_LIB}
-  openenclave::oelibcxx)
+  openenclave::oelibcxx hacl)

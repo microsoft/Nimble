@@ -1,36 +1,26 @@
 #include "endorser.h"
 #include "common.h"
 #include <string.h>
+#include <openssl/rand.h>
+#include "hacl/EverCrypt_Ed25519.h"
 
 int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
   int ret = 0;
   int res = 0;
 
-  eckey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-  if (eckey == NULL) {
-    ret = 1;
-    TRACE_ENCLAVE("EC_KEY_new_by_curve_name returned 1");
-    goto exit;
+  uint8_t private_key[PRIVATE_KEY_SIZE_IN_BYTES];
+  int r = RAND_bytes(private_key, PRIVATE_KEY_SIZE_IN_BYTES);
+  if (r == 0) {
+      TRACE_ENCLAVE("OPENSSL Unable to Generate Randomness for Private Key");
+      goto exit;
   }
-
-  if (!EC_KEY_generate_key(eckey)) {
-    ret = 1;
-    TRACE_ENCLAVE("EC_KEY_generate_key returned 1");
-    goto exit;
-  }
-
-  unsigned char *pk;
-  res = EC_KEY_key2buf(eckey, POINT_CONVERSION_COMPRESSED, &pk, NULL);
-  if (res == 0) {
-    ret = 1;
-    TRACE_ENCLAVE("EC_KEY_key2buf returned an error");
-    goto exit;
-  }
-
-  // copy the public key and free the buffer
-  assert(res == PUBLIC_KEY_SIZE_IN_BYTES);
-  memcpy(endorser_id->pk, pk, PUBLIC_KEY_SIZE_IN_BYTES);
-  free(pk);
+  memcpy(this->private_key, private_key, PRIVATE_KEY_SIZE_IN_BYTES);
+  
+  uint8_t public_key[PUBLIC_KEY_SIZE_IN_BYTES];
+  EverCrypt_Ed25519_secret_to_public(public_key, this->private_key);
+  
+  memcpy(this->public_key, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
+  memcpy(endorser_id->pk, this->public_key, PUBLIC_KEY_SIZE_IN_BYTES);
 
 exit:
   return ret;
@@ -56,14 +46,12 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   digest_t h_m;
   SHA256((unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned int), h_m.v);
   
-  // produce an ECDSA signature
-  res = ECDSA_sign(0, h_m.v, HASH_VALUE_SIZE_IN_BYTES, signature->v, &signature->v_len, eckey);
-
-  if (res == 0) {
-    ret = 1;
-    TRACE_ENCLAVE("ECDSA_sign returned an error");
-    goto exit;
-  }
+  // Produce an EdDSA Signature from HACL*
+  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
+  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
+  
+  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
+  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // store handle under the same name in the map
   this->endorser_state.insert(pair<handle_t, tuple<digest_t, int>>(*handle, make_tuple(h_m, 0)));
@@ -99,16 +87,15 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
   SHA256(tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, h_nonced_tail);
 
   // produce an ECDSA signature
-  res = ECDSA_sign(0, h_nonced_tail, HASH_VALUE_SIZE_IN_BYTES, signature->v, &signature->v_len, eckey);
+  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
+  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_nonced_tail);
+  
+  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
+  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // copy the tail as response
   memcpy(tail->v, tail_in_endorser.v, HASH_VALUE_SIZE_IN_BYTES);
 
-  if (res == 0) {
-    ret = 1;
-    TRACE_ENCLAVE("ECDSA_sign returned an error");
-    goto exit;
-  }
 exit:
   return ret;
 }
@@ -147,14 +134,11 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   digest_t h_m;
   SHA256((unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned int), h_m.v);
 
-  // produce an ECDSA signature
-  res = ECDSA_sign(0, h_m.v, HASH_VALUE_SIZE_IN_BYTES, signature->v, &signature->v_len, eckey);
-
-  if (res == 0) {
-    ret = 1;
-    TRACE_ENCLAVE("ECDSA_sign returned an error");
-    goto exit;
-  }
+  // Sign the contents
+  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
+  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
+  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
+  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // store updated hash 
   this->endorser_state[*handle] = make_tuple(h_m, m.height);
@@ -165,25 +149,15 @@ exit:
   
 int ecall_dispatcher::get_public_key(endorser_id_t* endorser_id) {
   int ret = 0;
-  unsigned char *pk;
-  int res = EC_KEY_key2buf(eckey, POINT_CONVERSION_COMPRESSED, &pk, NULL);
-  if (res == 0) {
-    ret = 1;
-    TRACE_ENCLAVE("EC_KEY_key2buf returned an error");
-    goto exit;
-  }
-
-  // copy the public key and free the buffer
-  assert(res == PUBLIC_KEY_SIZE_IN_BYTES);
-  memcpy(endorser_id->pk, pk, PUBLIC_KEY_SIZE_IN_BYTES);
-  free(pk);
+  memcpy(endorser_id->pk, this->public_key, PUBLIC_KEY_SIZE_IN_BYTES);
 
 exit:
   return ret;
 }
   
 void ecall_dispatcher::terminate() {
-  EC_KEY_free(eckey); 
+  free(private_key);
+  free(public_key);
 }
 
 int ecall_dispatcher::verify_append(endorser_id_t* endorser_id, handle_t* handle, digest_t* block_hash, signature_t* signature) {
