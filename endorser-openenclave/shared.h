@@ -33,7 +33,6 @@ typedef struct _nonce {
 
 typedef struct _signature {
   unsigned char v[SIGNATURE_SIZE_IN_BYTES];
-  unsigned int v_len;
 } signature_t;
 
 #endif /* _SHARED_H */

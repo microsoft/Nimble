@@ -9,10 +9,10 @@ int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
   int res = 0;
 
   uint8_t private_key[PRIVATE_KEY_SIZE_IN_BYTES];
-  int r = RAND_bytes(private_key, PRIVATE_KEY_SIZE_IN_BYTES);
-  if (r == 0) {
-      TRACE_ENCLAVE("OPENSSL Unable to Generate Randomness for Private Key");
-      goto exit;
+  res = oe_random(private_key, PRIVATE_KEY_SIZE_IN_BYTES);
+  if (res != OE_OK) {
+    ret = 1;
+    goto exit;
   }
   memcpy(this->private_key, private_key, PRIVATE_KEY_SIZE_IN_BYTES);
   
@@ -51,7 +51,6 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
   
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // store handle under the same name in the map
   this->endorser_state.insert(pair<handle_t, tuple<digest_t, int>>(*handle, make_tuple(h_m, 0)));
@@ -91,7 +90,6 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_nonced_tail);
   
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // copy the tail as response
   memcpy(tail->v, tail_in_endorser.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -138,7 +136,6 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-  signature->v_len = SIGNATURE_SIZE_IN_BYTES;
 
   // store updated hash 
   this->endorser_state[*handle] = make_tuple(h_m, m.height);
