@@ -156,7 +156,3 @@ void ecall_dispatcher::terminate() {
   free(private_key);
   free(public_key);
 }
-
-int ecall_dispatcher::verify_append(endorser_id_t* endorser_id, handle_t* handle, digest_t* block_hash, signature_t* signature) {
-  return 0;
-}

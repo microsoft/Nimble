@@ -26,7 +26,3 @@ int get_public_key(endorser_id_t* endorser_id) {
 }
 
 void terminate() { return dispatcher.terminate(); }
-
-int verify_append(endorser_id_t *endorser_id, handle_t *handle, digest_t *block_hash, signature_t *signature) {
-  return dispatcher.verify_append(endorser_id, handle, block_hash, signature);
-}

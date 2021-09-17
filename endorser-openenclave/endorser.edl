@@ -11,9 +11,8 @@ enclave {
         public int append([in] handle_t* handle, [in] digest_t* block_hash, [out] signature_t* signature);
         public int get_public_key([out] endorser_id_t* endorser_id);
         public void terminate();
-        public int verify_append([in] endorser_id_t* endorser_id, [in] handle_t* handle, [in] digest_t* block_hash, [out] signature_t* signature);
-};
-
+    };
+    
     //untrusted {
     //    no untrusted functions in the endorser 
     //};
