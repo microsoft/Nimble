@@ -1,7 +1,6 @@
 #include "endorser.h"
 #include "common.h"
 #include <string.h>
-#include <openssl/rand.h>
 #include "hacl/EverCrypt_Ed25519.h"
 
 int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
