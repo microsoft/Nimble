@@ -8,6 +8,9 @@
 #include <string>
 #include <map>
 #include <tuple>
+#include "common.h"
+#include <string.h>
+#include "NimbleEverCrypt/EverCrypt_Ed25519.h"
 
 using namespace std;
 

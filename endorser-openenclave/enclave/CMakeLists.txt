@@ -1,5 +1,5 @@
 # Add the HACL* Verified Cryptographic Libraries
-add_subdirectory(hacl)
+add_subdirectory(NimbleEverCrypt)
 
 # Use the edger8r to generate C bindings from the EDL file.
 add_custom_command(
@@ -21,4 +21,4 @@ target_include_directories(
 
 target_link_libraries(
   enclave openenclave::oeenclave openenclave::oecrypto${OE_CRYPTO_LIB}
-  openenclave::oelibcxx hacl)
+  openenclave::oelibcxx nimble_evercrypt)
