@@ -24,7 +24,7 @@ typedef struct _digest {
 typedef struct _meta_block {
   unsigned char prev[HASH_VALUE_SIZE_IN_BYTES];
   unsigned char cur[HASH_VALUE_SIZE_IN_BYTES];
-  unsigned int height;
+  unsigned long long height;
 } meta_block_t;
 
 typedef struct _nonce {

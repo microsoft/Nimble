@@ -2,15 +2,13 @@
 
 #include "../shared.h"
 #include <openenclave/enclave.h>
-#include <openssl/err.h>
-#include <openssl/objects.h>
-#include <openssl/sha.h>
 #include <string>
 #include <map>
 #include <tuple>
 #include "common.h"
 #include <string.h>
 #include "NimbleEverCrypt/EverCrypt_Ed25519.h"
+#include "NimbleEverCrypt/Hacl_Streaming_SHA2.h"
 
 using namespace std;
 
@@ -31,7 +29,7 @@ private:
   uint8_t public_key[PUBLIC_KEY_SIZE_IN_BYTES];
 
   // tail hash for each ledger
-  map<handle_t, tuple<digest_t, unsigned int>> endorser_state;
+  map<handle_t, tuple<digest_t, unsigned long long>> endorser_state;
 
 public:
   int setup(endorser_id_t* endorser_id);

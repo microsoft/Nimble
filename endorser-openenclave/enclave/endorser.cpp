@@ -25,6 +25,7 @@ exit:
 int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   int ret = 0;
   int res = 0;
+  Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // check if the handle already exists
   if (this->endorser_state.count(*handle) >= 1) {
@@ -40,8 +41,11 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   
   // hash the metadata block
   digest_t h_m;
-  SHA256((unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned int), h_m.v);
-  
+  st = Hacl_Streaming_SHA2_create_in_256();
+  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned long long));
+  Hacl_Streaming_SHA2_finish_256(st, h_m.v);
+  Hacl_Streaming_SHA2_free_256(st);
+
   // Produce an EdDSA Signature from HACL*
   uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
@@ -61,6 +65,7 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
   unsigned char* prev;
   unsigned int height;
   digest_t tail_in_endorser;
+  Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // check if the handle exists
   if (this->endorser_state.count(*handle) == 0) {
@@ -79,7 +84,10 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
 
   // compute a hash = Hash(hash, input), overwriting the running hash
   unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
-  SHA256(tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, h_nonced_tail);
+  st = Hacl_Streaming_SHA2_create_in_256();
+  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES);
+  Hacl_Streaming_SHA2_finish_256(st, h_nonced_tail);
+  Hacl_Streaming_SHA2_free_256(st);
 
   // produce an ECDSA signature
   uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
@@ -99,6 +107,7 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   int res = 0;
   digest_t prev;
   unsigned int height;
+  Hacl_Streaming_SHA2_state_sha2_256* st;
   
   // check if the handle exists
   if (this->endorser_state.count(*handle) == 0) {
@@ -126,7 +135,10 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   
   // hash the metadata block
   digest_t h_m;
-  SHA256((unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned int), h_m.v);
+  st = Hacl_Streaming_SHA2_create_in_256();
+  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) &m, 2*HASH_VALUE_SIZE_IN_BYTES + sizeof(unsigned long long));
+  Hacl_Streaming_SHA2_finish_256(st, h_m.v);
+  Hacl_Streaming_SHA2_free_256(st);
 
   // Sign the contents
   uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
