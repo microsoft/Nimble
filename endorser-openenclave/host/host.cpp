@@ -11,6 +11,7 @@ using namespace std;
 using grpc::Server;
 using grpc::ServerContext;
 using grpc::Status;
+using grpc::StatusCode;
 using grpc::ServerBuilder;
 
 using endorser_proto::EndorserCall;
@@ -22,6 +23,16 @@ using endorser_proto::ReadLatestReq;
 using endorser_proto::ReadLatestResp;
 using endorser_proto::AppendReq;
 using endorser_proto::AppendResp;
+
+void print_hex(unsigned char* d, unsigned int len) {
+  printf("0x");
+  for (int i = 0; i < len; i++) {
+    printf("%c%c", "0123456789ABCDEF"[d[i] / 16],
+           "0123456789ABCDEF"[d[i] % 16]);
+  }
+  cout << endl;
+}
+
 
 oe_enclave_t *enclave = NULL;
 
@@ -39,46 +50,118 @@ bool check_simulate_opt(int *argc, const char *argv[]) {
 
 class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status GetPublicKey(ServerContext* context, const GetPublicKeyReq* request, GetPublicKeyResp* reply) override {
-        char pk_bytes[] = "this_is_a_public_key";
-        reply->set_pk(pk_bytes);
+        int ret = 0;
+        oe_result_t result;
+        endorser_id_t eid;
+        result = get_public_key(enclave, &ret,  &eid);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call return error");
+        }
+        reply->set_pk(reinterpret_cast<const char*>(eid.pk), PUBLIC_KEY_SIZE_IN_BYTES);
         return Status::OK;
     }
 
     Status NewLedger(ServerContext *context, const NewLedgerReq* request, NewLedgerResp* reply) override {
-        char sig_bytes[] = "this_is_a_signature_byte_response";
-        reply->set_signature(sig_bytes);
+        string h = request->handle();
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
+        }
+
+        int ret = 0;
+        oe_result_t result;
+        handle_t handle;
+        memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        
+        signature_t signature;
+        result = new_ledger(enclave, &ret, &handle, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to new_ledger returned error");
+        }
+
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
 
     Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
-        char tail_hash[] = "this_is_a_tail_hash_response";
-        uint64_t height = std::numeric_limits<uint64_t>::max();
-        char sig_bytes[] = "this_is_a_signature_byte_response";
-        reply->set_tail_hash(tail_hash);
-        reply->set_height(height);
-        reply->set_signature(sig_bytes);
+        string h = request->handle();
+        string n = request->nonce();
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
+        }
+        if (n.size() != NONCE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "nonce size is invalid");
+        }
+        int ret = 0;
+        oe_result_t result;
+        // Request data
+        handle_t handle;
+        nonce_t nonce;
+        memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
+
+        // Response data
+        digest_t tail;
+        height_t height;
+        signature_t signature;
+        result = read_latest(enclave, &ret, &handle, &nonce, &tail, &height, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to read_latest returned error");
+        }
+
+        reply->set_tail_hash(reinterpret_cast<const char*>(tail.v), HASH_VALUE_SIZE_IN_BYTES);
+        reply->set_height((uint64_t)height.h);
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
 
     Status Append(ServerContext *context, const AppendReq* request, AppendResp* reply) override {
-        char tail_hash[] = "this_is_a_tail_hash_response";
-        uint64_t height = std::numeric_limits<uint64_t>::max();
-        char sig_bytes[] = "this_is_a_signature_byte_response";
-        reply->set_tail_hash(tail_hash);
-        reply->set_height(height);
-        reply->set_signature(sig_bytes);
+        string h = request->handle();
+        string b_h = request->block_hash();
+        string t_h = request->cond_tail_hash();
+
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES || t_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
+        }
+
+        // Request data
+        handle_t handle;
+        digest_t block_hash;
+        digest_t cond_tail_hash;
+        memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(cond_tail_hash.v, t_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+
+        // OE Prepare
+        int ret = 0;
+        oe_result_t result;
+
+        // Response data
+        digest_t prev_tail;
+        height_t height;
+        signature_t signature;
+        result = append(enclave, &ret, &handle, &block_hash, &cond_tail_hash, &prev_tail, &height, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to append returned error");
+        }
+
+        reply->set_tail_hash(reinterpret_cast<const char*>(prev_tail.v), HASH_VALUE_SIZE_IN_BYTES);
+        reply->set_height((uint64_t)height.h);
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
 };
-
-void print_hex(unsigned char* d, unsigned int len) {
-  printf("0x");
-  for (int i = 0; i < len; i++) {
-    printf("%c%c", "0123456789ABCDEF"[d[i] / 16],
-           "0123456789ABCDEF"[d[i] % 16]);
-  }
-  cout << endl;
-}
 
 int main(int argc, const char *argv[]) {
   oe_result_t result;
@@ -132,62 +215,6 @@ int main(int argc, const char *argv[]) {
   }
   printf("Host: Get PK: ");
   print_hex(get_id_info.pk, PUBLIC_KEY_SIZE_IN_BYTES);
-
-  // call new_ledger with a handle
-  cout << "Host: Asking the endorser to create a new ledger" << endl;
-  handle_t handle;
-  memset(handle.v, 0x21, HASH_VALUE_SIZE_IN_BYTES);
-  signature_t signature;
-  result = new_ledger(enclave, &ret, &handle, &signature);
-  if (result != OE_OK) {
-    ret = 1;
-    goto exit;
-  }
-  if (ret != 0) {
-    cerr << "Host: new_ledger failed with " << ret << endl;
-    goto exit;
-  }
-
-  cout << "Host: Handle is: ";
-  print_hex(handle.v, HASH_VALUE_SIZE_IN_BYTES);
-  cout << "Host: Signature is : ";
-  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
-
-  // call append with an arbitrary message in the block_hash
-  digest_t block_hash;
-  memset(block_hash.v, 0x42, sizeof(block_hash.v));
-
-  result = append(enclave, &ret, &handle, &block_hash, &signature);
-
-  if (result != OE_OK) {
-    ret = 1;
-    goto exit;
-  }
-  if (ret != 0) {
-    cerr << "Host: append failed with " << ret << endl;
-    goto exit;
-  }
-  printf("Host: Append Signature : ");
-  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
-
-  // call read_latest with a nonce
-  nonce_t nonce;
-  memset(nonce.v, 0x84, sizeof(nonce.v));
-  digest_t tail;
-
-  result = read_latest(enclave, &ret, &handle, &nonce, &tail, &signature);
-  if (result != OE_OK) {
-    ret = 1;
-    goto exit;
-  }
-  if (ret != 0) {
-    cerr << "Host: read_latest failed with " << ret << endl;
-    goto exit;
-  }
-  cout << "Host: Latest tail hash is: ";
-  print_hex(tail.v, HASH_VALUE_SIZE_IN_BYTES);
-  cout << "Host: Latest tail signature is: ";
-  print_hex(signature.v, SIGNATURE_SIZE_IN_BYTES);
 
   // Spinning up gRPC Services.
   {

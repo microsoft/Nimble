@@ -44,9 +44,9 @@ impl EndorserState {
       Err(EndorserError::InvalidLedgerName)
     } else {
       let (tail_hash_bytes, height) = self.ledgers.get(handle).unwrap(); //safe to unwrap here because of the check above
-      let signature = self
-        .keypair
-        .sign(&[tail_hash_bytes.to_bytes(), nonce.to_vec()].concat());
+      let sign_message =
+        NimbleDigest::digest(&[tail_hash_bytes.to_bytes(), nonce.to_vec()].concat()).to_bytes();
+      let signature = self.keypair.sign(&sign_message);
       Ok((tail_hash_bytes.to_bytes(), *height, signature))
     }
   }

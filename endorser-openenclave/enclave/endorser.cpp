@@ -28,7 +28,8 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // check if the handle already exists
-  if (this->endorser_state.count(*handle) >= 1) {
+  if (this->endorser_state.find(*handle) != this->endorser_state.end()) {
+    TRACE_ENCLAVE("[Enclave] New Ledger :: Handle already exists %d",(int) this->endorser_state.count(*handle));
     ret = 1;
     goto exit;
   }
@@ -53,23 +54,24 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
 
   // store handle under the same name in the map
-  this->endorser_state.insert(pair<handle_t, tuple<digest_t, int>>(*handle, make_tuple(h_m, 0)));
+  this->endorser_state.emplace(*handle, make_tuple(h_m, 0));
 
 exit:
   return ret;
 }
   
-int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* tail, signature_t* signature) {
+int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* tail, height_t* h, signature_t* signature) {
   int ret = 0;
   int res = 0;
   unsigned char* prev;
-  unsigned int height;
+  unsigned long long height;
   digest_t tail_in_endorser;
   Hacl_Streaming_SHA2_state_sha2_256* st;
 
-  // check if the handle exists
-  if (this->endorser_state.count(*handle) == 0) {
+  // check if the handle exists, exit if there is no handle found to read
+  if (this->endorser_state.find(*handle) == this->endorser_state.end()) {
     ret = 1;
+    printf("[Read Latest] Exited at the handle existence check. Requested Handle does not exist\n");
     goto exit;
   }
   
@@ -80,7 +82,7 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
   // combine the running hash and the nonce value
   unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
   memcpy(tail_with_nonce, tail_in_endorser.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(&tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES], nonce->v, NONCE_SIZE_IN_BYTES);
+  memcpy(tail_with_nonce+HASH_VALUE_SIZE_IN_BYTES, nonce->v, NONCE_SIZE_IN_BYTES);
 
   // compute a hash = Hash(hash, input), overwriting the running hash
   unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
@@ -92,26 +94,31 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, digest_t* ta
   // produce an ECDSA signature
   uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_nonced_tail);
-  
+
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
 
   // copy the tail as response
   memcpy(tail->v, tail_in_endorser.v, HASH_VALUE_SIZE_IN_BYTES);
+  h->h = height;
 
 exit:
   return ret;
 }
   
-int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t* signature) {
+int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* cond_tail_hash, digest_t* prev_tail, height_t* h, signature_t* signature) {
   int ret = 0;
   int res = 0;
+  // Set the default conditional tail hash to [0; HASH_VALUE_SIZE_IN_BYTES]
+  digest_t default_cond_tail_hash;
+  memset(default_cond_tail_hash.v, 0, HASH_VALUE_SIZE_IN_BYTES);
+
   digest_t prev;
   unsigned int height;
   Hacl_Streaming_SHA2_state_sha2_256* st;
   
   // check if the handle exists
-  if (this->endorser_state.count(*handle) == 0) {
-    TRACE_ENCLAVE("Requested handle does not exist");
+  if (this->endorser_state.find(*handle) == this->endorser_state.end()) {
+    TRACE_ENCLAVE("[Append] Exited at the handle existence check. Requested handle does not exist\n");
     ret = 1;
     goto exit;
   }
@@ -125,6 +132,15 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
     TRACE_ENCLAVE("The number of blocks has reached UINT_MAX");
     ret = 1;
     goto exit;
+  }
+  // check if the prev tail retrieved from endorser state matches the conditional tail hash or the default zero conditional hash
+  int tail_match_default, tail_match_prev;
+  tail_match_default = memcmp(default_cond_tail_hash.v, cond_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES);
+  tail_match_prev = memcmp(prev.v, cond_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES);
+  if (tail_match_default != 0 && tail_match_prev != 0) {
+      TRACE_ENCLAVE("Conditional tail hash did not match prev or default");
+      ret = 1;
+      goto exit;
   }
 
   // create the metadata block
@@ -145,6 +161,8 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
   memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
 
+  memcpy(prev_tail->v, prev.v, HASH_VALUE_SIZE_IN_BYTES);
+  h->h = m.height;
   // store updated hash 
   this->endorser_state[*handle] = make_tuple(h_m, m.height);
 

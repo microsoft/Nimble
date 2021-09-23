@@ -122,13 +122,14 @@ pub fn verify_read_latest(
 
   let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
-  let nonced_tail_hash_prime = [tail_hash_prime.to_bytes(), nonce_bytes.to_vec()].concat();
+  let hash_nonced_tail_hash_prime =
+    NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
 
   // parse the receipt to construct a Receipt object
   let receipt = Receipt::from_bytes(receipt_bytes);
 
   // verify the receipt against the nonced tail hash
-  let res = receipt.verify(&nonced_tail_hash_prime, vk.get_public_keys());
+  let res = receipt.verify(&hash_nonced_tail_hash_prime, vk.get_public_keys());
 
   if res.is_err() {
     return Err(VerificationError::InvalidReceipt);

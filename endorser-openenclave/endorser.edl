@@ -7,8 +7,8 @@ enclave {
     trusted {
         public int setup([out] endorser_id_t* endorser_id);
         public int new_ledger([in] handle_t* handle, [out] signature_t* signature);
-        public int read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] digest_t* tail, [out] signature_t* signature);
-        public int append([in] handle_t* handle, [in] digest_t* block_hash, [out] signature_t* signature);
+        public int read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] digest_t* tail, [out] height_t* h, [out] signature_t* signature);
+        public int append([in] handle_t* handle, [in] digest_t* block_hash, [in] digest_t* cond_tail_hash, [out] digest_t* prev_tail, [out] height_t* h, [out] signature_t* signature);
         public int get_public_key([out] endorser_id_t* endorser_id);
         public void terminate();
     };

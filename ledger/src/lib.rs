@@ -7,19 +7,19 @@ use ed25519_dalek::{PublicKey, Signature, Verifier};
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
 use itertools::concat;
-use sha3::{Digest, Sha3_256};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// A cryptographic digest
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Copy)]
 pub struct NimbleDigest {
-  digest: Output<Sha3_256>,
+  digest: Output<Sha256>,
 }
 
 impl NimbleDigest {
   pub fn num_bytes() -> usize {
-    <Sha3_256 as Digest>::output_size()
+    <Sha256 as Digest>::output_size()
   }
 
   pub fn to_bytes(self) -> Vec<u8> {
@@ -38,7 +38,7 @@ impl NimbleDigest {
 
   pub fn digest(bytes: &[u8]) -> Self {
     NimbleDigest {
-      digest: Sha3_256::digest(bytes),
+      digest: Sha256::digest(bytes),
     }
   }
 }
@@ -286,12 +286,12 @@ impl CustomSerde for MetaBlock {
     let mut bytes = Vec::new();
     bytes.extend(&self.prev.to_bytes());
     bytes.extend(&self.block_hash.to_bytes());
-    bytes.extend(&self.height.to_be_bytes().to_vec());
+    bytes.extend(&self.height.to_le_bytes().to_vec());
     bytes
   }
 
   fn from_bytes(bytes: Vec<u8>) -> Result<MetaBlock, CustomSerdeError> {
-    let usize_len = 0usize.to_be_bytes().to_vec().len();
+    let usize_len = 0usize.to_le_bytes().to_vec().len();
     let digest_len = NimbleDigest::num_bytes();
 
     if bytes.len() != 2 * digest_len + usize_len {
@@ -306,7 +306,7 @@ impl CustomSerde for MetaBlock {
           return Err(CustomSerdeError::InternalError);
         }
 
-        usize::from_be_bytes(res.unwrap())
+        usize::from_le_bytes(res.unwrap())
       };
 
       Ok(MetaBlock {
@@ -360,9 +360,9 @@ mod tests {
     let message_2 = "2".as_bytes();
 
     let expected_hash_message_1_hex =
-      "67b176705b46206614219f47a05aee7ae6a3edbe850bbbe214c536b989aea4d2";
+      "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
     let expected_hash_message_2_hex =
-      "b1b1bd1ed240b1496c81ccf19ceccf2af6fd24fac10ae42023628abbe2687310";
+      "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35";
 
     let expected_hash_message_1_op = hex::decode(expected_hash_message_1_hex);
     let expected_hash_message_2_op = hex::decode(expected_hash_message_2_hex);
@@ -387,7 +387,7 @@ mod tests {
     let message_1 = "1".as_bytes();
 
     let expected_hash_message_1_hex =
-      "67b176705b46206614219f47a05aee7ae6a3edbe850bbbe214c536b989aea4d2";
+      "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
 
     let expected_hash_message_1_op = hex::decode(expected_hash_message_1_hex);
     assert!(expected_hash_message_1_op.is_ok());

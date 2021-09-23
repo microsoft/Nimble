@@ -12,6 +12,10 @@ typedef struct _endorser_id {
   unsigned char pk[PUBLIC_KEY_SIZE_IN_BYTES];
 } endorser_id_t;
 
+typedef struct _height {
+    unsigned long long h;
+} height_t;
+
 // handle_t contains the name of a ledger
 typedef struct _handle {
   unsigned char v[HASH_VALUE_SIZE_IN_BYTES];
