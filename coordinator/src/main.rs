@@ -69,43 +69,20 @@ impl ConnectionStore {
     }
   }
 
-  fn get_all_keys(&self) -> Vec<PublicKey> {
-    // TODO: we can avoid ec.get_public_key() if keys are PublicKey objects
-    self
+  fn get_all(&self) -> (Vec<PublicKey>, Vec<EndorserConnection>) {
+    let pk_vec = self
       .store
       .iter()
-      .map(|(_pk, ec)| ec.get_public_key().unwrap())
-      .collect::<Vec<PublicKey>>()
-  }
-}
+      .map(|(pk, _ec)| PublicKey::from_bytes(pk).unwrap())
+      .collect::<Vec<PublicKey>>();
 
-#[derive(Debug, Default)]
-pub struct CommitteeStore {
-  store: HashMap<Handle, Vec<PublicKey>>,
-}
+    let conn_vec = self
+      .store
+      .iter()
+      .map(|(_pk, ec)| ec.clone())
+      .collect::<Vec<EndorserConnection>>();
 
-impl CommitteeStore {
-  pub fn new() -> Self {
-    CommitteeStore {
-      store: HashMap::new(),
-    }
-  }
-
-  pub fn insert(&mut self, key: &Handle, val: &[PublicKey]) -> Result<(), CoordinatorError> {
-    if self.store.contains_key(key) {
-      return Err(CoordinatorError::HandleAlreadyExists);
-    }
-
-    self.store.insert(*key, val.to_vec());
-    Ok(())
-  }
-
-  pub fn get(&self, key: &Handle) -> Result<Vec<PublicKey>, CoordinatorError> {
-    if !self.store.contains_key(key) {
-      return Err(CoordinatorError::UnableToFindHandle);
-    }
-
-    Ok(self.store.get(key).unwrap().to_vec())
+    (pk_vec, conn_vec)
   }
 }
 
@@ -113,7 +90,6 @@ impl CommitteeStore {
 pub struct CoordinatorState {
   data: Arc<RwLock<DataStore>>,
   metadata: Arc<RwLock<MetadataStore>>,
-  committee: Arc<RwLock<CommitteeStore>>, // a map from a handle to a vector of public keys
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
 }
 
@@ -127,30 +103,27 @@ impl CoordinatorState {
     // Connect in series. TODO: Make these requests async and concurrent and read from a config file.
     for hostname in hostnames {
       let conn = EndorserConnection::new(hostname.to_string()).await;
-      if conn.is_err() {
-        panic!(
-          "Unable to connect to an endorser service at {:?} with err: {:?}",
-          hostname.to_string(),
-          conn
-        );
-      }
+      assert!(
+        !conn.is_err(),
+        "Unable to connect to an endorser service at {:?} with err: {:?}",
+        hostname.to_string(),
+        conn
+      );
       println!("Connected Successfully to {:?}", &hostname);
 
       let conn = conn.unwrap();
       let pk = conn.get_public_key().unwrap();
       let res = connections.insert(&pk.to_bytes().to_vec(), &conn);
-      if res.is_err() {
-        panic!(
-          "Error inserting the public key of {:?} into a map",
-          hostname.to_string()
-        );
-      }
+      assert!(
+        !res.is_err(),
+        "Error inserting the public key of {:?} into a map",
+        hostname.to_string()
+      );
     }
 
     CoordinatorState {
       data: Arc::new(RwLock::new(DataStore::new())),
       metadata: Arc::new(RwLock::new(MetadataStore::new())),
-      committee: Arc::new(RwLock::new(CommitteeStore::new())),
       connections: Arc::new(RwLock::new(connections)),
     }
   }
@@ -190,28 +163,16 @@ impl Call for CoordinatorState {
     // Generate a Unique Value, this is the coordinator chosen nonce.
     let service_nonce = Uuid::new_v4().as_bytes().to_vec();
 
-    // Retrieve all PublicKeys for endorsers
-    // Ideally, the coordinator randomly chooses Quorum from the set of active endorsers
-    // and uses those values in the genesis block for the creation of a new handle.
-    // For now: All endorsers are used, so get_all_public_keys() is being used.
-    // TODO: Later replace this with get_random_quorum_public_keys()
-    let chosen_public_keys = self
+    // Retrieve all public keys of current active endorsers and connections to them
+    let (endorser_pk_vec, endorser_conn_vec) = self
       .connections
       .read()
       .expect("Unable to obtain read lock on connections")
-      .get_all_keys();
-
-    let endorser_connections: Vec<EndorserConnection> = {
-      let ec_res = self.get_endorser_connections(&chosen_public_keys);
-      if ec_res.is_err() {
-        return Err(Status::aborted("Failed to Obtain Endorser Connection"));
-      }
-      ec_res.unwrap()
-    };
+      .get_all();
 
     // Package the contents into a Block
     let genesis_block = {
-      let genesis_op = Block::genesis(&chosen_public_keys, &service_nonce, &client_nonce);
+      let genesis_op = Block::genesis(&endorser_pk_vec, &service_nonce, &client_nonce);
       if genesis_op.is_err() {
         return Err(Status::aborted("Failed to create a genesis block"));
       }
@@ -220,17 +181,6 @@ impl Call for CoordinatorState {
 
     // Hash the contents of the block to use as the handle.
     let handle = genesis_block.hash();
-
-    {
-      let mut handle_committee = self
-        .committee
-        .write()
-        .expect("Failed to acquire lock on handle connections map");
-      let handle_ins_op = handle_committee.insert(&handle, &chosen_public_keys);
-      if handle_ins_op.is_err() {
-        return Err(Status::aborted("Aborted due to Handle Already Existing"));
-      }
-    }
 
     // Write the genesis block to data store
     {
@@ -245,8 +195,8 @@ impl Call for CoordinatorState {
     // Make a request to the endorsers for NewLedger using the handle which returns a signature.
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
 
-    let mut responses = Vec::with_capacity(endorser_connections.len());
-    for (index, ec) in endorser_connections.iter().enumerate() {
+    let mut responses = Vec::with_capacity(endorser_conn_vec.len());
+    for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
 
       responses.push(tokio::spawn(async move {
@@ -318,30 +268,20 @@ impl Call for CoordinatorState {
       assert!(res.is_ok());
     }
 
-    let committee_public_keys = {
-      let handle_committee = self.committee.read().expect("Unable to obtain Readlock");
-      let res = handle_committee.get(&handle);
-      if res.is_err() {
-        return Err(Status::invalid_argument("Unknown Handle"));
-      }
-      res.unwrap()
-    };
-
-    let connections: Vec<EndorserConnection> = {
-      let res = self.get_endorser_connections(&committee_public_keys);
-      if res.is_err() {
-        return Err(Status::aborted("Failed to Obtain Endorser Connection"));
-      }
-      res.unwrap()
-    };
+    // Retrieve all public keys of current active endorsers and connections to them
+    let (_endorser_pk_vec, endorser_conn_vec) = self
+      .connections
+      .read()
+      .expect("Unable to obtain read lock on connections")
+      .get_all();
 
     let mut receipt = Vec::new();
     let mut height: u64 = 0;
     let mut prev_hash = NimbleDigest::default();
 
-    let mut responses = Vec::with_capacity(connections.len());
+    let mut responses = Vec::with_capacity(endorser_conn_vec.len());
 
-    for (index, ec) in connections.iter().enumerate() {
+    for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
 
       responses.push(tokio::spawn(async move {
@@ -412,28 +352,18 @@ impl Call for CoordinatorState {
       h.unwrap()
     };
 
-    let committee_public_keys = {
-      let handle_committee = self.committee.read().expect("Unable to obtain Readlock");
-      let res = handle_committee.get(&handle);
-      if res.is_err() {
-        return Err(Status::invalid_argument("Unknown Handle"));
-      }
-      res.unwrap()
-    };
-
-    let connections: Vec<EndorserConnection> = {
-      let res = self.get_endorser_connections(&committee_public_keys);
-      if res.is_err() {
-        return Err(Status::aborted("Failed to Obtain Endorser Connection"));
-      }
-      res.unwrap()
-    };
+    // Retrieve all public keys of current active endorsers and connections to them
+    let (_endorser_pk_vec, endorser_conn_vec) = self
+      .connections
+      .read()
+      .expect("Unable to obtain read lock on connections")
+      .get_all();
 
     // 1. Read the information from the Endorsers
     let mut receipt_bytes = Vec::new();
-    let mut responses = Vec::with_capacity(connections.len());
+    let mut responses = Vec::with_capacity(endorser_conn_vec.len());
 
-    for (index, ec) in connections.iter().enumerate() {
+    for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
 
       responses.push(tokio::spawn(async move {

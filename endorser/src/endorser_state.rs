@@ -115,9 +115,7 @@ mod tests {
     let coordinator_handle = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      if n.is_err() {
-        panic!("Should not have occured");
-      }
+      assert!(!n.is_err(), "This should not have occured");
       n.unwrap()
     };
     let res = endorser_state.new_ledger(&coordinator_handle);
