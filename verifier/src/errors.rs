@@ -14,4 +14,6 @@ pub enum VerificationError {
   IndexOutofBounds,
   /// returned if the identities are not unique
   DuplicateIds,
+  /// returned if the supplied view is not well formed
+  InvalidView,
 }

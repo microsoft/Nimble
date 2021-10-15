@@ -35,12 +35,27 @@ impl VerificationKey {
   pub fn get_public_keys(&self) -> &Vec<PublicKey> {
     &self.pk_vec
   }
+
+  fn get_current_view(&self) -> NimbleDigest {
+    // In the absence of reconfigurations, the view can be computed from the list of public keys.
+    // For now, we use the public keys included in the genesis block to construct the view
+    let view_block_bytes = (0..self.pk_vec.len())
+      .map(|i| self.pk_vec[i].to_bytes().to_vec())
+      .collect::<Vec<Vec<u8>>>()
+      .into_iter()
+      .flatten()
+      .collect::<Vec<u8>>();
+
+    // the tail hash of the view ledger is the hash of the default NimbleDigest with the view block
+    NimbleDigest::default().digest_with(&NimbleDigest::digest(&view_block_bytes))
+  }
 }
 
 ///
 /// The parameters of the VerifyNewLedger() are:
 /// 1. The Block Data
 /// 2. A receipt
+/// 3. A nonce
 pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
@@ -64,6 +79,9 @@ pub fn verify_new_ledger(
     }
   }?;
 
+  // produce a view hash using the current configuration
+  let view = vk.get_current_view();
+
   // compute a handle as hash of the block
   let handle = {
     let block = Block::new(block_bytes);
@@ -71,7 +89,7 @@ pub fn verify_new_ledger(
   };
 
   // verify the signature on the genesis metablock with `handle` as the genesis block's hash
-  let genesis_metablock = MetaBlock::genesis(&handle);
+  let genesis_metablock = MetaBlock::genesis(&view, &handle);
   let hash = genesis_metablock.hash().to_bytes();
 
   // construct a receipt object from the provided bytes
@@ -84,23 +102,6 @@ pub fn verify_new_ledger(
   } else {
     Ok((handle.to_bytes(), vk))
   }
-}
-
-pub fn get_tail_hash(
-  block_bytes: &[u8],
-  tail_hash_bytes: &[u8],
-  height: usize,
-) -> Result<Vec<u8>, VerificationError> {
-  let block = Block::new(block_bytes);
-  let tail_hash = {
-    let res = NimbleDigest::from_bytes(tail_hash_bytes);
-    if res.is_err() {
-      return Err(VerificationError::IncorrectLength);
-    }
-    res.unwrap()
-  };
-  let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
-  Ok(metablock.hash().to_bytes())
 }
 
 pub fn verify_read_latest(
@@ -120,7 +121,7 @@ pub fn verify_read_latest(
   }
   let tail_hash = res.unwrap();
 
-  let metablock = MetaBlock::new(&tail_hash, &block.hash(), height);
+  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
   let hash_nonced_tail_hash_prime =
     NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
@@ -158,7 +159,7 @@ pub fn verify_read_by_index(
   }
   let tail_hash = res.unwrap();
 
-  let metablock = MetaBlock::new(&tail_hash, &block_hash, idx);
+  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block_hash, idx);
   let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object
@@ -189,7 +190,7 @@ pub fn verify_append(
   }
   let tail_hash = res.unwrap();
 
-  let metablock = MetaBlock::new(&tail_hash, &block_hash, height);
+  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block_hash, height);
   let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object

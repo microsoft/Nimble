@@ -11,8 +11,9 @@ pub mod endorser_proto {
 
 use endorser_proto::endorser_call_client::EndorserCallClient;
 use endorser_proto::{
-  AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
-  ReadLatestReq, ReadLatestResp,
+  AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
+  GetPublicKeyResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
 #[derive(Clone, Debug)]
@@ -77,5 +78,30 @@ impl EndorserConnection {
     } = self.client.append(req).await?.into_inner();
 
     Ok((tail_hash, height, signature))
+  }
+
+  pub async fn read_latest_view_ledger(&mut self, nonce: &Nonce) -> Result<Vec<u8>, Status> {
+    let req = tonic::Request::new(ReadLatestViewLedgerReq { nonce: nonce.get() });
+
+    let ReadLatestViewLedgerResp {
+      tail_hash: _,
+      signature,
+    } = self.client.read_latest_view_ledger(req).await?.into_inner();
+
+    Ok(signature)
+  }
+
+  pub async fn append_view_ledger(
+    &mut self,
+    block_hash: Vec<u8>,
+  ) -> Result<(Vec<u8>, Vec<u8>), Status> {
+    let req = tonic::Request::new(AppendViewLedgerReq { block_hash });
+
+    let AppendViewLedgerResp {
+      tail_hash,
+      signature,
+    } = self.client.append_view_ledger(req).await?.into_inner();
+
+    Ok((tail_hash, signature))
   }
 }

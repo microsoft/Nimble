@@ -14,9 +14,7 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp, Receipt,
 };
 use rand::Rng;
-use verifier::{
-  get_tail_hash, verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
-};
+use verifier::{verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest};
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConnection {
@@ -208,11 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     is_latest_valid.is_ok()
   );
   assert!(is_latest_valid.is_ok());
-  let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
-  // Check the tail hash generation from the read_latest response
-  let conditional_tail_hash_expected = get_tail_hash(&block, &tail_hash, height as usize);
-  assert!(conditional_tail_hash_expected.is_ok());
-  assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
+  let (_latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
   assert_ne!(latest_block_verified, vec![]); // This should not be empty since the block is returned
 
   // Step 5: Read At Index

@@ -41,6 +41,16 @@ impl NimbleDigest {
       digest: Sha256::digest(bytes),
     }
   }
+
+  /// concatenates `self` and `other` and computes a hash of the two
+  pub fn digest_with(&self, other: &NimbleDigest) -> Self {
+    NimbleDigest::digest(&[self.to_bytes(), other.to_bytes()].concat())
+  }
+
+  /// concatenates `self` and `other` bytes and computes a hash of the two
+  pub fn digest_with_bytes(&self, other: &[u8]) -> Self {
+    NimbleDigest::digest(&[self.to_bytes(), other.to_vec()].concat())
+  }
 }
 
 /// A cryptographic Nonce
@@ -192,17 +202,55 @@ impl Block {
   }
 }
 
-/// `MetaBlock` has three entries: (i) hash of the previous metadata,
-/// (ii) a hash of the current block, and (iii) a counter denoting the height
+/// `MetaBlock` has four entries: (i) a hash pointer to the view in the membership ledger,
+/// (ii) hash of the previous metadata,
+/// (iii) a hash of the current block, and (iv) a counter denoting the height
 /// of the current block in the ledger
 #[derive(Clone, Debug, Default)]
 pub struct MetaBlock {
+  view: NimbleDigest,
   prev: NimbleDigest,
   block_hash: NimbleDigest,
   height: usize,
 }
 
-/// An `EndorsedMetaBlock` has two components: (1) a Metadata and (2) a set of signatures
+impl MetaBlock {
+  pub fn new(
+    view: &NimbleDigest,
+    prev: &NimbleDigest,
+    block_hash: &NimbleDigest,
+    height: usize,
+  ) -> Self {
+    MetaBlock {
+      view: *view,
+      prev: *prev,
+      block_hash: *block_hash,
+      height,
+    }
+  }
+
+  pub fn genesis(view: &NimbleDigest, block_hash: &NimbleDigest) -> Self {
+    // unwrap is okay here since it will not fail
+    let prev = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()]).unwrap();
+    let height = 0usize;
+    MetaBlock {
+      view: *view,
+      prev,
+      block_hash: *block_hash,
+      height,
+    }
+  }
+
+  pub fn get_height(&self) -> usize {
+    self.height
+  }
+
+  pub fn get_prev(&self) -> &NimbleDigest {
+    &self.prev
+  }
+}
+
+/// An `EndorsedMetaBlock` has two components: (1) a MetaBlock and (2) a set of signatures
 #[derive(Clone, Debug, Default)]
 pub struct EndorsedMetaBlock {
   metablock: MetaBlock,
@@ -223,35 +271,6 @@ impl EndorsedMetaBlock {
 
   pub fn get_receipt(&self) -> &Receipt {
     &self.receipt
-  }
-}
-
-impl MetaBlock {
-  pub fn new(prev: &NimbleDigest, block_hash: &NimbleDigest, height: usize) -> Self {
-    MetaBlock {
-      prev: *prev,
-      block_hash: *block_hash,
-      height,
-    }
-  }
-
-  pub fn genesis(block_hash: &NimbleDigest) -> Self {
-    // unwrap is okay here since it will not fail
-    let prev = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()]).unwrap();
-    let height = 0usize;
-    MetaBlock {
-      prev,
-      block_hash: *block_hash,
-      height,
-    }
-  }
-
-  pub fn get_height(&self) -> usize {
-    self.height
-  }
-
-  pub fn get_prev(&self) -> &NimbleDigest {
-    &self.prev
   }
 }
 
@@ -284,6 +303,7 @@ impl CustomSerde for Block {
 impl CustomSerde for MetaBlock {
   fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
+    bytes.extend(&self.view.to_bytes());
     bytes.extend(&self.prev.to_bytes());
     bytes.extend(&self.block_hash.to_bytes());
     bytes.extend(&self.height.to_le_bytes().to_vec());
@@ -294,14 +314,15 @@ impl CustomSerde for MetaBlock {
     let usize_len = 0usize.to_le_bytes().to_vec().len();
     let digest_len = NimbleDigest::num_bytes();
 
-    if bytes.len() != 2 * digest_len + usize_len {
+    if bytes.len() != 3 * digest_len + usize_len {
       Err(CustomSerdeError::IncorrectLength)
     } else {
       // unwrap is okay to call here given the error check above
-      let prev = NimbleDigest::from_bytes(&bytes[0..digest_len]).unwrap();
-      let block_hash = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len]).unwrap();
+      let view = NimbleDigest::from_bytes(&bytes[..digest_len]).unwrap();
+      let prev = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len]).unwrap();
+      let block_hash = NimbleDigest::from_bytes(&bytes[2 * digest_len..3 * digest_len]).unwrap();
       let height = {
-        let res = bytes[2 * digest_len..].try_into();
+        let res = bytes[3 * digest_len..].try_into();
         if res.is_err() {
           return Err(CustomSerdeError::InternalError);
         }
@@ -310,6 +331,7 @@ impl CustomSerde for MetaBlock {
       };
 
       Ok(MetaBlock {
+        view,
         prev,
         block_hash,
         height,

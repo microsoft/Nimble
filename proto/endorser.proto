@@ -8,6 +8,8 @@ service EndorserCall {
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
+  rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
+  rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
 }
 
 message GetPublicKeyReq {
@@ -45,4 +47,22 @@ message AppendResp {
   bytes tail_hash = 1;
   uint64 height = 2;
   bytes signature = 3;
+}
+
+message ReadLatestViewLedgerReq {
+  bytes nonce = 1;
+}
+
+message ReadLatestViewLedgerResp {
+  bytes tail_hash = 1;
+  bytes signature = 2;
+}
+
+message AppendViewLedgerReq {
+  bytes block_hash = 1;
+}
+
+message AppendViewLedgerResp {
+  bytes tail_hash = 1;
+  bytes signature = 2;
 }

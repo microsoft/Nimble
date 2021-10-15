@@ -4,8 +4,8 @@ pub enum EndorserError {
   InvalidLedgerName,
   /// returned if one attempts to create a ledger that already exists
   LedgerExists,
-  /// returned if the creation of the endorser state fails
-  StateCreationError,
   /// returned if the increment results in overflow of ledger height
   LedgerHeightOverflow,
+  /// returned if the view/membership ledger is not initialized
+  ViewLedgerNotInitialized,
 }

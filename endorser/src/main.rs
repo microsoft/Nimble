@@ -14,8 +14,9 @@ pub mod endorser_proto {
 
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
-  AppendReq, AppendResp, GetPublicKeyReq, GetPublicKeyResp, NewLedgerReq, NewLedgerResp,
-  ReadLatestReq, ReadLatestResp,
+  AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
+  GetPublicKeyResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
 pub struct EndorserServiceState {
@@ -59,14 +60,15 @@ impl EndorserCall for EndorserServiceState {
     &self,
     req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
-    // The handle is the byte array of information sent by the Nimble Coordinator to the Endorser
     let NewLedgerReq { handle } = req.into_inner();
+    let handle = {
+      let handle_instance = NimbleDigest::from_bytes(&handle);
+      if handle_instance.is_err() {
+        return Err(Status::invalid_argument("Handle size is invalid"));
+      }
+      handle_instance.unwrap()
+    };
 
-    let handle_instance = NimbleDigest::from_bytes(&handle);
-    if handle_instance.is_err() {
-      return Err(Status::invalid_argument("Handle size is invalid"));
-    }
-    let handle = handle_instance.unwrap();
     let mut endorser = self
       .state
       .write()
@@ -114,15 +116,15 @@ impl EndorserCall for EndorserServiceState {
     request: Request<ReadLatestReq>,
   ) -> Result<Response<ReadLatestResp>, Status> {
     let ReadLatestReq { handle, nonce } = request.into_inner();
-    let handle_instance = {
-      let h = NimbleDigest::from_bytes(&handle);
-      if h.is_err() {
+    let handle = {
+      let res = NimbleDigest::from_bytes(&handle);
+      if res.is_err() {
         return Err(Status::invalid_argument("Invalid handle size"));
       }
-      h.unwrap()
+      res.unwrap()
     };
     let latest_state = self.state.read().expect("Failed to acquire read lock");
-    let res = latest_state.read_latest(&handle_instance, &nonce);
+    let res = latest_state.read_latest(&handle, &nonce);
 
     match res {
       Ok((tail_hash, height, signature)) => {
@@ -134,6 +136,54 @@ impl EndorserCall for EndorserServiceState {
         Ok(Response::new(reply))
       },
       Err(_) => Err(Status::aborted("Failed to process read_latest")),
+    }
+  }
+
+  async fn append_view_ledger(
+    &self,
+    req: Request<AppendViewLedgerReq>,
+  ) -> Result<Response<AppendViewLedgerResp>, Status> {
+    let AppendViewLedgerReq { block_hash } = req.into_inner();
+
+    let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
+
+    if block_hash_instance.is_err() {
+      return Err(Status::invalid_argument("Invalid input sizes"));
+    }
+
+    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
+    let res = endorser_state.append_view_ledger(&block_hash_instance.unwrap());
+
+    match res {
+      Ok((tail_hash, signature)) => {
+        let reply = AppendViewLedgerResp {
+          tail_hash,
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+
+      Err(_) => Err(Status::aborted("Failed to append_view_ledger")),
+    }
+  }
+
+  async fn read_latest_view_ledger(
+    &self,
+    request: Request<ReadLatestViewLedgerReq>,
+  ) -> Result<Response<ReadLatestViewLedgerResp>, Status> {
+    let ReadLatestViewLedgerReq { nonce } = request.into_inner();
+    let endorser = self.state.read().expect("Failed to acquire read lock");
+    let res = endorser.read_latest_view_ledger(&nonce);
+
+    match res {
+      Ok((tail_hash, signature)) => {
+        let reply = ReadLatestViewLedgerResp {
+          tail_hash,
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(_) => Err(Status::aborted("Failed to process read_latest_view_ledger")),
     }
   }
 }

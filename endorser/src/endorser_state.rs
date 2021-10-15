@@ -10,7 +10,10 @@ pub struct EndorserState {
   keypair: Keypair,
 
   /// a map from fixed-sized labels to a tail hash and a counter
-  ledgers: HashMap<NimbleDigest, (NimbleDigest, usize)>,
+  ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
+
+  /// the current tail of the view/membership ledger
+  view_ledger_tail: NimbleDigest,
 }
 
 impl EndorserState {
@@ -19,20 +22,28 @@ impl EndorserState {
     let keypair = Keypair::generate(&mut csprng);
     EndorserState {
       keypair,
-      ledgers: HashMap::new(),
+      ledger_tail_map: HashMap::new(),
+      view_ledger_tail: NimbleDigest::default(),
     }
   }
 
   pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Signature, EndorserError> {
-    if self.ledgers.contains_key(handle) {
-      Err(EndorserError::LedgerExists)
-    } else {
-      let tail_hash = MetaBlock::genesis(handle).hash();
-      self.ledgers.insert(*handle, (tail_hash, 0usize));
-
-      let signature = self.keypair.sign(tail_hash.to_bytes().as_slice());
-      Ok(signature)
+    // check if the handle already exists, if so, return an error
+    if self.ledger_tail_map.contains_key(handle) {
+      return Err(EndorserError::LedgerExists);
     }
+
+    // check if the view/membership ledger is initialized, if not, return an error
+    if self.view_ledger_tail == NimbleDigest::default() {
+      return Err(EndorserError::ViewLedgerNotInitialized);
+    }
+
+    // create a genesis metablock that embeds the current tail of the view/membership ledger
+    let tail_hash = MetaBlock::genesis(&self.view_ledger_tail, handle).hash();
+    self.ledger_tail_map.insert(*handle, (tail_hash, 0usize));
+
+    let signature = self.keypair.sign(tail_hash.to_bytes().as_slice());
+    Ok(signature)
   }
 
   pub fn read_latest(
@@ -40,14 +51,13 @@ impl EndorserState {
     handle: &NimbleDigest,
     nonce: &[u8],
   ) -> Result<(Vec<u8>, usize, Signature), EndorserError> {
-    if !self.ledgers.contains_key(handle) {
+    if !self.ledger_tail_map.contains_key(handle) {
       Err(EndorserError::InvalidLedgerName)
     } else {
-      let (tail_hash_bytes, height) = self.ledgers.get(handle).unwrap(); //safe to unwrap here because of the check above
-      let sign_message =
-        NimbleDigest::digest(&[tail_hash_bytes.to_bytes(), nonce.to_vec()].concat()).to_bytes();
-      let signature = self.keypair.sign(&sign_message);
-      Ok((tail_hash_bytes.to_bytes(), *height, signature))
+      let (tail_hash, height) = self.ledger_tail_map.get(handle).unwrap(); //safe to unwrap here because of the check above
+      let message = tail_hash.digest_with_bytes(nonce).to_bytes();
+      let signature = self.keypair.sign(&message);
+      Ok((tail_hash.to_bytes(), *height, signature))
     }
   }
 
@@ -56,33 +66,64 @@ impl EndorserState {
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
   ) -> Result<(Vec<u8>, usize, Signature), EndorserError> {
-    if self.ledgers.contains_key(handle) {
-      let (tail_hash, height) = self.ledgers.get_mut(handle).unwrap();
-
-      *height = {
-        let height_op = height.checked_add(1);
-        if height_op.is_none() {
-          return Err(EndorserError::LedgerHeightOverflow);
-        }
-        height_op.unwrap()
-      };
-
-      // save the previous tail
-      let prev_tail = *tail_hash;
-
-      let metadata = MetaBlock::new(&prev_tail, block_hash, *height);
-      *tail_hash = metadata.hash();
-
-      let signature = self.keypair.sign(&tail_hash.to_bytes());
-
-      Ok((prev_tail.to_bytes(), *height, signature))
-    } else {
-      Err(EndorserError::StateCreationError)
+    // check if the requested ledger exists in the state, if not return an error
+    if !self.ledger_tail_map.contains_key(handle) {
+      return Err(EndorserError::InvalidLedgerName);
     }
+
+    // check if the view/membership ledger is initialized, if not, return an error
+    if self.view_ledger_tail == NimbleDigest::default() {
+      return Err(EndorserError::ViewLedgerNotInitialized);
+    }
+
+    let (tail_hash, height) = self.ledger_tail_map.get_mut(handle).unwrap();
+
+    *height = {
+      let res = height.checked_add(1);
+      if res.is_none() {
+        return Err(EndorserError::LedgerHeightOverflow);
+      }
+      res.unwrap()
+    };
+
+    // save the previous tail
+    let prev_tail = *tail_hash;
+    let metablock = MetaBlock::new(&self.view_ledger_tail, &prev_tail, block_hash, *height);
+    *tail_hash = metablock.hash();
+
+    let signature = self.keypair.sign(&tail_hash.to_bytes());
+
+    Ok((prev_tail.to_bytes(), *height, signature))
   }
 
   pub fn get_public_key(&self) -> PublicKey {
     self.keypair.public
+  }
+
+  pub fn read_latest_view_ledger(
+    &self,
+    nonce: &[u8],
+  ) -> Result<(Vec<u8>, Signature), EndorserError> {
+    if self.view_ledger_tail == NimbleDigest::default() {
+      Err(EndorserError::ViewLedgerNotInitialized)
+    } else {
+      let message = self.view_ledger_tail.digest_with_bytes(nonce).to_bytes();
+      let signature = self.keypair.sign(&message);
+      Ok((self.view_ledger_tail.to_bytes(), signature))
+    }
+  }
+
+  pub fn append_view_ledger(
+    &mut self,
+    block_hash: &NimbleDigest,
+  ) -> Result<(Vec<u8>, Signature), EndorserError> {
+    // save the previous tail
+    let prev_tail = self.view_ledger_tail;
+    self.view_ledger_tail = self.view_ledger_tail.digest_with(block_hash);
+
+    let signature = self.keypair.sign(&self.view_ledger_tail.to_bytes());
+
+    Ok((prev_tail.to_bytes(), signature))
   }
 }
 
@@ -104,55 +145,78 @@ mod tests {
   #[test]
   pub fn check_endorser_new_ledger_and_get_tail() {
     let mut endorser_state = EndorserState::new();
-    // The coordinator sends the hashed contents of the block to the
-    let coordinator_handle = {
+
+    // The coordinator sends the hashed contents of the configuration to the endorsers
+    let view_ledger_block_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(!n.is_err(), "This should not have occured");
       n.unwrap()
     };
-    let res = endorser_state.new_ledger(&coordinator_handle);
+    let res = endorser_state.append_view_ledger(&view_ledger_block_hash);
+    assert!(res.is_ok());
+
+    // the tail hash of the view ledger after the append
+    let view = NimbleDigest::default().digest_with(&view_ledger_block_hash);
+
+    // The coordinator sends the hashed contents of the block to the endorsers
+    let handle = {
+      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let n = NimbleDigest::from_bytes(&t);
+      assert!(!n.is_err(), "This should not have occured");
+      n.unwrap()
+    };
+    let res = endorser_state.new_ledger(&handle);
     assert!(res.is_ok());
 
     let signature = res.unwrap();
-    let genesis_tail_hash = MetaBlock::genesis(&coordinator_handle).hash();
+    let genesis_tail_hash = MetaBlock::genesis(&view, &handle).hash();
     let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash.to_bytes());
     assert_eq!(signature, signature_expected);
 
     // Fetch the value currently in the tail.
-    let tail_result = endorser_state.read_latest(&coordinator_handle, &[0]);
+    let tail_result = endorser_state.read_latest(&handle, &[0]);
     assert!(tail_result.is_ok());
 
-    let (tail_hash_data, height, _signature) = tail_result.unwrap();
+    let (tail_hash, height, _signature) = tail_result.unwrap();
     assert_eq!(height, 0usize);
-    let tail_hash = NimbleDigest::from_bytes(&tail_hash_data).unwrap();
+    let tail_hash = NimbleDigest::from_bytes(&tail_hash).unwrap();
     assert_eq!(tail_hash, genesis_tail_hash);
   }
 
   #[test]
   pub fn check_endorser_append_ledger_tail() {
     let mut endorser_state = EndorserState::new();
+    // The coordinator sends the hashed contents of the configuration to the endorsers
+    let view_ledger_block_hash = {
+      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let n = NimbleDigest::from_bytes(&t);
+      assert!(!n.is_err(), "This should not have occured");
+      n.unwrap()
+    };
+    let res = endorser_state.append_view_ledger(&view_ledger_block_hash);
+    assert!(res.is_ok());
 
-    // The coordinator sends the hashed contents of the block to the
-    let coordinator_handle_data = rand::thread_rng().gen::<[u8; 32]>();
-    let coordinator_handle = NimbleDigest::from_bytes(&coordinator_handle_data).unwrap();
-    let create_ledger_endorser_response = endorser_state.new_ledger(&coordinator_handle);
+    // the tail hash of the view ledger after the append
+    let view = NimbleDigest::default().digest_with(&view_ledger_block_hash);
 
-    assert!(create_ledger_endorser_response.is_ok());
-    let _signature = create_ledger_endorser_response.unwrap();
+    // The coordinator sends the hashed contents of the block to the endorsers
+    let block = rand::thread_rng().gen::<[u8; 32]>();
+    let handle = NimbleDigest::from_bytes(&block).unwrap();
+    let res = endorser_state.new_ledger(&handle);
+    assert!(res.is_ok());
 
     // Fetch the value currently in the tail.
-    let nonce_data = rand::thread_rng().gen::<[u8; 16]>();
-    let (tail_result_data, height, _signature) = endorser_state
-      .read_latest(&coordinator_handle, &nonce_data)
-      .unwrap();
+    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let (tail_result_data, height, _signature) =
+      endorser_state.read_latest(&handle, &nonce).unwrap();
 
     let block_hash_to_append_data = rand::thread_rng().gen::<[u8; 32]>();
     let block_hash_to_append = NimbleDigest::from_bytes(&block_hash_to_append_data).unwrap();
     let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
 
     let (previous_tail_data, new_ledger_height, signature) = endorser_state
-      .append(&coordinator_handle, &block_hash_to_append)
+      .append(&handle, &block_hash_to_append)
       .unwrap();
 
     let previous_tail = NimbleDigest::from_bytes(&previous_tail_data).unwrap();
@@ -160,7 +224,12 @@ mod tests {
     assert_eq!(tail_result, previous_tail);
     assert_eq!(new_ledger_height, height + 1);
 
-    let metadata = MetaBlock::new(&previous_tail, &block_hash_to_append, new_ledger_height);
+    let metadata = MetaBlock::new(
+      &view,
+      &previous_tail,
+      &block_hash_to_append,
+      new_ledger_height,
+    );
 
     let endorser_tail_expectation = metadata.hash();
 
@@ -170,9 +239,8 @@ mod tests {
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
-      let (tail_result_data, _height, _signature) = endorser_state
-        .read_latest(&coordinator_handle, &[0])
-        .unwrap();
+      let (tail_result_data, _height, _signature) =
+        endorser_state.read_latest(&handle, &[0]).unwrap();
       let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
 
       assert_eq!(endorser_tail_expectation, tail_result);
