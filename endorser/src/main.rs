@@ -83,27 +83,17 @@ impl EndorserCall for EndorserServiceState {
   }
 
   async fn append(&self, req: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
-    let AppendReq {
-      handle,
-      block_hash,
-      cond_tail_hash,
-    } = req.into_inner();
+    let AppendReq { handle, block_hash } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
-    let cond_tail_hash_instance = NimbleDigest::from_bytes(&cond_tail_hash);
 
-    if handle_instance.is_err() || block_hash_instance.is_err() || cond_tail_hash_instance.is_err()
-    {
+    if handle_instance.is_err() || block_hash_instance.is_err() {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append(
-      &handle_instance.unwrap(),
-      &block_hash_instance.unwrap(),
-      &cond_tail_hash_instance.unwrap(),
-    );
+    let res = endorser_state.append(&handle_instance.unwrap(), &block_hash_instance.unwrap());
 
     match res {
       Ok((tail_hash, height, signature)) => {

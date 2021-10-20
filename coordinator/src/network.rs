@@ -67,13 +67,8 @@ impl EndorserConnection {
     &mut self,
     handle: Vec<u8>,
     block_hash: Vec<u8>,
-    cond_tail_hash: Vec<u8>,
   ) -> Result<(Vec<u8>, u64, Vec<u8>), Status> {
-    let req = tonic::Request::new(AppendReq {
-      handle,
-      block_hash,
-      cond_tail_hash,
-    });
+    let req = tonic::Request::new(AppendReq { handle, block_hash });
 
     let AppendResp {
       tail_hash,

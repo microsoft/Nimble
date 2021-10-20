@@ -39,7 +39,6 @@ message ReadLatestResp {
 message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
-  bytes cond_tail_hash = 3;  // Ideally optional
 }
 
 message AppendResp {

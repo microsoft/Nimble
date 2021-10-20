@@ -249,14 +249,33 @@ impl Call for CoordinatorState {
     let data_block = Block::new(&block);
     let hash_of_block = data_block.hash();
 
-    let cond_tail_hash_info = {
-      let d = NimbleDigest::from_bytes(&cond_tail_hash);
-      if d.is_err() {
-        return Err(Status::invalid_argument("Incorrect tail hash provided"));
+    // Compare the Conditional Tail Hash in CheckLatest()
+    {
+      let cond_tail_hash_info = {
+        let d = NimbleDigest::from_bytes(&cond_tail_hash);
+        if d.is_err() {
+          return Err(Status::invalid_argument("Incorrect tail hash provided"));
+        }
+        d.unwrap()
+      };
+
+      // we will perform the conditional hash check only if the provided tail is not the default
+      if cond_tail_hash_info != NimbleDigest::default() {
+        // read the current tail endorsed metablock from state
+        let res = self
+          .metadata
+          .read()
+          .expect("Failed to acquire lock on state")
+          .read_latest(&handle);
+        assert!(res.is_ok());
+
+        if cond_tail_hash_info != res.unwrap().get_metablock().hash() {
+          return Err(Status::invalid_argument(
+            "Incorrect/stale tail hash provided",
+          ));
+        }
       }
-      d.unwrap()
-    };
-    // TODO: Compare the Conditional Tail Hash in CheckLatest()
+    }
 
     // Write the block to the data store
     {
@@ -288,11 +307,7 @@ impl Call for CoordinatorState {
         (
           index,
           conn
-            .append(
-              handle.to_bytes(),
-              hash_of_block.to_bytes(),
-              cond_tail_hash_info.to_bytes(),
-            )
+            .append(handle.to_bytes(), hash_of_block.to_bytes())
             .await,
         )
       }));
