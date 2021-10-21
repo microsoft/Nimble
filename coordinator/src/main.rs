@@ -161,7 +161,7 @@ impl CoordinatorState {
 
     for resp in responses {
       let res = resp.await;
-      if let Ok((index, Ok((_tail_hash, sig)))) = res {
+      if let Ok((index, Ok(sig))) = res {
         receipt_bytes.push((index, sig))
       }
     }
@@ -361,9 +361,6 @@ impl Call for CoordinatorState {
       .get_all();
 
     let mut receipt = Vec::new();
-    let mut height: u64 = 0;
-    let mut prev_hash = NimbleDigest::default();
-
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
 
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
@@ -381,10 +378,7 @@ impl Call for CoordinatorState {
 
     for resp in responses {
       let endorser_append_op = resp.await;
-      if let Ok((index, Ok((tail_hash, height_data, signature)))) = endorser_append_op {
-        prev_hash = NimbleDigest::from_bytes(&tail_hash).unwrap();
-        height = height_data;
-        // TODO: Error Checking.
+      if let Ok((index, Ok(signature))) = endorser_append_op {
         receipt.push((index, signature));
       }
     }
@@ -405,7 +399,24 @@ impl Call for CoordinatorState {
       // view in the absence of reconfigurations; TODO: address the general case
       NimbleDigest::default().digest_with(&block.hash())
     };
-    let metablock = MetaBlock::new(&view, &prev_hash, &hash_of_block, height as usize);
+
+    let prev_metablock = {
+      let res = self
+        .metadata
+        .read()
+        .expect("Failed to acquire lock on state")
+        .read_latest(&handle);
+      assert!(res.is_ok());
+      let e_metablock = res.unwrap();
+      e_metablock.get_metablock().clone()
+    };
+
+    let metablock = MetaBlock::new(
+      &view,
+      &prev_metablock.hash(),
+      &hash_of_block,
+      prev_metablock.get_height() + 1,
+    );
     let receipt = ledger::Receipt::from_bytes(&receipt);
     let endorsed_metablock = EndorsedMetaBlock::new(&metablock, &receipt);
 
@@ -420,8 +431,8 @@ impl Call for CoordinatorState {
 
     let reply = AppendResp {
       view: view.to_bytes(),
-      prev: prev_hash.to_bytes(),
-      height,
+      prev: prev_metablock.hash().to_bytes(),
+      height: (prev_metablock.get_height() + 1) as u64,
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
     };
 

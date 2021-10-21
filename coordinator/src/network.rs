@@ -55,53 +55,34 @@ impl EndorserConnection {
       nonce: nonce.get(),
     });
 
-    let ReadLatestResp {
-      tail_hash: _,
-      height: _,
-      signature,
-    } = self.client.read_latest(req).await?.into_inner();
+    let ReadLatestResp { signature } = self.client.read_latest(req).await?.into_inner();
 
     Ok(signature)
   }
 
-  pub async fn append(
-    &mut self,
-    handle: Vec<u8>,
-    block_hash: Vec<u8>,
-  ) -> Result<(Vec<u8>, u64, Vec<u8>), Status> {
+  pub async fn append(&mut self, handle: Vec<u8>, block_hash: Vec<u8>) -> Result<Vec<u8>, Status> {
     let req = tonic::Request::new(AppendReq { handle, block_hash });
 
-    let AppendResp {
-      tail_hash,
-      height,
-      signature,
-    } = self.client.append(req).await?.into_inner();
+    let AppendResp { signature } = self.client.append(req).await?.into_inner();
 
-    Ok((tail_hash, height, signature))
+    Ok(signature)
   }
 
   pub async fn read_latest_view_ledger(&mut self, nonce: &Nonce) -> Result<Vec<u8>, Status> {
     let req = tonic::Request::new(ReadLatestViewLedgerReq { nonce: nonce.get() });
 
-    let ReadLatestViewLedgerResp {
-      tail_hash: _,
-      signature,
-    } = self.client.read_latest_view_ledger(req).await?.into_inner();
+    let ReadLatestViewLedgerResp { signature } =
+      self.client.read_latest_view_ledger(req).await?.into_inner();
 
     Ok(signature)
   }
 
-  pub async fn append_view_ledger(
-    &mut self,
-    block_hash: Vec<u8>,
-  ) -> Result<(Vec<u8>, Vec<u8>), Status> {
+  pub async fn append_view_ledger(&mut self, block_hash: Vec<u8>) -> Result<Vec<u8>, Status> {
     let req = tonic::Request::new(AppendViewLedgerReq { block_hash });
 
-    let AppendViewLedgerResp {
-      tail_hash,
-      signature,
-    } = self.client.append_view_ledger(req).await?.into_inner();
+    let AppendViewLedgerResp { signature } =
+      self.client.append_view_ledger(req).await?.into_inner();
 
-    Ok((tail_hash, signature))
+    Ok(signature)
   }
 }

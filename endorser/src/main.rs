@@ -98,10 +98,8 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser_state.append(&handle_instance.unwrap(), &block_hash_instance.unwrap());
 
     match res {
-      Ok((tail_hash, height, signature)) => {
+      Ok(signature) => {
         let reply = AppendResp {
-          tail_hash,
-          height: height as u64,
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -127,10 +125,8 @@ impl EndorserCall for EndorserServiceState {
     let res = latest_state.read_latest(&handle, &nonce);
 
     match res {
-      Ok((tail_hash, height, signature)) => {
+      Ok(signature) => {
         let reply = ReadLatestResp {
-          tail_hash,
-          height: height as u64,
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -155,9 +151,8 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser_state.append_view_ledger(&block_hash_instance.unwrap());
 
     match res {
-      Ok((tail_hash, signature)) => {
+      Ok(signature) => {
         let reply = AppendViewLedgerResp {
-          tail_hash,
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -176,9 +171,8 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser.read_latest_view_ledger(&nonce);
 
     match res {
-      Ok((tail_hash, signature)) => {
+      Ok(signature) => {
         let reply = ReadLatestViewLedgerResp {
-          tail_hash,
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))

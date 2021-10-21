@@ -50,14 +50,14 @@ impl EndorserState {
     &self,
     handle: &NimbleDigest,
     nonce: &[u8],
-  ) -> Result<(Vec<u8>, usize, Signature), EndorserError> {
+  ) -> Result<Signature, EndorserError> {
     if !self.ledger_tail_map.contains_key(handle) {
       Err(EndorserError::InvalidLedgerName)
     } else {
-      let (tail_hash, height) = self.ledger_tail_map.get(handle).unwrap(); //safe to unwrap here because of the check above
+      let (tail_hash, _height) = self.ledger_tail_map.get(handle).unwrap(); //safe to unwrap here because of the check above
       let message = tail_hash.digest_with_bytes(nonce).to_bytes();
       let signature = self.keypair.sign(&message);
-      Ok((tail_hash.to_bytes(), *height, signature))
+      Ok(signature)
     }
   }
 
@@ -65,7 +65,7 @@ impl EndorserState {
     &mut self,
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
-  ) -> Result<(Vec<u8>, usize, Signature), EndorserError> {
+  ) -> Result<Signature, EndorserError> {
     // check if the requested ledger exists in the state, if not return an error
     if !self.ledger_tail_map.contains_key(handle) {
       return Err(EndorserError::InvalidLedgerName);
@@ -94,37 +94,30 @@ impl EndorserState {
 
     let signature = self.keypair.sign(&tail_hash.to_bytes());
 
-    Ok((prev_tail.to_bytes(), *height, signature))
+    Ok(signature)
   }
 
   pub fn get_public_key(&self) -> PublicKey {
     self.keypair.public
   }
 
-  pub fn read_latest_view_ledger(
-    &self,
-    nonce: &[u8],
-  ) -> Result<(Vec<u8>, Signature), EndorserError> {
+  pub fn read_latest_view_ledger(&self, nonce: &[u8]) -> Result<Signature, EndorserError> {
     if self.view_ledger_tail == NimbleDigest::default() {
       Err(EndorserError::ViewLedgerNotInitialized)
     } else {
       let message = self.view_ledger_tail.digest_with_bytes(nonce).to_bytes();
       let signature = self.keypair.sign(&message);
-      Ok((self.view_ledger_tail.to_bytes(), signature))
+      Ok(signature)
     }
   }
 
   pub fn append_view_ledger(
     &mut self,
     block_hash: &NimbleDigest,
-  ) -> Result<(Vec<u8>, Signature), EndorserError> {
-    // save the previous tail
-    let prev_tail = self.view_ledger_tail;
+  ) -> Result<Signature, EndorserError> {
     self.view_ledger_tail = self.view_ledger_tail.digest_with(block_hash);
-
     let signature = self.keypair.sign(&self.view_ledger_tail.to_bytes());
-
-    Ok((prev_tail.to_bytes(), signature))
+    Ok(signature)
   }
 }
 
@@ -179,10 +172,9 @@ mod tests {
     let tail_result = endorser_state.read_latest(&handle, &[0]);
     assert!(tail_result.is_ok());
 
-    let (tail_hash, height, _signature) = tail_result.unwrap();
-    assert_eq!(height, 0usize);
-    let tail_hash = NimbleDigest::from_bytes(&tail_hash).unwrap();
-    assert_eq!(tail_hash, genesis_tail_hash);
+    let (tail_hash, height) = endorser_state.ledger_tail_map.get(&handle).unwrap();
+    assert_eq!(height, &0usize);
+    assert_eq!(tail_hash, &genesis_tail_hash);
   }
 
   #[test]
@@ -208,29 +200,32 @@ mod tests {
     assert!(res.is_ok());
 
     // Fetch the value currently in the tail.
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
-    let (tail_result_data, height, _signature) =
-      endorser_state.read_latest(&handle, &nonce).unwrap();
-
+    let (tail_result, height) = {
+      let res = endorser_state.ledger_tail_map.get(&handle).unwrap();
+      *res
+    };
     let block_hash_to_append_data = rand::thread_rng().gen::<[u8; 32]>();
     let block_hash_to_append = NimbleDigest::from_bytes(&block_hash_to_append_data).unwrap();
-    let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
+    //let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
 
-    let (previous_tail_data, new_ledger_height, signature) = endorser_state
-      .append(&handle, &block_hash_to_append)
-      .unwrap();
+    let prev_tail = {
+      let t = endorser_state.ledger_tail_map.get(&handle).unwrap();
+      t.0
+    };
+    let signature = {
+      endorser_state
+        .append(&handle, &block_hash_to_append)
+        .unwrap()
+    };
+    let new_ledger_height = {
+      let h = endorser_state.ledger_tail_map.get(&handle).unwrap();
+      h.1
+    };
 
-    let previous_tail = NimbleDigest::from_bytes(&previous_tail_data).unwrap();
-
-    assert_eq!(tail_result, previous_tail);
+    assert_eq!(tail_result, prev_tail);
     assert_eq!(new_ledger_height, height + 1);
 
-    let metadata = MetaBlock::new(
-      &view,
-      &previous_tail,
-      &block_hash_to_append,
-      new_ledger_height,
-    );
+    let metadata = MetaBlock::new(&view, &prev_tail, &block_hash_to_append, new_ledger_height);
 
     let endorser_tail_expectation = metadata.hash();
 
@@ -240,11 +235,8 @@ mod tests {
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
-      let (tail_result_data, _height, _signature) =
-        endorser_state.read_latest(&handle, &[0]).unwrap();
-      let tail_result = NimbleDigest::from_bytes(&tail_result_data).unwrap();
-
-      assert_eq!(endorser_tail_expectation, tail_result);
+      let (tail_result, _height) = endorser_state.ledger_tail_map.get(&handle).unwrap();
+      assert_eq!(&endorser_tail_expectation, tail_result);
     } else {
       panic!("Signature verification failed when it should not have failed");
     }

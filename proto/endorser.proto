@@ -33,9 +33,7 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes tail_hash = 1;
-  uint64 height = 2;
-  bytes signature = 3;
+  bytes signature = 1;
 }
 
 message AppendReq {
@@ -44,9 +42,7 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes tail_hash = 1;
-  uint64 height = 2;
-  bytes signature = 3;
+  bytes signature = 1;
 }
 
 message ReadLatestViewLedgerReq {
@@ -54,8 +50,7 @@ message ReadLatestViewLedgerReq {
 }
 
 message ReadLatestViewLedgerResp {
-  bytes tail_hash = 1;
-  bytes signature = 2;
+  bytes signature = 1;
 }
 
 message AppendViewLedgerReq {
@@ -63,6 +58,5 @@ message AppendViewLedgerReq {
 }
 
 message AppendViewLedgerResp {
-  bytes tail_hash = 1;
-  bytes signature = 2;
+  bytes signature = 1;
 }
