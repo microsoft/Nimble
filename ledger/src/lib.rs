@@ -248,6 +248,10 @@ impl MetaBlock {
   pub fn get_prev(&self) -> &NimbleDigest {
     &self.prev
   }
+
+  pub fn get_view(&self) -> &NimbleDigest {
+    &self.view
+  }
 }
 
 /// An `EndorsedMetaBlock` has two components: (1) a MetaBlock and (2) a set of signatures

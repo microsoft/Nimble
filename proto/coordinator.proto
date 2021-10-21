@@ -23,8 +23,9 @@ message NewLedgerReq {
 }
 
 message NewLedgerResp {
-  bytes block = 1;
-  Receipt receipt = 2;
+  bytes view = 1;
+  bytes block = 2;
+  Receipt receipt = 3;
 }
 
 message AppendReq {
@@ -34,9 +35,10 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes tail_hash = 1;
-  uint64 height = 2;
-  Receipt receipt = 3;
+  bytes view = 1;
+  bytes prev = 2;
+  uint64 height = 3;
+  Receipt receipt = 4;
 }
 
 message ReadLatestReq {
@@ -45,10 +47,11 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes block = 1;
-  bytes tail_hash = 2;
-  uint64 height = 3;
-  Receipt receipt = 4;
+  bytes view = 1;
+  bytes block = 2;
+  bytes prev = 3;
+  uint64 height = 4;
+  Receipt receipt = 5;
 }
 
 message ReadByIndexReq {
@@ -57,7 +60,8 @@ message ReadByIndexReq {
 }
 
 message ReadByIndexResp {
-  bytes block = 1;
-  bytes tail_hash = 2;
-  Receipt receipt = 3;
+  bytes view = 1;
+  bytes block = 2;
+  bytes prev = 3;
+  Receipt receipt = 4;
 }

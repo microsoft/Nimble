@@ -73,13 +73,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let request = tonic::Request::new(NewLedgerReq {
     nonce: client_nonce.to_vec(),
   });
-  let NewLedgerResp { block, receipt } = coordinator_connection
+  let NewLedgerResp {
+    view,
+    block,
+    receipt,
+  } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
   println!("NewLedger: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -92,8 +96,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadByIndexResp {
+    view,
     block,
-    tail_hash,
+    prev,
     receipt,
   } = coordinator_connection
     .client
@@ -101,7 +106,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(&vk, &block, &tail_hash, 0usize, &reformat_receipt(&receipt));
+  let res = verify_read_by_index(
+    &vk,
+    &view,
+    &block,
+    &prev,
+    0usize,
+    &reformat_receipt(&receipt),
+  );
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -113,8 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
+    view,
     block,
-    tail_hash,
+    prev,
     height,
     receipt,
   } = coordinator_connection
@@ -125,8 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let res = verify_read_latest(
     &vk,
+    &view,
     &block,
-    &tail_hash,
+    &prev,
     height as usize,
     &nonce.to_vec(),
     &reformat_receipt(&receipt),
@@ -138,20 +152,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert_eq!(block_data_verified, vec![]); // This is empty since the block is genesis.
 
   // Step 4: Append
-  let m1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
-  let m2: Vec<u8> = "data_block_example_2".as_bytes().to_vec();
-  let m3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
-  let messages = vec![&m1, &m2, &m3].to_vec();
+  let b1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
+  let b2: Vec<u8> = "data_block_example_2".as_bytes().to_vec();
+  let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
+  let blocks = vec![&b1, &b2, &b3].to_vec();
 
-  for message in messages {
+  for block_to_append in blocks {
     let req = tonic::Request::new(AppendReq {
       handle: handle.clone(),
-      block: message.to_vec(),
+      block: block_to_append.to_vec(),
       cond_tail_hash: last_known_tail.to_vec(),
     });
 
     let AppendResp {
-      tail_hash,
+      view,
+      prev,
       height,
       receipt,
     } = coordinator_connection
@@ -161,13 +176,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .into_inner();
 
     if last_known_tail != [0u8; 32] {
-      assert_eq!(tail_hash, last_known_tail);
+      assert_eq!(prev, last_known_tail);
     }
 
     let res = verify_append(
       &vk,
-      &message.to_vec(),
-      &tail_hash,
+      &view,
+      &block_to_append.to_vec(),
+      &prev,
       height as usize,
       &reformat_receipt(&receipt),
     );
@@ -184,8 +200,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
+    view,
     block,
-    tail_hash,
+    prev,
     height,
     receipt,
   } = coordinator_connection
@@ -193,12 +210,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .read_latest(latest_state_query)
     .await?
     .into_inner();
-  assert_eq!(block, m3.clone());
+  assert_eq!(block, b3.clone());
 
   let is_latest_valid = verify_read_latest(
     &vk,
+    &view,
     &block,
-    &tail_hash,
+    &prev,
     height as usize,
     &nonce.to_vec(),
     &reformat_receipt(&receipt),
@@ -210,7 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert!(is_latest_valid.is_ok());
   let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
   // Check the tail hash generation from the read_latest response
-  let conditional_tail_hash_expected = get_tail_hash(&vk, &block, &tail_hash, height as usize);
+  let conditional_tail_hash_expected = get_tail_hash(&view, &block, &prev, height as usize);
   assert!(conditional_tail_hash_expected.is_ok());
   assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
   assert_ne!(latest_block_verified, vec![]); // This should not be empty since the block is returned
@@ -222,17 +240,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadByIndexResp {
+    view,
     block,
-    tail_hash,
+    prev,
     receipt,
   } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
-  assert_eq!(block, m2.clone());
+  assert_eq!(block, b2.clone());
 
-  let res = verify_read_by_index(&vk, &block, &tail_hash, 2usize, &reformat_receipt(&receipt));
+  let res = verify_read_by_index(
+    &vk,
+    &view,
+    &block,
+    &prev,
+    2usize,
+    &reformat_receipt(&receipt),
+  );
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -245,7 +271,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let AppendResp {
-    tail_hash,
+    view,
+    prev,
     height,
     receipt,
   } = coordinator_connection
@@ -256,8 +283,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let res = verify_append(
     &vk,
+    &view,
     &message.to_vec(),
-    &tail_hash,
+    &prev,
     height as usize,
     &reformat_receipt(&receipt),
   );
@@ -272,8 +300,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
+    view,
     block,
-    tail_hash,
+    prev,
     height,
     receipt,
   } = coordinator_connection
@@ -285,8 +314,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let is_latest_valid = verify_read_latest(
     &vk,
+    &view,
     &block,
-    &tail_hash,
+    &prev,
     height as usize,
     &nonce.to_vec(),
     &reformat_receipt(&receipt),

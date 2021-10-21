@@ -291,6 +291,7 @@ impl Call for CoordinatorState {
     }
 
     let reply = NewLedgerResp {
+      view: view.to_bytes(),
       block: genesis_block.to_bytes(),
       receipt: Some(reformat_receipt(&receipt_bytes)),
     };
@@ -418,7 +419,8 @@ impl Call for CoordinatorState {
     }
 
     let reply = AppendResp {
-      tail_hash: prev_hash.to_bytes(),
+      view: view.to_bytes(),
+      prev: prev_hash.to_bytes(),
       height,
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
     };
@@ -508,8 +510,9 @@ impl Call for CoordinatorState {
     // 4. Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
     let reply = ReadLatestResp {
+      view: metadata.get_metablock().get_view().to_bytes(),
       block: block.to_bytes(),
-      tail_hash: metadata.get_metablock().get_prev().to_bytes(),
+      prev: metadata.get_metablock().get_prev().to_bytes(),
       height: metadata.get_metablock().get_height() as u64,
       receipt: Some(reformat_receipt(
         &ledger::Receipt::from_bytes(&receipt_bytes).to_bytes(),
@@ -548,11 +551,12 @@ impl Call for CoordinatorState {
       .unwrap(); // TODO: perform error handling
 
     // 2. Retrieve the information from the metadata structure.
-    let tail_hash = metadata.get_metablock().get_prev();
-
+    let prev = metadata.get_metablock().get_prev();
+    let view = metadata.get_metablock().get_view();
     let reply = ReadByIndexResp {
+      view: view.to_bytes(),
       block: block.to_bytes(),
-      tail_hash: tail_hash.to_bytes(),
+      prev: prev.to_bytes(),
       receipt: Some(reformat_receipt(&metadata.get_receipt().to_bytes())),
     };
 

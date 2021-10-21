@@ -57,6 +57,7 @@ impl VerificationKey {
 /// 2. A receipt
 /// 3. A nonce
 pub fn verify_new_ledger(
+  view_bytes: &[u8],
   block_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
   nonce: &[u8],
@@ -80,7 +81,17 @@ pub fn verify_new_ledger(
   }?;
 
   // produce a view hash using the current configuration
-  let view = vk.get_current_view();
+  let view = {
+    let res = NimbleDigest::from_bytes(view_bytes);
+    if res.is_err() {
+      return Err(VerificationError::InvalidView);
+    }
+    res.unwrap()
+  };
+
+  if view != vk.get_current_view() {
+    return Err(VerificationError::InvalidView);
+  }
 
   // compute a handle as hash of the block
   let handle = {
@@ -105,41 +116,63 @@ pub fn verify_new_ledger(
 }
 
 pub fn get_tail_hash(
-  vk: &VerificationKey,
+  view_bytes: &[u8],
   block_bytes: &[u8],
-  tail_hash_bytes: &[u8],
+  prev_bytes: &[u8],
   height: usize,
 ) -> Result<Vec<u8>, VerificationError> {
-  let block = Block::new(block_bytes);
-  let tail_hash = {
-    let res = NimbleDigest::from_bytes(tail_hash_bytes);
+  let view = {
+    let res = NimbleDigest::from_bytes(view_bytes);
     if res.is_err() {
       return Err(VerificationError::IncorrectLength);
     }
     res.unwrap()
   };
-  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block.hash(), height);
+  let block = Block::new(block_bytes);
+  let prev = {
+    let res = NimbleDigest::from_bytes(prev_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
+  let metablock = MetaBlock::new(&view, &prev, &block.hash(), height);
   Ok(metablock.hash().to_bytes())
 }
 
 pub fn verify_read_latest(
   vk: &VerificationKey,
+  view_bytes: &[u8],
   block_bytes: &[u8],
-  tail_hash_bytes: &[u8],
+  prev_bytes: &[u8],
   height: usize,
   nonce_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
   let block = Block::new(block_bytes);
 
-  // construct a tail hash from `tail_hash_bytes`
-  let res = NimbleDigest::from_bytes(tail_hash_bytes);
-  if res.is_err() {
-    return Err(VerificationError::IncorrectLength);
-  }
-  let tail_hash = res.unwrap();
+  // construct a tail hash from `prev_bytes`
+  let prev = {
+    let res = NimbleDigest::from_bytes(prev_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
 
-  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block.hash(), height);
+  let view = {
+    let res = NimbleDigest::from_bytes(view_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
+
+  if view != vk.get_current_view() {
+    return Err(VerificationError::InvalidView);
+  }
+
+  let metablock = MetaBlock::new(&view, &prev, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
   let hash_nonced_tail_hash_prime =
     NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
@@ -164,20 +197,33 @@ pub fn verify_read_latest(
 
 pub fn verify_read_by_index(
   vk: &VerificationKey,
+  view_bytes: &[u8],
   block_bytes: &[u8],
-  tail_hash_bytes: &[u8],
+  prev_bytes: &[u8],
   idx: usize,
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(), VerificationError> {
-  let block = Block::new(block_bytes);
-  let block_hash = block.hash();
-  let res = NimbleDigest::from_bytes(tail_hash_bytes);
-  if res.is_err() {
-    return Err(VerificationError::IncorrectLength);
-  }
-  let tail_hash = res.unwrap();
+  let block_hash = Block::new(block_bytes).hash();
+  let prev = {
+    let res = NimbleDigest::from_bytes(prev_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
+  let view = {
+    let res = NimbleDigest::from_bytes(view_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
 
-  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block_hash, idx);
+  if view != vk.get_current_view() {
+    return Err(VerificationError::InvalidView);
+  }
+
+  let metablock = MetaBlock::new(&view, &prev, &block_hash, idx);
   let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object
@@ -195,20 +241,33 @@ pub fn verify_read_by_index(
 
 pub fn verify_append(
   vk: &VerificationKey,
+  view_bytes: &[u8],
   block_bytes: &[u8],
-  tail_hash_bytes: &[u8],
+  prev: &[u8],
   height: usize,
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<Vec<u8>, VerificationError> {
-  let block = Block::new(block_bytes);
-  let block_hash = block.hash();
-  let res = NimbleDigest::from_bytes(tail_hash_bytes);
-  if res.is_err() {
-    return Err(VerificationError::IncorrectLength);
-  }
-  let tail_hash = res.unwrap();
+  let block_hash = Block::new(block_bytes).hash();
+  let prev = {
+    let res = NimbleDigest::from_bytes(prev);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
+  let view = {
+    let res = NimbleDigest::from_bytes(view_bytes);
+    if res.is_err() {
+      return Err(VerificationError::IncorrectLength);
+    }
+    res.unwrap()
+  };
 
-  let metablock = MetaBlock::new(&vk.get_current_view(), &tail_hash, &block_hash, height);
+  if view != vk.get_current_view() {
+    return Err(VerificationError::InvalidView);
+  }
+
+  let metablock = MetaBlock::new(&view, &prev, &block_hash, height);
   let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object
