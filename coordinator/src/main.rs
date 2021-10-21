@@ -139,8 +139,6 @@ impl CoordinatorState {
       Block::new(&endorser_pk_vec_bytes)
     };
 
-    let block_hash = genesis_block_view_ledger.hash();
-
     // (3) Store the genesis block of the view ledger in the data store
     let view_ledger_data = {
       let mut v = ViewLedgerData::new();
@@ -150,6 +148,7 @@ impl CoordinatorState {
     };
 
     // (4) Make a request to the endorsers for initializing the view ledger
+    let block_hash = genesis_block_view_ledger.hash();
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
@@ -274,7 +273,8 @@ impl Call for CoordinatorState {
         ));
       }
       let block = res.unwrap();
-      block.hash()
+      // view in the absence of reconfigurations; TODO: address the general case
+      NimbleDigest::default().digest_with(&block.hash())
     };
 
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -400,7 +400,9 @@ impl Call for CoordinatorState {
           "Internal server error, this should not have occured",
         ));
       }
-      res.unwrap().hash()
+      let block = res.unwrap();
+      // view in the absence of reconfigurations; TODO: address the general case
+      NimbleDigest::default().digest_with(&block.hash())
     };
     let metablock = MetaBlock::new(&view, &prev_hash, &hash_of_block, height as usize);
     let receipt = ledger::Receipt::from_bytes(&receipt);

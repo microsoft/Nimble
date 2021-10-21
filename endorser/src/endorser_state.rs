@@ -88,6 +88,7 @@ impl EndorserState {
 
     // save the previous tail
     let prev_tail = *tail_hash;
+
     let metablock = MetaBlock::new(&self.view_ledger_tail, &prev_tail, block_hash, *height);
     *tail_hash = metablock.hash();
 
