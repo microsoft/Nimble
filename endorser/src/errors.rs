@@ -6,6 +6,8 @@ pub enum EndorserError {
   LedgerExists,
   /// returned if the increment results in overflow of ledger height
   LedgerHeightOverflow,
-  /// returned if the view/membership ledger is not initialized
-  ViewLedgerNotInitialized,
+  /// returned if the state of the endorser is not initialized
+  NotInitialized,
+  /// returned if the state of the endorser is already initialized
+  AlreadyInitialized,
 }

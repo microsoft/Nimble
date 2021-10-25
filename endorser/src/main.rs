@@ -1,6 +1,7 @@
 use crate::endorser_state::EndorserState;
 use clap::{App, Arg};
 use ledger::NimbleDigest;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -15,8 +16,8 @@ pub mod endorser_proto {
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
-  GetPublicKeyResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
-  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
+  GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq, NewLedgerResp,
+  ReadLatestReq, ReadLatestResp, ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
 pub struct EndorserServiceState {
@@ -178,6 +179,48 @@ impl EndorserCall for EndorserServiceState {
         Ok(Response::new(reply))
       },
       Err(_) => Err(Status::aborted("Failed to process read_latest_view_ledger")),
+    }
+  }
+
+  async fn initialize_state(
+    &self,
+    req: Request<InitializeStateReq>,
+  ) -> Result<Response<InitializeStateResp>, Status> {
+    let InitializeStateReq {
+      ledger_tail_map,
+      view_ledger_tail,
+      view_ledger_height,
+    } = req.into_inner();
+    let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
+      .into_iter()
+      .map(|e| {
+        (
+          NimbleDigest::from_bytes(&e.handle).unwrap(),
+          (
+            NimbleDigest::from_bytes(&e.tail).unwrap(),
+            e.height as usize,
+          ),
+        )
+      })
+      .collect();
+    let view_ledger_tail_rs = (
+      NimbleDigest::from_bytes(&view_ledger_tail).unwrap(),
+      view_ledger_height as usize,
+    );
+    let res = self
+      .state
+      .write()
+      .expect("Failed to acquire write lock")
+      .initialize_state(&ledger_tail_map_rs, &view_ledger_tail_rs);
+
+    match res {
+      Ok(signature) => {
+        let reply = InitializeStateResp {
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(_) => Err(Status::aborted("Failed to endorse_state")),
     }
   }
 }
