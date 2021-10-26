@@ -1,6 +1,7 @@
 use crate::Handle;
 use ed25519_dalek::PublicKey;
-use ledger::Nonce;
+use ledger::{NimbleDigest, Nonce};
+use std::collections::HashMap;
 use std::error::Error;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Status;
@@ -12,8 +13,8 @@ pub mod endorser_proto {
 use endorser_proto::endorser_call_client::EndorserCallClient;
 use endorser_proto::{
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
-  GetPublicKeyResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
-  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
+  GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
 #[derive(Clone, Debug)]
@@ -39,6 +40,29 @@ impl EndorserConnection {
       client,
       pk: PublicKey::from_bytes(&pk).unwrap(),
     })
+  }
+
+  pub async fn initialize_state(
+    &mut self,
+    ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
+    view_ledger_tail: &(NimbleDigest, usize),
+  ) -> Result<Vec<u8>, Status> {
+    let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
+      .iter()
+      .map(|(handle, (tail, height))| LedgerTailMapEntry {
+        handle: handle.to_bytes(),
+        tail: tail.to_bytes(),
+        height: *height as u64,
+      })
+      .collect();
+
+    let req = tonic::Request::new(InitializeStateReq {
+      ledger_tail_map: ledger_tail_map_proto,
+      view_ledger_tail: view_ledger_tail.0.to_bytes(),
+      view_ledger_height: view_ledger_tail.1 as u64,
+    });
+    let InitializeStateResp { signature } = self.client.initialize_state(req).await?.into_inner();
+    Ok(signature)
   }
 
   pub async fn new_ledger(&mut self, handle: &Handle) -> Result<Vec<u8>, Status> {

@@ -28,7 +28,8 @@ use coordinator_proto::{
 type Handle = NimbleDigest;
 type DataStore = AppendOnlyStore<Handle, Block>;
 type MetadataStore = AppendOnlyStore<Handle, EndorsedMetaBlock>;
-type ViewLedgerData = AppendOnlyLedger<Block>;
+type ViewData = AppendOnlyLedger<Block>;
+type ViewMetadata = AppendOnlyLedger<EndorsedMetaBlock>;
 
 #[derive(Debug, Default)]
 pub struct ConnectionStore {
@@ -92,7 +93,8 @@ pub struct CoordinatorState {
   data: Arc<RwLock<DataStore>>,
   metadata: Arc<RwLock<MetadataStore>>,
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
-  view_ledger_data: Arc<RwLock<ViewLedgerData>>,
+  view_data: Arc<RwLock<ViewData>>,
+  //view_metadata: Arc<RwLock<ViewMetadata>>,
 }
 
 #[derive(Debug, Default)]
@@ -129,7 +131,7 @@ impl CoordinatorState {
     let (endorser_pk_vec, endorser_conn_vec) = connections.get_all();
 
     // (2) Package the list of endorsers into a genesis block of the view ledger
-    let genesis_block_view_ledger = {
+    let view_ledger_genesis_block = {
       let endorser_pk_vec_bytes = (0..endorser_pk_vec.len())
         .map(|i| endorser_pk_vec[i].to_bytes().to_vec())
         .collect::<Vec<Vec<u8>>>()
@@ -140,22 +142,28 @@ impl CoordinatorState {
     };
 
     // (3) Store the genesis block of the view ledger in the data store
-    let view_ledger_data = {
-      let mut v = ViewLedgerData::new();
-      let res = v.append(&genesis_block_view_ledger);
+    let view_data = {
+      let mut v = ViewData::new();
+      let res = v.append(&view_ledger_genesis_block);
       assert!(res.is_ok());
       v
     };
 
     // (4) Make a request to the endorsers for initializing the view ledger
-    let block_hash = genesis_block_view_ledger.hash();
+    let view_ledger_metablock =
+      MetaBlock::genesis(&NimbleDigest::default(), &view_ledger_genesis_block.hash());
+    let view_ledger_tail = view_ledger_metablock.hash();
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
-
       responses.push(tokio::spawn(async move {
-        (index, conn.append_view_ledger(block_hash.to_bytes()).await)
+        (
+          index,
+          conn
+            .initialize_state(&HashMap::new(), &(view_ledger_tail, 0usize))
+            .await,
+        )
       }));
     }
 
@@ -165,14 +173,22 @@ impl CoordinatorState {
         receipt_bytes.push((index, sig))
       }
     }
+    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
 
-    // (5) TODO: Store the returned responses in the metadata store
+    // (5) Store the returned responses in the metadata store
+    let _view_metadata = {
+      let mut v = ViewMetadata::new();
+      let res = v.append(&EndorsedMetaBlock::new(&view_ledger_metablock, &receipt));
+      assert!(res.is_ok());
+      v
+    };
 
     CoordinatorState {
       data: Arc::new(RwLock::new(DataStore::new())),
       metadata: Arc::new(RwLock::new(MetadataStore::new())),
       connections: Arc::new(RwLock::new(connections)),
-      view_ledger_data: Arc::new(RwLock::new(view_ledger_data)),
+      view_data: Arc::new(RwLock::new(view_data)),
+      //view_metadata: Arc::new(RwLock::new(view_metadata)),
     }
   }
 
@@ -262,7 +278,7 @@ impl Call for CoordinatorState {
     // Prepare an endorsed metadata block
     let view = {
       let res = self
-        .view_ledger_data
+        .view_data
         .read()
         .expect("Failed to acquire read lock on the metadata store")
         .read_latest();
@@ -385,7 +401,7 @@ impl Call for CoordinatorState {
 
     let view = {
       let res = self
-        .view_ledger_data
+        .view_data
         .read()
         .expect("Failed to acquire read lock on the metadata store")
         .read_latest();
