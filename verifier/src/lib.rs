@@ -39,15 +39,18 @@ impl VerificationKey {
   fn get_current_view(&self) -> NimbleDigest {
     // In the absence of reconfigurations, the view can be computed from the list of public keys.
     // For now, we use the public keys included in the genesis block to construct the view
-    let view_block_bytes = (0..self.pk_vec.len())
-      .map(|i| self.pk_vec[i].to_bytes().to_vec())
-      .collect::<Vec<Vec<u8>>>()
-      .into_iter()
-      .flatten()
-      .collect::<Vec<u8>>();
-
-    // the tail hash of the view ledger is the hash of the default NimbleDigest with the view block
-    NimbleDigest::default().digest_with(&NimbleDigest::digest(&view_block_bytes))
+    let view_ledger_genesis_block = {
+      let pk_vec_bytes = (0..self.pk_vec.len())
+        .map(|i| self.pk_vec[i].to_bytes().to_vec())
+        .collect::<Vec<Vec<u8>>>()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<u8>>();
+      Block::new(&pk_vec_bytes)
+    };
+    let view_ledger_metablock =
+      MetaBlock::genesis(&NimbleDigest::default(), &view_ledger_genesis_block.hash());
+    view_ledger_metablock.hash()
   }
 }
 

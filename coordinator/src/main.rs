@@ -93,8 +93,8 @@ pub struct CoordinatorState {
   data: Arc<RwLock<DataStore>>,
   metadata: Arc<RwLock<MetadataStore>>,
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
-  view_data: Arc<RwLock<ViewData>>,
-  //view_metadata: Arc<RwLock<ViewMetadata>>,
+  _view_data: Arc<RwLock<ViewData>>, // we will use this field when the coordinator exposes new APIs to read the view ledger
+  view_metadata: Arc<RwLock<ViewMetadata>>,
 }
 
 #[derive(Debug, Default)]
@@ -142,7 +142,7 @@ impl CoordinatorState {
     };
 
     // (3) Store the genesis block of the view ledger in the data store
-    let view_data = {
+    let _view_data = {
       let mut v = ViewData::new();
       let res = v.append(&view_ledger_genesis_block);
       assert!(res.is_ok());
@@ -176,7 +176,7 @@ impl CoordinatorState {
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
 
     // (5) Store the returned responses in the metadata store
-    let _view_metadata = {
+    let view_metadata = {
       let mut v = ViewMetadata::new();
       let res = v.append(&EndorsedMetaBlock::new(&view_ledger_metablock, &receipt));
       assert!(res.is_ok());
@@ -187,8 +187,8 @@ impl CoordinatorState {
       data: Arc::new(RwLock::new(DataStore::new())),
       metadata: Arc::new(RwLock::new(MetadataStore::new())),
       connections: Arc::new(RwLock::new(connections)),
-      view_data: Arc::new(RwLock::new(view_data)),
-      //view_metadata: Arc::new(RwLock::new(view_metadata)),
+      _view_data: Arc::new(RwLock::new(_view_data)),
+      view_metadata: Arc::new(RwLock::new(view_metadata)),
     }
   }
 
@@ -278,7 +278,7 @@ impl Call for CoordinatorState {
     // Prepare an endorsed metadata block
     let view = {
       let res = self
-        .view_data
+        .view_metadata
         .read()
         .expect("Failed to acquire read lock on the metadata store")
         .read_latest();
@@ -288,9 +288,8 @@ impl Call for CoordinatorState {
           "Internal server error, this should not have occured",
         ));
       }
-      let block = res.unwrap();
-      // view in the absence of reconfigurations; TODO: address the general case
-      NimbleDigest::default().digest_with(&block.hash())
+      let endorsed_metablock = res.unwrap();
+      endorsed_metablock.get_metablock().hash()
     };
 
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -401,7 +400,7 @@ impl Call for CoordinatorState {
 
     let view = {
       let res = self
-        .view_data
+        .view_metadata
         .read()
         .expect("Failed to acquire read lock on the metadata store")
         .read_latest();
@@ -411,9 +410,8 @@ impl Call for CoordinatorState {
           "Internal server error, this should not have occured",
         ));
       }
-      let block = res.unwrap();
-      // view in the absence of reconfigurations; TODO: address the general case
-      NimbleDigest::default().digest_with(&block.hash())
+      let endorsed_metablock = res.unwrap();
+      endorsed_metablock.get_metablock().hash()
     };
 
     let prev_metablock = {
