@@ -46,6 +46,7 @@ impl EndorserConnection {
     &mut self,
     ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
     view_ledger_tail: &(NimbleDigest, usize),
+    block_hash: &NimbleDigest,
   ) -> Result<Vec<u8>, Status> {
     let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
       .iter()
@@ -60,6 +61,7 @@ impl EndorserConnection {
       ledger_tail_map: ledger_tail_map_proto,
       view_ledger_tail: view_ledger_tail.0.to_bytes(),
       view_ledger_height: view_ledger_tail.1 as u64,
+      block_hash: block_hash.to_bytes(),
     });
     let InitializeStateResp { signature } = self.client.initialize_state(req).await?.into_inner();
     Ok(signature)

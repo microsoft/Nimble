@@ -76,6 +76,7 @@ message InitializeStateReq {
   repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
   bytes view_ledger_tail = 2; // the view ledger tail
   uint64 view_ledger_height = 3; // the view ledger height
+  bytes block_hash = 4; // the block hash of the latest block on the view ledger
 }
 
 message InitializeStateResp {

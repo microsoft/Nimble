@@ -150,18 +150,20 @@ impl CoordinatorState {
     };
 
     // (4) Make a request to the endorsers for initializing the view ledger
-    let view_ledger_metablock =
-      MetaBlock::genesis(&NimbleDigest::default(), &view_ledger_genesis_block.hash());
-    let view_ledger_tail = view_ledger_metablock.hash();
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
+    let view_ledger_block_hash = view_ledger_genesis_block.hash();
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
       responses.push(tokio::spawn(async move {
         (
           index,
           conn
-            .initialize_state(&HashMap::new(), &(view_ledger_tail, 0usize))
+            .initialize_state(
+              &HashMap::new(),
+              &(NimbleDigest::default(), 0usize),
+              &view_ledger_block_hash,
+            )
             .await,
         )
       }));
@@ -177,6 +179,13 @@ impl CoordinatorState {
 
     // (5) Store the returned responses in the metadata store
     let view_metadata = {
+      let view_ledger_metablock = MetaBlock::new(
+        &NimbleDigest::default(),
+        &NimbleDigest::default(),
+        &view_ledger_genesis_block.hash(),
+        1_usize,
+      );
+
       let mut v = ViewMetadata::new();
       let res = v.append(&EndorsedMetaBlock::new(&view_ledger_metablock, &receipt));
       assert!(res.is_ok());

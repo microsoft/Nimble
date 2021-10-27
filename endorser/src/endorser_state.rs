@@ -51,22 +51,28 @@ impl EndorserState {
   }
 
   fn produce_hash_of_state(&self) -> NimbleDigest {
-    let endorser_state_public = EndorserStatePublic {
-      ledger_tail_map: self
-        .ledger_tail_map
-        .iter()
-        .map(|(handle, (tail, height))| (handle.to_bytes(), (tail.to_bytes(), *height)))
-        .collect(),
-      view_ledger_tail: (self.view_ledger_tail.0.to_bytes(), self.view_ledger_tail.1),
-    };
-    let serialized_endorser_state_public = bincode::serialize(&endorser_state_public).unwrap();
-    NimbleDigest::digest(&serialized_endorser_state_public)
+    // for empty state, hash is a vector of zeros
+    if self.ledger_tail_map.is_empty() && self.view_ledger_tail == (NimbleDigest::default(), 0) {
+      NimbleDigest::default()
+    } else {
+      let endorser_state_public = EndorserStatePublic {
+        ledger_tail_map: self
+          .ledger_tail_map
+          .iter()
+          .map(|(handle, (tail, height))| (handle.to_bytes(), (tail.to_bytes(), *height)))
+          .collect(),
+        view_ledger_tail: (self.view_ledger_tail.0.to_bytes(), self.view_ledger_tail.1),
+      };
+      let serialized_endorser_state_public = bincode::serialize(&endorser_state_public).unwrap();
+      NimbleDigest::digest(&serialized_endorser_state_public)
+    }
   }
 
   pub fn initialize_state(
     &mut self,
     ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
     view_ledger_tail: &(NimbleDigest, usize),
+    block_hash: &NimbleDigest,
   ) -> Result<Signature, EndorserError> {
     if self.is_initialized {
       return Err(EndorserError::AlreadyInitialized);
@@ -75,9 +81,7 @@ impl EndorserState {
     self.view_ledger_tail = *view_ledger_tail;
     self.is_initialized = true;
 
-    let hash_of_state = self.produce_hash_of_state();
-    let signature = self.keypair.sign(&hash_of_state.to_bytes());
-    Ok(signature)
+    self.append_view_ledger(block_hash)
   }
 
   pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Signature, EndorserError> {
@@ -227,7 +231,7 @@ mod tests {
 
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
-    let view = {
+    let view_block_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(!n.is_err(), "This should not have occured");
@@ -235,8 +239,22 @@ mod tests {
     };
 
     // The coordinator initializes the endorser by calling initialize_state
-    let res = endorser_state.initialize_state(&HashMap::new(), &(view, 0usize));
+    let res = endorser_state.initialize_state(
+      &HashMap::new(),
+      &(NimbleDigest::default(), 0usize),
+      &view_block_hash,
+    );
     assert!(res.is_ok());
+
+    let view = {
+      let view_ledger_metablock = MetaBlock::new(
+        &NimbleDigest::default(),
+        &NimbleDigest::default(),
+        &view_block_hash,
+        1_usize,
+      );
+      view_ledger_metablock.hash()
+    };
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let handle = {
@@ -268,7 +286,7 @@ mod tests {
 
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
-    let view = {
+    let view_block_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(!n.is_err(), "This should not have occured");
@@ -276,8 +294,22 @@ mod tests {
     };
 
     // The coordinator initializes the endorser by calling initialize_state
-    let res = endorser_state.initialize_state(&HashMap::new(), &(view, 0usize));
+    let res = endorser_state.initialize_state(
+      &HashMap::new(),
+      &(NimbleDigest::default(), 0usize),
+      &view_block_hash,
+    );
     assert!(res.is_ok());
+
+    let view = {
+      let view_ledger_metablock = MetaBlock::new(
+        &NimbleDigest::default(),
+        &NimbleDigest::default(),
+        &view_block_hash,
+        1_usize,
+      );
+      view_ledger_metablock.hash()
+    };
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let block = rand::thread_rng().gen::<[u8; 32]>();

@@ -48,8 +48,12 @@ impl VerificationKey {
         .collect::<Vec<u8>>();
       Block::new(&pk_vec_bytes)
     };
-    let view_ledger_metablock =
-      MetaBlock::genesis(&NimbleDigest::default(), &view_ledger_genesis_block.hash());
+    let view_ledger_metablock = MetaBlock::new(
+      &NimbleDigest::default(),
+      &NimbleDigest::default(),
+      &view_ledger_genesis_block.hash(),
+      1_usize,
+    );
     view_ledger_metablock.hash()
   }
 }

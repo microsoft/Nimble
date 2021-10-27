@@ -190,6 +190,7 @@ impl EndorserCall for EndorserServiceState {
       ledger_tail_map,
       view_ledger_tail,
       view_ledger_height,
+      block_hash,
     } = req.into_inner();
     let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
       .into_iter()
@@ -207,11 +208,12 @@ impl EndorserCall for EndorserServiceState {
       NimbleDigest::from_bytes(&view_ledger_tail).unwrap(),
       view_ledger_height as usize,
     );
+    let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
     let res = self
       .state
       .write()
       .expect("Failed to acquire write lock")
-      .initialize_state(&ledger_tail_map_rs, &view_ledger_tail_rs);
+      .initialize_state(&ledger_tail_map_rs, &view_ledger_tail_rs, &block_hash_rs);
 
     match res {
       Ok(signature) => {
