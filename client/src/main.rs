@@ -68,10 +68,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     },
   };
 
-  // Step 1: NewLedger Request
+  // Step 0: Create a KeyPair and register the public key.
+  let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+  // Step 1: NewLedger Request (With Application Data Embedded)
   let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
   let request = tonic::Request::new(NewLedgerReq {
     nonce: client_nonce.to_vec(),
+    app_bytes: app_bytes.to_vec(),
   });
   let NewLedgerResp {
     view,
@@ -84,10 +88,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
-  println!("NewLedger: {:?}", res.is_ok());
+  println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (handle, vk) = res.unwrap();
+  let (_handle, _vk, ret_app_bytes) = res.unwrap();
+  assert_eq!(ret_app_bytes, app_bytes.to_vec());
+
+  // Step 1a. NewLedger Request with No Application Data Embedded
+  let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let request = tonic::Request::new(NewLedgerReq {
+    nonce: client_nonce.to_vec(),
+    app_bytes: vec![],
+  });
+  let NewLedgerResp {
+    view,
+    block,
+    receipt,
+  } = coordinator_connection
+    .client
+    .new_ledger(request)
+    .await?
+    .into_inner();
+
+  let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
+  println!("NewLedger (NoAppData) : {:?}", res.is_ok());
+  assert!(res.is_ok());
+
+  let (handle, vk, app_bytes) = res.unwrap();
+  assert_eq!(app_bytes.len(), 0);
 
   // Step 2: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {

@@ -232,6 +232,7 @@ impl Call for CoordinatorState {
   ) -> Result<Response<NewLedgerResp>, Status> {
     let NewLedgerReq {
       nonce: client_nonce,
+      app_bytes,
     } = req.into_inner();
     // Generate a Unique Value, this is the coordinator chosen nonce.
     let service_nonce = Uuid::new_v4().as_bytes().to_vec();
@@ -245,7 +246,7 @@ impl Call for CoordinatorState {
 
     // Package the contents into a Block
     let genesis_block = {
-      let genesis_op = Block::genesis(&endorser_pk_vec, &service_nonce, &client_nonce);
+      let genesis_op = Block::genesis(&endorser_pk_vec, &service_nonce, &client_nonce, &app_bytes);
       if genesis_op.is_err() {
         return Err(Status::aborted("Failed to create a genesis block"));
       }

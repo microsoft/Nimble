@@ -6,6 +6,8 @@ use ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 
 const PUBLIC_KEY_IN_BYTES: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 const NONCE_IN_BYTES: usize = 16;
+const NUM_ENDORSERS_IN_BYTES: usize = 1;
+const MIN_NUM_ENDORSERS: usize = 1;
 
 #[derive(Debug, Clone, Default)]
 pub struct VerificationKey {
@@ -15,21 +17,17 @@ pub struct VerificationKey {
 impl VerificationKey {
   fn from_bytes(pk_vec_bytes: &[u8]) -> Result<VerificationKey, VerificationError> {
     // parse the public keys into a vector and the code panics if a public key is invalid
-    let pk_vec = {
-      let res = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
-        .map(|i| {
-          PublicKey::from_bytes(
-            &pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES],
-          )
-        })
-        .collect::<Result<Vec<PublicKey>, SignatureError>>();
-      if res.is_err() {
-        return Err(VerificationError::InvalidGenesisBlock);
-      }
+    let res = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
+      .map(|i| {
+        PublicKey::from_bytes(&pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES])
+      })
+      .collect::<Result<Vec<PublicKey>, SignatureError>>();
 
-      res.unwrap()
-    };
-    Ok(VerificationKey { pk_vec })
+    if let Ok(pk_vec) = res {
+      Ok(VerificationKey { pk_vec })
+    } else {
+      Err(VerificationError::InvalidGenesisBlock)
+    }
   }
 
   pub fn get_public_keys(&self) -> &Vec<PublicKey> {
@@ -68,24 +66,50 @@ pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
   nonce: &[u8],
-) -> Result<(Vec<u8>, VerificationKey), VerificationError> {
-  let vk = {
+) -> Result<(Vec<u8>, VerificationKey, Vec<u8>), VerificationError> {
+  let (vk, app_bytes) = {
     // check there is at least one public key for an endorser
-    if block_bytes.len() < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES + NONCE_IN_BYTES)
-      || (block_bytes.len() - NONCE_IN_BYTES - NONCE_IN_BYTES) % PUBLIC_KEY_IN_BYTES != 0
+    if block_bytes.len()
+      < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES + NONCE_IN_BYTES + NUM_ENDORSERS_IN_BYTES)
     {
-      Err(VerificationError::InvalidGenesisBlock)
+      return Err(VerificationError::InvalidGenesisBlock);
     } else {
       // parse the genesis block and extract the endorser's public key to form a verification key
       // the first `NONCE_IN_BYTES` bytes are the service chosen nonce, followed by the client nonce,
-      // so the rest are a set of public keys.
+      // so the rest are a set of public keys and application-provided data
       let client_nonce = &block_bytes[NONCE_IN_BYTES..(NONCE_IN_BYTES + NONCE_IN_BYTES)];
       if client_nonce != nonce {
         return Err(VerificationError::InvalidGenesisBlock);
       }
-      VerificationKey::from_bytes(&block_bytes[(NONCE_IN_BYTES + NONCE_IN_BYTES)..])
+
+      // extract the public keys of endorsers as well as app data
+      let block_bytes_tail = &block_bytes[(NONCE_IN_BYTES + NONCE_IN_BYTES)..];
+      let (pk_vec_bytes, app_bytes) = {
+        let num_endorsers = block_bytes_tail[0] as usize;
+
+        if num_endorsers < MIN_NUM_ENDORSERS {
+          return Err(VerificationError::InvalidGenesisBlock);
+        }
+
+        if block_bytes_tail.len() < (num_endorsers * PUBLIC_KEY_IN_BYTES) + NUM_ENDORSERS_IN_BYTES {
+          return Err(VerificationError::InvalidGenesisBlock);
+        }
+
+        let pk_vec_bytes = &block_bytes_tail[1..(1 + num_endorsers * PUBLIC_KEY_IN_BYTES)];
+        let app_bytes = if block_bytes_tail.len()
+          > (num_endorsers * PUBLIC_KEY_IN_BYTES) + NUM_ENDORSERS_IN_BYTES
+        {
+          block_bytes_tail[(1 + num_endorsers * PUBLIC_KEY_IN_BYTES)..].to_vec()
+        } else {
+          vec![]
+        };
+
+        (pk_vec_bytes, app_bytes)
+      };
+
+      (VerificationKey::from_bytes(pk_vec_bytes)?, app_bytes)
     }
-  }?;
+  };
 
   // produce a view hash using the current configuration
   let view = {
@@ -118,7 +142,7 @@ pub fn verify_new_ledger(
   if res.is_err() {
     Err(VerificationError::InvalidGenesisBlock)
   } else {
-    Ok((handle.to_bytes(), vk))
+    Ok((handle.to_bytes(), vk, app_bytes))
   }
 }
 

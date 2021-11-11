@@ -183,6 +183,7 @@ impl Block {
     pk_vec: &[PublicKey],
     service_nonce_bytes: &[u8],
     client_nonce_bytes: &[u8],
+    app_bytes: &[u8],
   ) -> Result<Self, VerificationError> {
     let (nonce, client_nonce) = {
       let nonce_res = Nonce::new(service_nonce_bytes);
@@ -197,7 +198,13 @@ impl Block {
       .collect::<Vec<Vec<u8>>>();
 
     Ok(Block {
-      block: concat(vec![nonce.get(), client_nonce.get(), concat(pk_vec_bytes)]),
+      block: concat(vec![
+        nonce.get(),
+        client_nonce.get(),
+        vec![pk_vec.len() as u8],
+        concat(pk_vec_bytes),
+        app_bytes.to_vec(),
+      ]),
     })
   }
 }

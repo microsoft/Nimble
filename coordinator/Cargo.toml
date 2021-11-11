@@ -9,8 +9,8 @@ authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-su
 [dependencies]
 ledger = { path = "../ledger" }
 ed25519-dalek = "1"
-tonic = "0.5"
-prost = "0.8"
+tonic = "0.5.0"
+prost = "0.8.0"
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 clap = "2.33"
