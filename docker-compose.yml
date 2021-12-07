@@ -6,7 +6,7 @@ networks:
 services:
   endorser-1:
     build: .
-    command: cargo run --bin endorser -- 9090 0.0.0.0
+    command: ./endorser -- 9090 0.0.0.0
     volumes:
     - .:/Nimble/Nimble
     ports:
@@ -17,7 +17,7 @@ services:
 
   endorser-2:
     build: .
-    command: cargo run --bin endorser -- 9091 0.0.0.0
+    command: ./endorser -- 9091 0.0.0.0
     volumes:
     - .:/Nimble/Nimble
     ports:
@@ -28,7 +28,7 @@ services:
 
   endorser-3:
     build: .
-    command: cargo run --bin endorser -- 9092 0.0.0.0
+    command: ./endorser -- 9092 0.0.0.0
     volumes:
     - .:/Nimble/Nimble
     ports:
@@ -39,7 +39,7 @@ services:
 
   endorser-4:
     build: .
-    command: cargo run --bin endorser -- 9093 0.0.0.0
+    command: ./endorser -- 9093 0.0.0.0
     volumes:
     - .:/Nimble/Nimble
     ports:
@@ -50,7 +50,7 @@ services:
 
   endorser-5:
     build: .
-    command: cargo run --bin endorser -- 9094 0.0.0.0
+    command: ./endorser -- 9094 0.0.0.0
     volumes:
     - .:/Nimble/Nimble
     ports:
@@ -61,7 +61,7 @@ services:
 
   coordinator:
     build: .
-    command: cargo run --bin coordinator -- 8080 0.0.0.0 -e "http://endorser-1:9090,http://endorser-2:9091,http://endorser-3:9092,http://endorser-4:9093,http://endorser-5:9094"
+    command: ./coordinator 8080 0.0.0.0 -e "http://endorser-1:9090,http://endorser-2:9091,http://endorser-3:9092,http://endorser-4:9093,http://endorser-5:9094"
     volumes:
       - .:/Nimble/Nimble
     ports:

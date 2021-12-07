@@ -39,7 +39,7 @@ The `Nimble` project contains three components:
 The image containing the three binaries above can be constructed by running the following command:
 
 ```shell
-$ docker build .
+$ docker build . -t nimble:dev_latest
 ```
 
 We use `docker-compose` to set up a network containing 5 endorsers, a client, and a coordinator.
@@ -69,30 +69,15 @@ The services can be selectively spun up by passing the service name to the
 $ docker-compose run client
 ```
 
-To start a shell in the `client` docker instance, first find the name of the container by running
+The above command enables an interactive shell with the client on the same network as the endorsers and coordinator.
+
+To execute the client, and run the standard test suite execute the following in the container's interactive shell:
 
 ```shell
-$ docker ps
-
-CONTAINER ID   IMAGE          COMMAND                  CREATED             STATUS              PORTS     NAMES
-f25f3d14abfa   5b1278c85080   "/bin/bash"              About an hour ago   Up About a minute             client
-```
-
-and use the container ID (`f25f3d14abfa` in this case) to start a shell by running:
-
-```shell
-$ docker exec -it f25f3d14abfa "/bin/bash"
-```
-
-Then run the following `cargo run` command in the shell to start
-a test protocol sequence.
-
-```
-root@f25f3d14abfa:/Nimble# cargo run --bin client -- http://coordinator:8080
+# ./client http://coordinator:8080
 ```
 
 Note:
 > The coordinator takes arguments for endorser services `-e` delimited by `,`.
 > The default connection for the 5 node endorser network needed for the coordinator
 > is passed as an argument in the service configuration of the docker-compose file.
-
