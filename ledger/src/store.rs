@@ -80,41 +80,6 @@ where
   }
 }
 
-#[derive(Debug, Default)]
-pub struct AppendOnlyLedger<V> {
-  v: Vec<V>,
-}
-
-impl<V> AppendOnlyLedger<V>
-where
-  V: Clone,
-{
-  pub fn new() -> Self {
-    AppendOnlyLedger { v: Vec::new() }
-  }
-
-  pub fn append(&mut self, val: &V) -> Result<(), StorageError> {
-    self.v.push(val.clone());
-    Ok(())
-  }
-
-  pub fn read_latest(&self) -> Result<V, StorageError> {
-    if self.v.is_empty() {
-      Err(StorageError::InvalidIndex)
-    } else {
-      Ok(self.v[self.v.len() - 1].clone())
-    }
-  }
-
-  pub fn read_by_index(&self, idx: usize) -> Result<V, StorageError> {
-    if idx < self.v.len() {
-      Ok(self.v[idx].clone())
-    } else {
-      Err(StorageError::InvalidIndex)
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use crate::store::AppendOnlyStore;

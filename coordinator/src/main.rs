@@ -4,7 +4,7 @@ mod network;
 use crate::errors::CoordinatorError;
 use crate::network::EndorserConnection;
 use ed25519_dalek::PublicKey;
-use ledger::store::{AppendOnlyLedger, AppendOnlyStore};
+use ledger::store::AppendOnlyStore;
 use ledger::{
   Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
 };
@@ -28,8 +28,6 @@ use coordinator_proto::{
 type Handle = NimbleDigest;
 type DataStore = AppendOnlyStore<Handle, Block>;
 type MetadataStore = AppendOnlyStore<Handle, EndorsedMetaBlock>;
-type ViewData = AppendOnlyLedger<Block>;
-type ViewMetadata = AppendOnlyLedger<EndorsedMetaBlock>;
 
 #[derive(Debug, Default)]
 pub struct ConnectionStore {
@@ -93,8 +91,6 @@ pub struct CoordinatorState {
   data: Arc<RwLock<DataStore>>,
   metadata: Arc<RwLock<MetadataStore>>,
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
-  _view_data: Arc<RwLock<ViewData>>, // we will use this field when the coordinator exposes new APIs to read the view ledger
-  view_metadata: Arc<RwLock<ViewMetadata>>,
 }
 
 #[derive(Debug, Default)]
@@ -142,9 +138,10 @@ impl CoordinatorState {
     };
 
     // (3) Store the genesis block of the view ledger in the data store
-    let _view_data = {
-      let mut v = ViewData::new();
-      let res = v.append(&view_ledger_genesis_block);
+    // We will use NimbleDigest::default() as the handle for the view ledger
+    let data_store = {
+      let mut v = DataStore::new();
+      let res = v.insert(&NimbleDigest::default(), &view_ledger_genesis_block);
       assert!(res.is_ok());
       v
     };
@@ -178,7 +175,8 @@ impl CoordinatorState {
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
 
     // (5) Store the returned responses in the metadata store
-    let view_metadata = {
+    // We will use NimbleDigest::default() as the handle for the view ledger
+    let metadata_store = {
       let view_ledger_metablock = MetaBlock::new(
         &NimbleDigest::default(),
         &NimbleDigest::default(),
@@ -186,18 +184,19 @@ impl CoordinatorState {
         1_usize,
       );
 
-      let mut v = ViewMetadata::new();
-      let res = v.append(&EndorsedMetaBlock::new(&view_ledger_metablock, &receipt));
+      let mut v = MetadataStore::new();
+      let res = v.insert(
+        &NimbleDigest::default(),
+        &EndorsedMetaBlock::new(&view_ledger_metablock, &receipt),
+      );
       assert!(res.is_ok());
       v
     };
 
     CoordinatorState {
-      data: Arc::new(RwLock::new(DataStore::new())),
-      metadata: Arc::new(RwLock::new(MetadataStore::new())),
+      data: Arc::new(RwLock::new(data_store)),
+      metadata: Arc::new(RwLock::new(metadata_store)),
       connections: Arc::new(RwLock::new(connections)),
-      _view_data: Arc::new(RwLock::new(_view_data)),
-      view_metadata: Arc::new(RwLock::new(view_metadata)),
     }
   }
 
@@ -285,13 +284,13 @@ impl Call for CoordinatorState {
       }
     }
 
-    // Prepare an endorsed metadata block
+    // Prepare an endorsed metadata block for the view ledger
     let view = {
       let res = self
-        .view_metadata
+        .metadata
         .read()
         .expect("Failed to acquire read lock on the metadata store")
-        .read_latest();
+        .read_latest(&NimbleDigest::default());
 
       if res.is_err() {
         return Err(Status::invalid_argument(
@@ -410,10 +409,10 @@ impl Call for CoordinatorState {
 
     let view = {
       let res = self
-        .view_metadata
+        .metadata
         .read()
         .expect("Failed to acquire read lock on the metadata store")
-        .read_latest();
+        .read_latest(&NimbleDigest::default());
 
       if res.is_err() {
         return Err(Status::invalid_argument(
