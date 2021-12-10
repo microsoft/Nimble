@@ -104,7 +104,7 @@ impl CoordinatorState {
     for hostname in hostnames {
       let conn = EndorserConnection::new(hostname.to_string()).await;
       assert!(
-        !conn.is_err(),
+        conn.is_ok(),
         "Unable to connect to an endorser service at {:?} with err: {:?}",
         hostname.to_string(),
         conn
@@ -115,7 +115,7 @@ impl CoordinatorState {
       let pk = conn.get_public_key().unwrap();
       let res = connections.insert(&pk.to_bytes().to_vec(), &conn);
       assert!(
-        !res.is_err(),
+        res.is_ok(),
         "Error inserting the public key of {:?} into a map",
         hostname.to_string()
       );

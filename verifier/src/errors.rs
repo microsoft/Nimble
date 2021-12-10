@@ -16,4 +16,6 @@ pub enum VerificationError {
   DuplicateIds,
   /// returned if the supplied view is not well formed
   InvalidView,
+  /// returned if the number of provided receipts is zero
+  InsufficientReceipts,
 }

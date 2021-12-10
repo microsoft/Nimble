@@ -67,6 +67,10 @@ pub fn verify_new_ledger(
   receipt_bytes: &[(usize, Vec<u8>)],
   nonce: &[u8],
 ) -> Result<(Vec<u8>, VerificationKey, Vec<u8>), VerificationError> {
+  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+    return Err(VerificationError::InsufficientReceipts);
+  }
+
   let (vk, app_bytes) = {
     // check there is at least one public key for an endorser
     if block_bytes.len()
@@ -180,6 +184,10 @@ pub fn verify_read_latest(
   nonce_bytes: &[u8],
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
+  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+    return Err(VerificationError::InsufficientReceipts);
+  }
+
   let block = Block::new(block_bytes);
 
   // construct a tail hash from `prev_bytes`
@@ -234,6 +242,10 @@ pub fn verify_read_by_index(
   idx: usize,
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<(), VerificationError> {
+  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+    return Err(VerificationError::InsufficientReceipts);
+  }
+
   let block_hash = Block::new(block_bytes).hash();
   let prev = {
     let res = NimbleDigest::from_bytes(prev_bytes);
@@ -278,6 +290,10 @@ pub fn verify_append(
   height: usize,
   receipt_bytes: &[(usize, Vec<u8>)],
 ) -> Result<Vec<u8>, VerificationError> {
+  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+    return Err(VerificationError::InsufficientReceipts);
+  }
+
   let block_hash = Block::new(block_bytes).hash();
   let prev = {
     let res = NimbleDigest::from_bytes(prev);

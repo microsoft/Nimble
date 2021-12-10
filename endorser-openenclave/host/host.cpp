@@ -8,6 +8,7 @@
 #include "endorser.grpc.pb.h"
 
 using namespace std;
+using namespace ::google::protobuf;
 using grpc::Server;
 using grpc::ServerContext;
 using grpc::Status;
@@ -17,12 +18,19 @@ using grpc::ServerBuilder;
 using endorser_proto::EndorserCall;
 using endorser_proto::GetPublicKeyReq;
 using endorser_proto::GetPublicKeyResp;
+using endorser_proto::InitializeStateReq;
+using endorser_proto::InitializeStateResp;
 using endorser_proto::NewLedgerReq;
 using endorser_proto::NewLedgerResp;
 using endorser_proto::ReadLatestReq;
 using endorser_proto::ReadLatestResp;
 using endorser_proto::AppendReq;
 using endorser_proto::AppendResp;
+using endorser_proto::ReadLatestViewLedgerReq;
+using endorser_proto::ReadLatestViewLedgerResp;
+using endorser_proto::AppendViewLedgerReq;
+using endorser_proto::AppendViewLedgerResp;
+using endorser_proto::LedgerTailMapEntry;
 
 void print_hex(unsigned char* d, unsigned int len) {
   printf("0x");
@@ -61,6 +69,48 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave call return error");
         }
         reply->set_pk(reinterpret_cast<const char*>(eid.pk), PUBLIC_KEY_SIZE_IN_BYTES);
+        return Status::OK;
+    }
+
+    Status InitializeState(ServerContext *context, const InitializeStateReq* request, InitializeStateResp* reply) override {
+        RepeatedPtrField<LedgerTailMapEntry> l_t_m = request->ledger_tail_map();
+        string t = request->view_ledger_tail();
+        unsigned long long h = request->view_ledger_height();
+        string b_h = request->block_hash();
+        if (t.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+          return Status(StatusCode::INVALID_ARGUMENT, "one or both of view ledger tail and block hash are invalid");
+        }
+
+        auto num_entries = l_t_m.size();
+        ledger_tail_map_entry_t ledger_tail_map[num_entries];
+        int i = 0;
+        for (auto it = l_t_m.begin(); it != l_t_m.end(); it++) {
+          memcpy(ledger_tail_map[i].handle.v, it->handle().c_str(), HASH_VALUE_SIZE_IN_BYTES);
+          memcpy(ledger_tail_map[i].tail.v, it->tail().c_str(), HASH_VALUE_SIZE_IN_BYTES);
+          ledger_tail_map[i].height = it->height();
+          i++;
+        }
+
+        init_endorser_data_t state;
+        state.ledger_tail_map_size = num_entries;
+        state.ledger_tail_map = ledger_tail_map;
+        memcpy(state.view_ledger_tail.v, t.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        state.view_ledger_height = h;
+        memcpy(state.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+
+        int ret = 0;
+        oe_result_t result;
+        
+        signature_t signature;
+        result = initialize_state(enclave, &ret, &state, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to initialize_state returned error");
+        }
+
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
 
@@ -106,10 +156,8 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
 
         // Response data
-        digest_t tail;
-        height_t height;
         signature_t signature;
-        result = read_latest(enclave, &ret, &handle, &nonce, &tail, &height, &signature);
+        result = read_latest(enclave, &ret, &handle, &nonce, &signature);
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }
@@ -117,8 +165,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave call to read_latest returned error");
         }
 
-        reply->set_tail_hash(reinterpret_cast<const char*>(tail.v), HASH_VALUE_SIZE_IN_BYTES);
-        reply->set_height((uint64_t)height.h);
         reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
@@ -126,29 +172,24 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status Append(ServerContext *context, const AppendReq* request, AppendResp* reply) override {
         string h = request->handle();
         string b_h = request->block_hash();
-        string t_h = request->cond_tail_hash();
 
-        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES || t_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
         }
 
         // Request data
         handle_t handle;
         digest_t block_hash;
-        digest_t cond_tail_hash;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        memcpy(cond_tail_hash.v, t_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
 
         // OE Prepare
         int ret = 0;
         oe_result_t result;
 
         // Response data
-        digest_t prev_tail;
-        height_t height;
         signature_t signature;
-        result = append(enclave, &ret, &handle, &block_hash, &cond_tail_hash, &prev_tail, &height, &signature);
+        result = append(enclave, &ret, &handle, &block_hash, &signature);
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }
@@ -156,8 +197,60 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave call to append returned error");
         }
 
-        reply->set_tail_hash(reinterpret_cast<const char*>(prev_tail.v), HASH_VALUE_SIZE_IN_BYTES);
-        reply->set_height((uint64_t)height.h);
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        return Status::OK;
+    }
+
+    Status ReadLatestViewLedger(ServerContext *context, const ReadLatestViewLedgerReq* request, ReadLatestViewLedgerResp* reply) override {
+        string n = request->nonce();
+        if (n.size() != NONCE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "nonce size is invalid");
+        }
+        int ret = 0;
+        oe_result_t result;
+        // Request data
+        nonce_t nonce;
+        memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
+
+        // Response data
+        signature_t signature;
+        result = read_latest_view_ledger(enclave, &ret, &nonce, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to read_latest returned error");
+        }
+
+        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        return Status::OK;
+    }
+
+    Status AppendViewLedger(ServerContext *context, const AppendViewLedgerReq* request, AppendViewLedgerResp* reply) override {
+        string b_h = request->block_hash();
+
+        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
+        }
+
+        // Request data
+        digest_t block_hash;
+        memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+
+        // OE Prepare
+        int ret = 0;
+        oe_result_t result;
+
+        // Response data
+        signature_t signature;
+        result = append_view_ledger(enclave, &ret, &block_hash, &signature);
+        if (result != OE_OK) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+        }
+        if (ret != 0) {
+            return Status(StatusCode::FAILED_PRECONDITION, "enclave call to append returned error");
+        }
+
         reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
         return Status::OK;
     }
@@ -204,7 +297,6 @@ int main(int argc, const char *argv[]) {
 
   cout << "Host: PK of the endorser is: 0x";
   print_hex(endorser_id.pk, PUBLIC_KEY_SIZE_IN_BYTES);
-  cout << endl;
 
   // Call get_public_key
   endorser_id_t get_id_info;
@@ -235,5 +327,4 @@ exit:
   cout << "Host: Endorser completed successfully." << endl;
   oe_terminate_enclave(enclave);
   return ret;
-
 }

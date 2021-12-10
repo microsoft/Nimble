@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     },
   };
 
-  // Step 0: Create a KeyPair and register the public key.
+  // Step 0: Create some app data
   let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
   // Step 1: NewLedger Request (With Application Data Embedded)

@@ -5,9 +5,12 @@ package endorser_proto;
 service EndorserCall {
   // Protocol Endpoints
   rpc GetPublicKey(GetPublicKeyReq) returns (GetPublicKeyResp);
+  rpc InitializeState(InitializeStateReq) returns (InitializeStateResp);
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
+  rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
+  rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
 }
 
 message GetPublicKeyReq {
@@ -31,19 +34,51 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes tail_hash = 1;
-  uint64 height = 2;
-  bytes signature = 3;
+  bytes signature = 1;
 }
 
 message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
-  bytes cond_tail_hash = 3;  // Ideally optional
 }
 
 message AppendResp {
-  bytes tail_hash = 1;
-  uint64 height = 2;
-  bytes signature = 3;
+  bytes signature = 1;
+}
+
+message ReadLatestViewLedgerReq {
+  bytes nonce = 1;
+}
+
+message ReadLatestViewLedgerResp {
+  bytes signature = 1;
+}
+
+message AppendViewLedgerReq {
+  bytes block_hash = 1;
+}
+
+message AppendViewLedgerResp {
+  bytes signature = 1;
+}
+
+message LedgerTailMapEntry {
+  bytes handle = 1;
+  bytes tail = 2;
+  uint64 height = 3;
+}
+
+// protobuf supports maps (https://developers.google.com/protocol-buffers/docs/proto#maps), 
+// but it does not allow using bytes as keys in the map
+// gRPC messages are limited to 4 MB, which allows about 50+K entries. 
+// In the future, we can either increase the limit on gRPC messages or switch to gRPC streaming 
+message InitializeStateReq {
+  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
+  bytes view_ledger_tail = 2; // the view ledger tail
+  uint64 view_ledger_height = 3; // the view ledger height
+  bytes block_hash = 4; // the block hash of the latest block on the view ledger
+}
+
+message InitializeStateResp {
+  bytes signature = 1;
 }

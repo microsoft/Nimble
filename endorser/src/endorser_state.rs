@@ -234,7 +234,7 @@ mod tests {
     let view_block_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      assert!(!n.is_err(), "This should not have occured");
+      assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
 
@@ -260,7 +260,7 @@ mod tests {
     let handle = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      assert!(!n.is_err(), "This should not have occured");
+      assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
     let res = endorser_state.new_ledger(&handle);
@@ -289,7 +289,7 @@ mod tests {
     let view_block_hash = {
       let t = rand::thread_rng().gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
-      assert!(!n.is_err(), "This should not have occured");
+      assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
 

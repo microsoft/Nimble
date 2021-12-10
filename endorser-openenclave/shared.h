@@ -26,6 +26,7 @@ typedef struct _digest {
 } digest_t;
 
 typedef struct _meta_block {
+  unsigned char view[HASH_VALUE_SIZE_IN_BYTES];
   unsigned char prev[HASH_VALUE_SIZE_IN_BYTES];
   unsigned char cur[HASH_VALUE_SIZE_IN_BYTES];
   unsigned long long height;
@@ -38,5 +39,20 @@ typedef struct _nonce {
 typedef struct _signature {
   unsigned char v[SIGNATURE_SIZE_IN_BYTES];
 } signature_t;
+
+typedef struct _ledger_tail_map_entry {
+  handle_t handle;
+  digest_t tail;
+  unsigned long long height;
+} ledger_tail_map_entry_t;
+
+typedef struct _init_endorser_data {
+  unsigned long long ledger_tail_map_size;
+  ledger_tail_map_entry_t *ledger_tail_map;
+  
+  digest_t view_ledger_tail;
+  unsigned long long view_ledger_height;
+  digest_t block_hash;
+ } init_endorser_data_t;
 
 #endif /* _SHARED_H */
