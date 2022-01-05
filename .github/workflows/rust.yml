@@ -8,11 +8,13 @@ on:
 
 jobs:
   build:
+    env:
+      RUST_VERSION: nightly-2021-12-15
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: Install
-      run: rustup default nightly
+      run: rustup install ${{ env.RUST_VERSION }} && rustup default ${{ env.RUST_VERSION }}
     - name: Install rustfmt Components
       run: rustup component add rustfmt
     - name: Install clippy
