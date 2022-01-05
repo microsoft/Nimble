@@ -30,7 +30,7 @@ impl EndorserConnection {
 
   pub async fn new(uri: String) -> Result<Self, Box<dyn Error>> {
     let endorser_endpoint = Endpoint::from_shared(uri.clone())?;
-    let channel = endorser_endpoint.connect_lazy()?;
+    let channel = endorser_endpoint.connect_lazy();
     let mut client = EndorserCallClient::new(channel);
 
     let req = tonic::Request::new(GetPublicKeyReq {});

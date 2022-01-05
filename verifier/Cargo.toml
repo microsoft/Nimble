@@ -8,4 +8,4 @@ authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-su
 
 [dependencies]
 ledger = { path = "../ledger" }
-ed25519-dalek = "1"
+ed25519-dalek = "1.0.1"

@@ -30,11 +30,7 @@ impl CoordinatorConnection {
       Ok(connection) => connection,
       Err(_err) => return Err(ClientError::CoordinatorHostNameNotFound),
     };
-    let channel_attempt = connection.connect_lazy();
-    let channel = match channel_attempt {
-      Ok(channel) => channel,
-      Err(_err) => return Err(ClientError::UnableToConnectToCoordinator),
-    };
+    let channel = connection.connect_lazy();
     let client = CallClient::new(channel);
     Ok(CoordinatorConnection { client })
   }
