@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "client",
+    "bench",
     "coordinator",
     "endorser",
     "ledger",
