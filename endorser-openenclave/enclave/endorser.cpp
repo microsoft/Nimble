@@ -1,26 +1,72 @@
 #include "endorser.h"
 
+void calc_digest(unsigned char *m, unsigned long long len, digest_t *digest) {
+  SHA256(m, len, digest->v);
+}
+
+int calc_signature(EC_KEY *eckey, digest_t *m, signature_t *signature) {
+  ECDSA_SIG *sig = ECDSA_do_sign(m->v, HASH_VALUE_SIZE_IN_BYTES, eckey);
+  if (sig == NULL) {
+    return 0;
+  }
+
+  const BIGNUM *sig_r = ECDSA_SIG_get0_r(sig);
+  const BIGNUM *sig_s = ECDSA_SIG_get0_s(sig);
+  int len_r = BN_bn2binpad(sig_r, signature->v, SIGNATURE_SIZE_IN_BYTES/2);
+  int len_s = BN_bn2binpad(sig_s, &signature->v[SIGNATURE_SIZE_IN_BYTES/2], SIGNATURE_SIZE_IN_BYTES/2);
+  
+  // free ECDSA_sig
+  ECDSA_SIG_free(sig);
+  
+  if (len_r != SIGNATURE_SIZE_IN_BYTES/2 || len_s != SIGNATURE_SIZE_IN_BYTES/2) {
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+int private_to_public_key(EC_KEY *eckey, endorser_id_t *endorser_id) {
+  int res = 0;
+  unsigned char *pk;
+
+  res = EC_KEY_key2buf(eckey, POINT_CONVERSION_COMPRESSED, &pk, NULL);
+  if (res == 0) {
+    return res;
+  }
+
+  // copy the public key and free the buffer
+  assert(res == PUBLIC_KEY_SIZE_IN_BYTES);
+  memcpy(endorser_id->pk, pk, PUBLIC_KEY_SIZE_IN_BYTES);
+  free(pk);
+}
+
 int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
   int ret = 0;
   int res = 0;
- 
+
   // set is_initialized to false 
   this->is_initialized = false;
 
-  uint8_t private_key[PRIVATE_KEY_SIZE_IN_BYTES];
-  res = oe_random(private_key, PRIVATE_KEY_SIZE_IN_BYTES);
-  if (res != OE_OK) {
+  eckey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+  if (eckey == NULL) {
     ret = 1;
+    TRACE_ENCLAVE("EC_KEY_new_by_curve_name returned NULL");
     goto exit;
   }
-  memcpy(this->private_key, private_key, PRIVATE_KEY_SIZE_IN_BYTES);
   
-  uint8_t public_key[PUBLIC_KEY_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_secret_to_public(public_key, this->private_key);
-  
-  memcpy(this->public_key, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
-  memcpy(endorser_id->pk, this->public_key, PUBLIC_KEY_SIZE_IN_BYTES);
+  if (!EC_KEY_generate_key(eckey)) {
+    ret = 1;
+    TRACE_ENCLAVE("EC_KEY_generate_key returned 1");
+    goto exit;
+  }
 
+  // convert private key into a public key that we send back 
+  res = private_to_public_key(this->eckey, endorser_id);
+  if (res == 0) {
+    ret = 1;
+    TRACE_ENCLAVE("Error converting private key to public key");
+    goto exit;
+  }
 
 exit:
   return ret;
@@ -42,7 +88,7 @@ int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t*
 
     // check if the handle already exists
     if (this->ledger_tail_map.find(state->ledger_tail_map[i].handle) != this->ledger_tail_map.end()) {
-      TRACE_ENCLAVE("[Enclave] initialize_satte:: Handle already exists %d",(int) this->ledger_tail_map.count(state->ledger_tail_map[i].handle));
+      TRACE_ENCLAVE("[Enclave] initialize_state:: Handle already exists %d",(int) this->ledger_tail_map.count(state->ledger_tail_map[i].handle));
       ret = 1;
       goto exit;
     }
@@ -66,7 +112,6 @@ int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t*
 int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   int ret = 0;
   int res = 0;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // check if the state is initialized
   if (!is_initialized) {
@@ -90,17 +135,16 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   
   // hash the metadata block
   digest_t h_m;
-  st = Hacl_Streaming_SHA2_create_in_256();
-  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) &m, sizeof(meta_block_t));
-  Hacl_Streaming_SHA2_finish_256(st, h_m.v);
-  Hacl_Streaming_SHA2_free_256(st);
+  calc_digest((unsigned char *) &m, sizeof(meta_block_t), &h_m); 
 
-  // Produce an EdDSA Signature from HACL*
-  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
+  // Produce a signature
+  res = calc_signature(this->eckey, &h_m, signature);
+  if (res == 0) {
+    ret = 1;
+	  TRACE_ENCLAVE("Error producing a signature");
+    goto exit;
+  }
   
-  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-
   // store handle under the same name in the map
   this->ledger_tail_map.emplace(*handle, make_tuple(h_m, 0));
 
@@ -111,10 +155,8 @@ exit:
 int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, signature_t* signature) {
   int ret = 0;
   int res = 0;
-  unsigned char* prev;
   unsigned long long height;
-  digest_t tail_in_endorser;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
+  digest_t prev;
 
   // check if the state is initialized
   if (!is_initialized) {
@@ -130,27 +172,26 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, signature_t*
   }
   
   // obtain the current value associated with handle
-  tail_in_endorser = get<0>(this->ledger_tail_map[*handle]);
+  prev = get<0>(this->ledger_tail_map[*handle]);
   height = get<1>(this->ledger_tail_map[*handle]);
 
   // combine the running hash and the nonce value
   unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
-  memcpy(tail_with_nonce, tail_in_endorser.v, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(tail_with_nonce, prev.v, HASH_VALUE_SIZE_IN_BYTES);
   memcpy(tail_with_nonce+HASH_VALUE_SIZE_IN_BYTES, nonce->v, NONCE_SIZE_IN_BYTES);
 
   // compute a hash = Hash(hash, input), overwriting the running hash
-  unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
-  st = Hacl_Streaming_SHA2_create_in_256();
-  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES);
-  Hacl_Streaming_SHA2_finish_256(st, h_nonced_tail);
-  Hacl_Streaming_SHA2_free_256(st);
+  digest_t h_nonced_tail;
+  calc_digest((unsigned char *) tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, &h_nonced_tail);
 
-  // produce an ECDSA signature
-  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_nonced_tail);
-
-  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-
+  // Produce a signature
+  res = calc_signature(this->eckey, &h_nonced_tail, signature);
+  if (res == 0) {
+    ret = 1;
+	  TRACE_ENCLAVE("Error producing a signature");
+    goto exit;
+  }
+   
 exit:
   return ret;
 }
@@ -160,8 +201,7 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   int res = 0;
 
   digest_t prev;
-  unsigned int height;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
+  unsigned long long height;
  
   // check if the state is initialized
   if (!is_initialized) {
@@ -196,16 +236,16 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   
   // hash the metadata block
   digest_t h_m;
-  st = Hacl_Streaming_SHA2_create_in_256();
-  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) &m, sizeof(meta_block_t));
-  Hacl_Streaming_SHA2_finish_256(st, h_m.v);
-  Hacl_Streaming_SHA2_free_256(st);
+  calc_digest((unsigned char *) &m, sizeof(meta_block_t), &h_m);
 
-  // Sign the contents
-  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
-  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-
+  // Produce a signature
+  res = calc_signature(this->eckey, &h_m, signature);
+  if (res == 0) {
+    ret = 1;
+	  TRACE_ENCLAVE("Error producing a signature");
+    goto exit;
+  }
+ 
   // store updated hash 
   this->ledger_tail_map[*handle] = make_tuple(h_m, m.height);
 
@@ -215,7 +255,13 @@ exit:
   
 int ecall_dispatcher::get_public_key(endorser_id_t* endorser_id) {
   int ret = 0;
-  memcpy(endorser_id->pk, this->public_key, PUBLIC_KEY_SIZE_IN_BYTES);
+  int res = 0;
+  res = private_to_public_key(this->eckey, endorser_id);
+  if (res == 0) {
+    ret = 1;
+    TRACE_ENCLAVE("Error converting private key to public key");
+    goto exit;
+  }
 
 exit:
   return ret;
@@ -225,8 +271,6 @@ int ecall_dispatcher::read_latest_view_ledger(nonce_t* nonce, signature_t* signa
   int ret = 0;
   int res = 0;
   unsigned long long height;
-  digest_t tail_in_endorser;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // check if the state is initialized
   if (!is_initialized) {
@@ -240,18 +284,17 @@ int ecall_dispatcher::read_latest_view_ledger(nonce_t* nonce, signature_t* signa
   memcpy(tail_with_nonce+HASH_VALUE_SIZE_IN_BYTES, nonce->v, NONCE_SIZE_IN_BYTES);
 
   // compute a hash = Hash(hash, input), overwriting the running hash
-  unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
-  st = Hacl_Streaming_SHA2_create_in_256();
-  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES);
-  Hacl_Streaming_SHA2_finish_256(st, h_nonced_tail);
-  Hacl_Streaming_SHA2_free_256(st);
+  digest_t h_nonced_tail;
+  calc_digest((unsigned char *) tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, &h_nonced_tail);
 
-  // produce an ECDSA signature
-  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_nonced_tail);
-
-  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-
+  // Produce a signature
+  res = calc_signature(this->eckey, &h_nonced_tail, signature);
+  if (res == 0) {
+    ret = 1;
+	  TRACE_ENCLAVE("Error producing a signature");
+    goto exit;
+  }
+  
 exit:
   return ret;
 }
@@ -261,7 +304,6 @@ int calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, compar
   ledger_tail_map_entry_t entries[num_entries];
   int i = 0;
   map<handle_t, tuple<digest_t, unsigned long long>, comparator>::iterator it;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
 
   // if there are no entries in the map, we return a default digest
   if (num_entries == 0) {
@@ -273,10 +315,7 @@ int calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, compar
       entries[i].height = get<1>(it->second);
       i++;
     }
-    st = Hacl_Streaming_SHA2_create_in_256();
-    Hacl_Streaming_SHA2_update_256(st, (unsigned char *) entries, num_entries * sizeof(ledger_tail_map_entry_t));
-    Hacl_Streaming_SHA2_finish_256(st, hash_of_state->v);
-    Hacl_Streaming_SHA2_free_256(st);
+    calc_digest((unsigned char *) entries, num_entries * sizeof(ledger_tail_map_entry_t), hash_of_state);
   }
 }
 
@@ -285,9 +324,6 @@ int ecall_dispatcher::append_view_ledger(digest_t* block_hash, signature_t* sign
   int res = 0;
 
   digest_t hash_of_state;
-  digest_t prev;
-  unsigned int height;
-  Hacl_Streaming_SHA2_state_sha2_256* st;
  
   // check if the state is initialized
   if (!is_initialized) {
@@ -314,16 +350,16 @@ int ecall_dispatcher::append_view_ledger(digest_t* block_hash, signature_t* sign
   
   // hash the metadata block
   digest_t h_m;
-  st = Hacl_Streaming_SHA2_create_in_256();
-  Hacl_Streaming_SHA2_update_256(st, (unsigned char *) &m, sizeof(meta_block_t));
-  Hacl_Streaming_SHA2_finish_256(st, h_m.v);
-  Hacl_Streaming_SHA2_free_256(st);
+  calc_digest((unsigned char *) &m, sizeof(meta_block_t), &h_m);
 
-  // Sign the contents
-  uint8_t signature_bytes[SIGNATURE_SIZE_IN_BYTES];
-  EverCrypt_Ed25519_sign(signature_bytes, this->private_key, HASH_VALUE_SIZE_IN_BYTES, h_m.v);
-  memcpy(signature->v, signature_bytes, SIGNATURE_SIZE_IN_BYTES);
-
+  // Produce a signature
+  res = calc_signature(this->eckey, &h_m, signature);
+  if (res == 0) {
+    ret = 1;
+	  TRACE_ENCLAVE("Error producing a signature");
+    goto exit;
+  }
+  
   // update the internal state
   memcpy(this->view_ledger_tail.v, h_m.v, HASH_VALUE_SIZE_IN_BYTES);
   this->view_ledger_height = this->view_ledger_height + 1;
@@ -333,6 +369,5 @@ exit:
 }
  
 void ecall_dispatcher::terminate() {
-  free(private_key);
-  free(public_key);
+  EC_KEY_free(this->eckey); 
 }

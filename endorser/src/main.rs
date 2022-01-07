@@ -1,6 +1,9 @@
 use crate::endorser_state::EndorserState;
 use clap::{App, Arg};
-use ledger::NimbleDigest;
+use ledger::{
+  signature::{PublicKeyTrait, SignatureTrait},
+  NimbleDigest,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
@@ -51,7 +54,7 @@ impl EndorserCall for EndorserServiceState {
       .get_public_key();
 
     let reply = GetPublicKeyResp {
-      pk: pk.as_bytes().to_vec(),
+      pk: pk.to_bytes().to_vec(),
     };
 
     Ok(Response::new(reply))

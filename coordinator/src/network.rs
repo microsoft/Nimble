@@ -1,6 +1,8 @@
 use crate::Handle;
-use ed25519_dalek::PublicKey;
-use ledger::{NimbleDigest, Nonce};
+use ledger::{
+  signature::{PublicKey, PublicKeyTrait},
+  NimbleDigest, Nonce,
+};
 use std::collections::HashMap;
 use std::error::Error;
 use tonic::transport::{Channel, Endpoint};
@@ -25,7 +27,7 @@ pub struct EndorserConnection {
 
 impl EndorserConnection {
   pub fn get_public_key(&self) -> Result<PublicKey, Box<dyn Error>> {
-    Ok(self.pk)
+    Ok(self.pk.clone())
   }
 
   pub async fn new(uri: String) -> Result<Self, Box<dyn Error>> {

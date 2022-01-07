@@ -1,10 +1,11 @@
 mod errors;
 
 use crate::errors::VerificationError;
-use ed25519_dalek::{PublicKey, SignatureError};
-use ledger::{Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
+use ledger::{
+  signature::{CryptoError, PublicKey, PublicKeyTrait},
+  Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+};
 
-const PUBLIC_KEY_IN_BYTES: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 const NONCE_IN_BYTES: usize = 16;
 const NUM_ENDORSERS_IN_BYTES: usize = 1;
 const MIN_NUM_ENDORSERS: usize = 1;
@@ -16,12 +17,13 @@ pub struct VerificationKey {
 
 impl VerificationKey {
   fn from_bytes(pk_vec_bytes: &[u8]) -> Result<VerificationKey, VerificationError> {
+    let public_key_in_bytes = PublicKey::num_bytes();
     // parse the public keys into a vector and the code panics if a public key is invalid
-    let res = (0..pk_vec_bytes.len() / PUBLIC_KEY_IN_BYTES)
+    let res = (0..pk_vec_bytes.len() / public_key_in_bytes)
       .map(|i| {
-        PublicKey::from_bytes(&pk_vec_bytes[i * PUBLIC_KEY_IN_BYTES..(i + 1) * PUBLIC_KEY_IN_BYTES])
+        PublicKey::from_bytes(&pk_vec_bytes[i * public_key_in_bytes..(i + 1) * public_key_in_bytes])
       })
-      .collect::<Result<Vec<PublicKey>, SignatureError>>();
+      .collect::<Result<Vec<PublicKey>, CryptoError>>();
 
     if let Ok(pk_vec) = res {
       Ok(VerificationKey { pk_vec })
@@ -73,8 +75,9 @@ pub fn verify_new_ledger(
 
   let (vk, app_bytes) = {
     // check there is at least one public key for an endorser
+    let public_key_in_bytes = PublicKey::num_bytes();
     if block_bytes.len()
-      < (PUBLIC_KEY_IN_BYTES + NONCE_IN_BYTES + NONCE_IN_BYTES + NUM_ENDORSERS_IN_BYTES)
+      < (public_key_in_bytes + NONCE_IN_BYTES + NONCE_IN_BYTES + NUM_ENDORSERS_IN_BYTES)
     {
       return Err(VerificationError::InvalidGenesisBlock);
     } else {
@@ -95,15 +98,15 @@ pub fn verify_new_ledger(
           return Err(VerificationError::InvalidGenesisBlock);
         }
 
-        if block_bytes_tail.len() < (num_endorsers * PUBLIC_KEY_IN_BYTES) + NUM_ENDORSERS_IN_BYTES {
+        if block_bytes_tail.len() < (num_endorsers * public_key_in_bytes) + NUM_ENDORSERS_IN_BYTES {
           return Err(VerificationError::InvalidGenesisBlock);
         }
 
-        let pk_vec_bytes = &block_bytes_tail[1..(1 + num_endorsers * PUBLIC_KEY_IN_BYTES)];
+        let pk_vec_bytes = &block_bytes_tail[1..(1 + num_endorsers * public_key_in_bytes)];
         let app_bytes = if block_bytes_tail.len()
-          > (num_endorsers * PUBLIC_KEY_IN_BYTES) + NUM_ENDORSERS_IN_BYTES
+          > (num_endorsers * public_key_in_bytes) + NUM_ENDORSERS_IN_BYTES
         {
-          block_bytes_tail[(1 + num_endorsers * PUBLIC_KEY_IN_BYTES)..].to_vec()
+          block_bytes_tail[(1 + num_endorsers * public_key_in_bytes)..].to_vec()
         } else {
           vec![]
         };

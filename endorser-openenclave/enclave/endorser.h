@@ -7,8 +7,9 @@
 #include <tuple>
 #include "common.h"
 #include <string.h>
-#include "NimbleEverCrypt/EverCrypt_Ed25519.h"
-#include "NimbleEverCrypt/Hacl_Streaming_SHA2.h"
+#include <openssl/sha.h>
+#include <openssl/ecdsa.h>
+#include <openssl/objects.h>
 
 using namespace std;
 
@@ -25,9 +26,8 @@ struct comparator {
 
 class ecall_dispatcher {
 private:
-  // EdDSA KeyPair of the endorser
-  uint8_t private_key[PRIVATE_KEY_SIZE_IN_BYTES];
-  uint8_t public_key[PUBLIC_KEY_SIZE_IN_BYTES];
+  // ECDSA key of the endorser
+  EC_KEY* eckey;
 
   // tail hash for each ledger along with their current heights
   map<handle_t, tuple<digest_t, unsigned long long>, comparator> ledger_tail_map;

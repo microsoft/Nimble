@@ -1,9 +1,9 @@
 mod errors;
+pub mod signature;
 pub mod store;
-
 use crate::errors::VerificationError;
+use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
-use ed25519_dalek::{PublicKey, Signature, Verifier};
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
 use itertools::concat;
@@ -75,27 +75,27 @@ impl Nonce {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct IdSig {
   id: usize,
   sig: Signature,
 }
 
 impl IdSig {
-  pub fn get_id_and_sig(&self) -> (usize, Signature) {
-    (self.id, self.sig)
+  pub fn get_id_and_sig(&self) -> (usize, &Signature) {
+    (self.id, &self.sig)
   }
 
   pub fn get_id(&self) -> usize {
     self.id
   }
 
-  pub fn get_sig(&self) -> Signature {
-    self.sig
+  pub fn get_sig(&self) -> &Signature {
+    &self.sig
   }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Receipt {
   id_sigs: Vec<IdSig>,
 }
@@ -109,7 +109,7 @@ impl Receipt {
           let (id, sig_bytes) = receipt_bytes[i].clone();
           IdSig {
             id,
-            sig: ed25519_dalek::ed25519::signature::Signature::from_bytes(&sig_bytes).unwrap(),
+            sig: Signature::from_bytes(&sig_bytes).unwrap(),
           }
         })
         .collect::<Vec<IdSig>>(),
@@ -146,8 +146,8 @@ impl Receipt {
       let id = id_sigs[i].get_id();
       let sig = id_sigs[i].get_sig();
       if id < pk_vec.len() {
-        let pk = pk_vec[id];
-        let res = pk.verify(msg, &sig);
+        let pk = &pk_vec[id];
+        let res = sig.verify(pk, msg);
         if res.is_err() {
           Err(VerificationError::InvalidSignature)
         } else {

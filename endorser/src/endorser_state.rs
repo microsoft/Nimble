@@ -1,14 +1,15 @@
 use crate::errors::EndorserError;
-use ed25519_dalek::{Keypair, PublicKey, Signature, Signer};
-use ledger::{MetaBlock, NimbleDigest, NimbleHashTrait};
-use rand::rngs::OsRng;
+use ledger::{
+  signature::{PrivateKey, PrivateKeyTrait, PublicKey, Signature},
+  MetaBlock, NimbleDigest, NimbleHashTrait,
+};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 
 /// Endorser's internal state
 pub struct EndorserState {
-  /// a key pair in the ed25519 digital signature scheme
-  keypair: Keypair,
+  /// a key pair in a digital signature scheme
+  keypair: PrivateKey,
 
   /// a map from fixed-sized labels to a tail hash and a counter
   ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
@@ -40,8 +41,7 @@ where
 
 impl EndorserState {
   pub fn new() -> Self {
-    let mut csprng = OsRng {};
-    let keypair = Keypair::generate(&mut csprng);
+    let keypair = PrivateKey::new();
     EndorserState {
       keypair,
       ledger_tail_map: HashMap::new(),
@@ -98,7 +98,7 @@ impl EndorserState {
     let tail_hash = MetaBlock::genesis(&self.view_ledger_tail.0, handle).hash();
     self.ledger_tail_map.insert(*handle, (tail_hash, 0usize));
 
-    let signature = self.keypair.sign(tail_hash.to_bytes().as_slice());
+    let signature = self.keypair.sign(tail_hash.to_bytes().as_slice()).unwrap();
     Ok(signature)
   }
 
@@ -116,7 +116,7 @@ impl EndorserState {
     } else {
       let (tail_hash, _height) = self.ledger_tail_map.get(handle).unwrap(); //safe to unwrap here because of the check above
       let message = tail_hash.digest_with_bytes(nonce).to_bytes();
-      let signature = self.keypair.sign(&message);
+      let signature = self.keypair.sign(&message).unwrap();
       Ok(signature)
     }
   }
@@ -151,13 +151,13 @@ impl EndorserState {
     let metablock = MetaBlock::new(&self.view_ledger_tail.0, &prev_tail, block_hash, *height);
     *tail_hash = metablock.hash();
 
-    let signature = self.keypair.sign(&tail_hash.to_bytes());
+    let signature = self.keypair.sign(&tail_hash.to_bytes()).unwrap();
 
     Ok(signature)
   }
 
   pub fn get_public_key(&self) -> PublicKey {
-    self.keypair.public
+    self.keypair.get_public_key().unwrap()
   }
 
   pub fn read_latest_view_ledger(&self, nonce: &[u8]) -> Result<Signature, EndorserError> {
@@ -167,7 +167,7 @@ impl EndorserState {
 
     let (tail, _height) = &self.view_ledger_tail;
     let message = tail.digest_with_bytes(nonce).to_bytes();
-    let signature = self.keypair.sign(&message);
+    let signature = self.keypair.sign(&message).unwrap();
     Ok(signature)
   }
 
@@ -201,7 +201,7 @@ impl EndorserState {
     );
 
     // sign the hash of the new metablock
-    let signature = self.keypair.sign(&meta_block.hash().to_bytes());
+    let signature = self.keypair.sign(&meta_block.hash().to_bytes()).unwrap();
 
     // update the internal state
     self.view_ledger_tail = (meta_block.hash(), height_plus_one);
@@ -213,17 +213,8 @@ impl EndorserState {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use ledger::signature::SignatureTrait;
   use rand::Rng;
-
-  #[test]
-  pub fn check_endorser_state_creation() {
-    let endorser_state = EndorserState::new();
-    let key_information = endorser_state.keypair;
-    let public_key = key_information.public.to_bytes();
-    let secret_key = key_information.secret.to_bytes();
-    assert_eq!(public_key.len(), 32usize);
-    assert_eq!(secret_key.len(), 32usize);
-  }
 
   #[test]
   pub fn check_endorser_new_ledger_and_get_tail() {
@@ -268,8 +259,12 @@ mod tests {
 
     let signature = res.unwrap();
     let genesis_tail_hash = MetaBlock::genesis(&view, &handle).hash();
-    let signature_expected = endorser_state.keypair.sign(&genesis_tail_hash.to_bytes());
-    assert_eq!(signature, signature_expected);
+    assert!(signature
+      .verify(
+        &endorser_state.keypair.get_public_key().unwrap(),
+        &genesis_tail_hash.to_bytes()
+      )
+      .is_ok());
 
     // Fetch the value currently in the tail.
     let tail_result = endorser_state.read_latest(&handle, &[0]);
@@ -346,9 +341,10 @@ mod tests {
 
     let endorser_tail_expectation = metadata.hash();
 
-    let tail_signature_verification = endorser_state
-      .keypair
-      .verify(&endorser_tail_expectation.to_bytes(), &signature);
+    let tail_signature_verification = signature.verify(
+      &endorser_state.keypair.get_public_key().unwrap(),
+      &endorser_tail_expectation.to_bytes(),
+    );
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");

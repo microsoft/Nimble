@@ -1,10 +1,9 @@
 #ifndef _SHARED_H
 #define _SHARED_H
 
-#define PRIVATE_KEY_SIZE_IN_BYTES 32
 #define HASH_VALUE_SIZE_IN_BYTES 32
-#define PUBLIC_KEY_SIZE_IN_BYTES 32
-#define SIGNATURE_SIZE_IN_BYTES 64
+#define PUBLIC_KEY_SIZE_IN_BYTES 33
+#define SIGNATURE_SIZE_IN_BYTES 64 
 #define NONCE_SIZE_IN_BYTES 16
 
 // endorser_id_t contains the name of an endorser
@@ -13,7 +12,7 @@ typedef struct _endorser_id {
 } endorser_id_t;
 
 typedef struct _height {
-    unsigned long long h;
+  unsigned long long h;
 } height_t;
 
 // handle_t contains the name of a ledger
@@ -53,6 +52,6 @@ typedef struct _init_endorser_data {
   digest_t view_ledger_tail;
   unsigned long long view_ledger_height;
   digest_t block_hash;
- } init_endorser_data_t;
+} init_endorser_data_t;
 
 #endif /* _SHARED_H */

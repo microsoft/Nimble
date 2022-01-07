@@ -3,9 +3,9 @@ mod network;
 
 use crate::errors::CoordinatorError;
 use crate::network::EndorserConnection;
-use ed25519_dalek::PublicKey;
 use ledger::store::AppendOnlyStore;
 use ledger::{
+  signature::{PublicKey, PublicKeyTrait},
   Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
 };
 use std::collections::HashMap;

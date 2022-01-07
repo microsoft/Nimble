@@ -7,12 +7,12 @@ authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-su
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ed25519-dalek = "1.0.1"
 sha2 = "0.10.0"
 rand = "0.8.4"
 digest = "0.10.1"
 generic-array = "0.14.4"
 itertools = "0.10.3"
+openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 hex = "0.4.3"
