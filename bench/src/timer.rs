@@ -4,6 +4,7 @@ use colored::Colorize;
 use core::sync::atomic::AtomicUsize;
 #[cfg(feature = "profile")]
 use core::sync::atomic::Ordering;
+use std::time::Duration;
 #[cfg(feature = "profile")]
 use std::time::Instant;
 
@@ -24,7 +25,7 @@ impl Timer {
     CALL_DEPTH.fetch_add(1, Ordering::Relaxed);
     let star = "* ";
     println!(
-      "{:indent$}{}{}",
+      "{:indent$}{} [START] {}",
       "",
       star,
       label.yellow().bold(),
@@ -37,11 +38,11 @@ impl Timer {
   }
 
   #[inline(always)]
-  pub fn stop(&self) {
+  pub fn stop(&self) -> Duration {
     let duration = self.timer.elapsed();
     let star = "* ";
     println!(
-      "{:indent$}{}{} {:?}",
+      "{:indent$}{} [ END ] {} {:?}",
       "",
       star,
       self.label.blue().bold(),
@@ -49,6 +50,7 @@ impl Timer {
       indent = 2 * CALL_DEPTH.fetch_add(0, Ordering::Relaxed)
     );
     CALL_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    duration
   }
 
   #[inline(always)]
@@ -81,7 +83,9 @@ impl Timer {
   }
 
   #[inline(always)]
-  pub fn stop(&self) {}
+  pub fn stop(&self) -> Duration {
+    Duration::default()
+  }
 
   #[inline(always)]
   pub fn print(_msg: &str) {}
