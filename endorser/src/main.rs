@@ -89,17 +89,29 @@ impl EndorserCall for EndorserServiceState {
   }
 
   async fn append(&self, req: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
-    let AppendReq { handle, block_hash } = req.into_inner();
+    let AppendReq {
+      handle,
+      block_hash,
+      cond_updated_tail_hash,
+    } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
+    let cond_updated_tail_hash_instance = NimbleDigest::from_bytes(&cond_updated_tail_hash);
 
-    if handle_instance.is_err() || block_hash_instance.is_err() {
+    if handle_instance.is_err()
+      || block_hash_instance.is_err()
+      || cond_updated_tail_hash_instance.is_err()
+    {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append(&handle_instance.unwrap(), &block_hash_instance.unwrap());
+    let res = endorser_state.append(
+      &handle_instance.unwrap(),
+      &block_hash_instance.unwrap(),
+      &cond_updated_tail_hash_instance.unwrap(),
+    );
 
     match res {
       Ok(signature) => {
@@ -143,16 +155,23 @@ impl EndorserCall for EndorserServiceState {
     &self,
     req: Request<AppendViewLedgerReq>,
   ) -> Result<Response<AppendViewLedgerResp>, Status> {
-    let AppendViewLedgerReq { block_hash } = req.into_inner();
+    let AppendViewLedgerReq {
+      block_hash,
+      cond_updated_tail_hash,
+    } = req.into_inner();
 
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
+    let cond_updated_tail_hash_instance = NimbleDigest::from_bytes(&cond_updated_tail_hash);
 
-    if block_hash_instance.is_err() {
+    if block_hash_instance.is_err() || cond_updated_tail_hash_instance.is_err() {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append_view_ledger(&block_hash_instance.unwrap());
+    let res = endorser_state.append_view_ledger(
+      &block_hash_instance.unwrap(),
+      &cond_updated_tail_hash_instance.unwrap(),
+    );
 
     match res {
       Ok(signature) => {
@@ -194,6 +213,7 @@ impl EndorserCall for EndorserServiceState {
       view_ledger_tail,
       view_ledger_height,
       block_hash,
+      cond_updated_tail_hash,
     } = req.into_inner();
     let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
       .into_iter()
@@ -212,11 +232,17 @@ impl EndorserCall for EndorserServiceState {
       view_ledger_height as usize,
     );
     let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
+    let cond_updated_tail_hash_rs = NimbleDigest::from_bytes(&cond_updated_tail_hash).unwrap();
     let res = self
       .state
       .write()
       .expect("Failed to acquire write lock")
-      .initialize_state(&ledger_tail_map_rs, &view_ledger_tail_rs, &block_hash_rs);
+      .initialize_state(
+        &ledger_tail_map_rs,
+        &view_ledger_tail_rs,
+        &block_hash_rs,
+        &cond_updated_tail_hash_rs,
+      );
 
     match res {
       Ok(signature) => {

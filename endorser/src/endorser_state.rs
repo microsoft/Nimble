@@ -73,6 +73,7 @@ impl EndorserState {
     ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
     view_ledger_tail: &(NimbleDigest, usize),
     block_hash: &NimbleDigest,
+    cond_updated_tail_hash: &NimbleDigest,
   ) -> Result<Signature, EndorserError> {
     if self.is_initialized {
       return Err(EndorserError::AlreadyInitialized);
@@ -81,7 +82,7 @@ impl EndorserState {
     self.view_ledger_tail = *view_ledger_tail;
     self.is_initialized = true;
 
-    self.append_view_ledger(block_hash)
+    self.append_view_ledger(block_hash, cond_updated_tail_hash)
   }
 
   pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Signature, EndorserError> {
@@ -125,6 +126,7 @@ impl EndorserState {
     &mut self,
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
+    cond_updated_tail_hash: &NimbleDigest,
   ) -> Result<Signature, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
@@ -135,9 +137,10 @@ impl EndorserState {
       return Err(EndorserError::InvalidLedgerName);
     }
 
-    let (tail_hash, height) = self.ledger_tail_map.get_mut(handle).unwrap();
+    let (prev, height) = self.ledger_tail_map.get_mut(handle).unwrap();
 
-    *height = {
+    // increment height and returning an error in case of overflow
+    let height_plus_one = {
       let res = height.checked_add(1);
       if res.is_none() {
         return Err(EndorserError::LedgerHeightOverflow);
@@ -145,13 +148,19 @@ impl EndorserState {
       res.unwrap()
     };
 
-    // save the previous tail
-    let prev_tail = *tail_hash;
+    let updated_tail_hash =
+      MetaBlock::new(&self.view_ledger_tail.0, prev, block_hash, height_plus_one).hash();
 
-    let metablock = MetaBlock::new(&self.view_ledger_tail.0, &prev_tail, block_hash, *height);
-    *tail_hash = metablock.hash();
+    // check if the updated tail hash of the ledger is the same as the one in the request, if not return an error
+    if updated_tail_hash != *cond_updated_tail_hash {
+      return Err(EndorserError::InvalidConditionalTail);
+    }
 
-    let signature = self.keypair.sign(&tail_hash.to_bytes()).unwrap();
+    // update the internal state
+    *height = height_plus_one;
+    *prev = updated_tail_hash;
+
+    let signature = self.keypair.sign(&prev.to_bytes()).unwrap();
 
     Ok(signature)
   }
@@ -174,13 +183,14 @@ impl EndorserState {
   pub fn append_view_ledger(
     &mut self,
     block_hash: &NimbleDigest,
+    cond_updated_tail_hash: &NimbleDigest,
   ) -> Result<Signature, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
     }
 
     // read the current tail and height of the view ledger
-    let (tail, height) = &self.view_ledger_tail;
+    let (prev, height) = &self.view_ledger_tail;
 
     // perform a checked addition of height with 1
     let height_plus_one = {
@@ -191,20 +201,22 @@ impl EndorserState {
       res.unwrap()
     };
 
-    // formulate a metablock for the new entry on the view ledger;
     // the view embedded in the view ledger is the hash of the current state of the endorser
-    let meta_block = MetaBlock::new(
-      &self.produce_hash_of_state(),
-      tail,
-      block_hash,
-      height_plus_one,
-    );
+    let view = self.produce_hash_of_state();
+
+    // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
+    let updated_tail_hash = MetaBlock::new(&view, prev, block_hash, height_plus_one).hash();
+
+    // check if the updated tail hash of the view ledger is the same as the one in the request, if not return an error
+    if updated_tail_hash != *cond_updated_tail_hash {
+      return Err(EndorserError::InvalidConditionalTail);
+    }
 
     // sign the hash of the new metablock
-    let signature = self.keypair.sign(&meta_block.hash().to_bytes()).unwrap();
+    let signature = self.keypair.sign(&updated_tail_hash.to_bytes()).unwrap();
 
     // update the internal state
-    self.view_ledger_tail = (meta_block.hash(), height_plus_one);
+    self.view_ledger_tail = (updated_tail_hash, height_plus_one);
 
     Ok(signature)
   }
@@ -229,11 +241,30 @@ mod tests {
       n.unwrap()
     };
 
+    let cond_updated_tail_hash = {
+      // read the current tail and height of the view ledger
+      let (prev, height) = &endorser_state.view_ledger_tail;
+
+      // perform a checked addition of height with 1
+      let height_plus_one = {
+        let res = height.checked_add(1);
+        assert!(res.is_some());
+        res.unwrap()
+      };
+
+      // the view embedded in the view ledger is the hash of the current state of the endorser
+      let view = endorser_state.produce_hash_of_state();
+
+      // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
+      MetaBlock::new(&view, prev, &view_block_hash, height_plus_one).hash()
+    };
+
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
       &HashMap::new(),
       &(NimbleDigest::default(), 0usize),
       &view_block_hash,
+      &cond_updated_tail_hash,
     );
     assert!(res.is_ok());
 
@@ -288,11 +319,30 @@ mod tests {
       n.unwrap()
     };
 
+    let cond_updated_tail_hash = {
+      // read the current tail and height of the view ledger
+      let (prev, height) = &endorser_state.view_ledger_tail;
+
+      // perform a checked addition of height with 1
+      let height_plus_one = {
+        let res = height.checked_add(1);
+        assert!(res.is_some());
+        res.unwrap()
+      };
+
+      // the view embedded in the view ledger is the hash of the current state of the endorser
+      let view = endorser_state.produce_hash_of_state();
+
+      // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
+      MetaBlock::new(&view, prev, &view_block_hash, height_plus_one).hash()
+    };
+
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
       &HashMap::new(),
       &(NimbleDigest::default(), 0usize),
       &view_block_hash,
+      &cond_updated_tail_hash,
     );
     assert!(res.is_ok());
 
@@ -324,9 +374,22 @@ mod tests {
       let t = endorser_state.ledger_tail_map.get(&handle).unwrap();
       t.0
     };
+
+    let height_plus_one = {
+      let height = endorser_state.ledger_tail_map.get(&handle).unwrap().1;
+      let res = height.checked_add(1);
+      if res.is_none() {
+        panic!("Height overflow");
+      }
+      res.unwrap()
+    };
+
+    let updated_metablock =
+      MetaBlock::new(&view, &prev_tail, &block_hash_to_append, height_plus_one);
+
     let signature = {
       endorser_state
-        .append(&handle, &block_hash_to_append)
+        .append(&handle, &block_hash_to_append, &updated_metablock.hash())
         .unwrap()
     };
     let new_ledger_height = {

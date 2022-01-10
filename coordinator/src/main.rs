@@ -150,6 +150,14 @@ impl CoordinatorState {
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
     let view_ledger_block_hash = view_ledger_genesis_block.hash();
+    let cond_updated_tail_hash = {
+      let prev = NimbleDigest::default();
+      let height_plus_one = 1usize;
+      let view = NimbleDigest::default();
+
+      MetaBlock::new(&view, &prev, &view_ledger_block_hash, height_plus_one).hash()
+    };
+
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
       responses.push(tokio::spawn(async move {
@@ -160,6 +168,7 @@ impl CoordinatorState {
               &HashMap::new(),
               &(NimbleDigest::default(), 0usize),
               &view_ledger_block_hash,
+              &cond_updated_tail_hash,
             )
             .await,
         )
@@ -339,8 +348,8 @@ impl Call for CoordinatorState {
     let data_block = Block::new(&block);
     let hash_of_block = data_block.hash();
 
-    // Compare the Conditional Tail Hash in CheckLatest()
-    {
+    let prev_metablock = {
+      // Compare the Conditional Tail Hash in CheckLatest()
       let cond_tail_hash_info = {
         let d = NimbleDigest::from_bytes(&cond_tail_hash);
         if d.is_err() {
@@ -349,23 +358,27 @@ impl Call for CoordinatorState {
         d.unwrap()
       };
 
-      // we will perform the conditional hash check only if the provided tail is not the default
-      if cond_tail_hash_info != NimbleDigest::default() {
-        // read the current tail endorsed metablock from state
-        let res = self
-          .metadata
-          .read()
-          .expect("Failed to acquire lock on state")
-          .read_latest(&handle);
-        assert!(res.is_ok());
+      // read the current tail endorsed metablock from state
+      let res = self
+        .metadata
+        .read()
+        .expect("Failed to acquire lock on state")
+        .read_latest(&handle);
+      assert!(res.is_ok());
 
-        if cond_tail_hash_info != res.unwrap().get_metablock().hash() {
-          return Err(Status::invalid_argument(
-            "Incorrect/stale tail hash provided",
-          ));
-        }
+      let prev_metablock = res.unwrap().get_metablock().clone();
+
+      // we will perform the conditional hash check only if the provided tail is not the default
+      if cond_tail_hash_info != NimbleDigest::default()
+        && cond_tail_hash_info != prev_metablock.hash()
+      {
+        return Err(Status::invalid_argument(
+          "Incorrect/stale tail hash provided",
+        ));
       }
-    }
+
+      prev_metablock
+    };
 
     // Write the block to the data store
     {
@@ -375,36 +388,6 @@ impl Call for CoordinatorState {
         .expect("Failed to acquire lock on state")
         .append(&handle, &data_block);
       assert!(res.is_ok());
-    }
-
-    // Retrieve all public keys of current active endorsers and connections to them
-    let (_endorser_pk_vec, endorser_conn_vec) = self
-      .connections
-      .read()
-      .expect("Unable to obtain read lock on connections")
-      .get_all();
-
-    let mut receipt = Vec::new();
-    let mut responses = Vec::with_capacity(endorser_conn_vec.len());
-
-    for (index, ec) in endorser_conn_vec.iter().enumerate() {
-      let mut conn = ec.clone();
-
-      responses.push(tokio::spawn(async move {
-        (
-          index,
-          conn
-            .append(handle.to_bytes(), hash_of_block.to_bytes())
-            .await,
-        )
-      }));
-    }
-
-    for resp in responses {
-      let endorser_append_op = resp.await;
-      if let Ok((index, Ok(signature))) = endorser_append_op {
-        receipt.push((index, signature));
-      }
     }
 
     let view = {
@@ -423,23 +406,47 @@ impl Call for CoordinatorState {
       endorsed_metablock.get_metablock().hash()
     };
 
-    let prev_metablock = {
-      let res = self
-        .metadata
-        .read()
-        .expect("Failed to acquire lock on state")
-        .read_latest(&handle);
-      assert!(res.is_ok());
-      let e_metablock = res.unwrap();
-      e_metablock.get_metablock().clone()
-    };
-
     let metablock = MetaBlock::new(
       &view,
       &prev_metablock.hash(),
       &hash_of_block,
       prev_metablock.get_height() + 1,
     );
+
+    let cond_updated_tail_hash = metablock.hash();
+
+    // Retrieve all public keys of current active endorsers and connections to them
+    let (_endorser_pk_vec, endorser_conn_vec) = self
+      .connections
+      .read()
+      .expect("Unable to obtain read lock on connections")
+      .get_all();
+
+    let mut receipt = Vec::new();
+    let mut responses = Vec::with_capacity(endorser_conn_vec.len());
+
+    for (index, ec) in endorser_conn_vec.iter().enumerate() {
+      let mut conn = ec.clone();
+      responses.push(tokio::spawn(async move {
+        (
+          index,
+          conn
+            .append(
+              handle.to_bytes(),
+              hash_of_block.to_bytes(),
+              cond_updated_tail_hash.to_bytes(),
+            )
+            .await,
+        )
+      }));
+    }
+
+    for resp in responses {
+      let endorser_append_op = resp.await;
+      if let Ok((index, Ok(signature))) = endorser_append_op {
+        receipt.push((index, signature));
+      }
+    }
     let receipt = ledger::Receipt::from_bytes(&receipt);
     let endorsed_metablock = EndorsedMetaBlock::new(&metablock, &receipt);
 

@@ -49,6 +49,7 @@ impl EndorserConnection {
     ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
     view_ledger_tail: &(NimbleDigest, usize),
     block_hash: &NimbleDigest,
+    cond_updated_tail_hash: &NimbleDigest,
   ) -> Result<Vec<u8>, Status> {
     let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
       .iter()
@@ -64,6 +65,7 @@ impl EndorserConnection {
       view_ledger_tail: view_ledger_tail.0.to_bytes(),
       view_ledger_height: view_ledger_tail.1 as u64,
       block_hash: block_hash.to_bytes(),
+      cond_updated_tail_hash: cond_updated_tail_hash.to_bytes(),
     });
     let InitializeStateResp { signature } = self.client.initialize_state(req).await?.into_inner();
     Ok(signature)
@@ -88,8 +90,17 @@ impl EndorserConnection {
     Ok(signature)
   }
 
-  pub async fn append(&mut self, handle: Vec<u8>, block_hash: Vec<u8>) -> Result<Vec<u8>, Status> {
-    let req = tonic::Request::new(AppendReq { handle, block_hash });
+  pub async fn append(
+    &mut self,
+    handle: Vec<u8>,
+    block_hash: Vec<u8>,
+    cond_updated_tail_hash: Vec<u8>,
+  ) -> Result<Vec<u8>, Status> {
+    let req = tonic::Request::new(AppendReq {
+      handle,
+      block_hash,
+      cond_updated_tail_hash,
+    });
 
     let AppendResp { signature } = self.client.append(req).await?.into_inner();
 
@@ -105,8 +116,15 @@ impl EndorserConnection {
     Ok(signature)
   }
 
-  pub async fn append_view_ledger(&mut self, block_hash: Vec<u8>) -> Result<Vec<u8>, Status> {
-    let req = tonic::Request::new(AppendViewLedgerReq { block_hash });
+  pub async fn append_view_ledger(
+    &mut self,
+    block_hash: Vec<u8>,
+    cond_updated_tail_hash: Vec<u8>,
+  ) -> Result<Vec<u8>, Status> {
+    let req = tonic::Request::new(AppendViewLedgerReq {
+      block_hash,
+      cond_updated_tail_hash,
+    });
 
     let AppendViewLedgerResp { signature } =
       self.client.append_view_ledger(req).await?.into_inner();
