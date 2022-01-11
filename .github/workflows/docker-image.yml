@@ -9,10 +9,20 @@ on:
 jobs:
 
   build:
-
+    env:
+      HASH_ID: ${GITHUB_SHA::8}
+      PUSH_IMAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v2
+      - uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
       - name: Build the Docker image
-        run: docker build . --file Dockerfile --tag nimbleledger:$(date +%s)
+        run: docker build . --file Dockerfile --tag ${{ secrets.ACR_LOGIN_SERVER }}/nimbleledger:${{ env.HASH_ID }}
+      - name: Push the Docker image to Container Registry
+        if: env.PUSH_IMAGE == 'true'
+        run: docker push ${{ secrets.ACR_LOGIN_SERVER }}/nimbleledger:${{ env.HASH_ID }}
