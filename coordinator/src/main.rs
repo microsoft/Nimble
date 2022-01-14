@@ -3,10 +3,10 @@ mod network;
 
 use crate::errors::CoordinatorError;
 use crate::network::EndorserConnection;
-use ledger::store::AppendOnlyStore;
+use ledger::store::{InMemoryLedgerStore, LedgerStore};
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorsedMetaBlock, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
+  Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -24,10 +24,6 @@ use coordinator_proto::{
   AppendReq, AppendResp, IdSig, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, Receipt,
 };
-
-type Handle = NimbleDigest;
-type DataStore = AppendOnlyStore<Handle, Block>;
-type MetadataStore = AppendOnlyStore<Handle, EndorsedMetaBlock>;
 
 #[derive(Debug, Default)]
 pub struct ConnectionStore {
@@ -88,8 +84,7 @@ impl ConnectionStore {
 
 #[derive(Debug, Default)]
 pub struct CoordinatorState {
-  data: Arc<RwLock<DataStore>>,
-  metadata: Arc<RwLock<MetadataStore>>,
+  ledger_store: InMemoryLedgerStore,
   connections: Arc<RwLock<ConnectionStore>>, // a map from a public key to a connection object
 }
 
@@ -138,25 +133,22 @@ impl CoordinatorState {
     };
 
     // (3) Store the genesis block of the view ledger in the data store
-    // We will use NimbleDigest::default() as the handle for the view ledger
-    let data_store = {
-      let mut v = DataStore::new();
-      let res = v.insert(&NimbleDigest::default(), &view_ledger_genesis_block);
+    let ledger_store = {
+      let res = InMemoryLedgerStore::new();
       assert!(res.is_ok());
-      v
+      res.unwrap()
+    };
+
+    let (view_ledger_meta_block, view_ledger_tail_hash) = {
+      let res = ledger_store.append_view_ledger(&view_ledger_genesis_block);
+      assert!(res.is_ok());
+      res.unwrap()
     };
 
     // (4) Make a request to the endorsers for initializing the view ledger
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
     let view_ledger_block_hash = view_ledger_genesis_block.hash();
-    let cond_updated_tail_hash = {
-      let prev = NimbleDigest::default();
-      let height_plus_one = 1usize;
-      let view = NimbleDigest::default();
-
-      MetaBlock::new(&view, &prev, &view_ledger_block_hash, height_plus_one).hash()
-    };
 
     for (index, ec) in endorser_conn_vec.iter().enumerate() {
       let mut conn = ec.clone();
@@ -168,7 +160,7 @@ impl CoordinatorState {
               &HashMap::new(),
               &(NimbleDigest::default(), 0usize),
               &view_ledger_block_hash,
-              &cond_updated_tail_hash,
+              &view_ledger_tail_hash,
             )
             .await,
         )
@@ -183,29 +175,13 @@ impl CoordinatorState {
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
 
-    // (5) Store the returned responses in the metadata store
-    // We will use NimbleDigest::default() as the handle for the view ledger
-    let metadata_store = {
-      let view_ledger_metablock = MetaBlock::new(
-        &NimbleDigest::default(),
-        &NimbleDigest::default(),
-        &view_ledger_genesis_block.hash(),
-        1_usize,
-      );
-
-      let mut v = MetadataStore::new();
-      let res = v.insert(
-        &NimbleDigest::default(),
-        &EndorsedMetaBlock::new(&view_ledger_metablock, &receipt),
-      );
-      assert!(res.is_ok());
-      v
-    };
+    // (5) Store the receipt in the view ledger
+    let res = ledger_store.attach_view_leger_receipt(&view_ledger_meta_block, &receipt);
+    assert!(res.is_ok());
 
     CoordinatorState {
-      data: Arc::new(RwLock::new(data_store)),
-      metadata: Arc::new(RwLock::new(metadata_store)),
       connections: Arc::new(RwLock::new(connections)),
+      ledger_store,
     }
   }
 
@@ -261,18 +237,11 @@ impl Call for CoordinatorState {
       genesis_op.unwrap()
     };
 
-    // Hash the contents of the block to use as the handle.
-    let handle = genesis_block.hash();
-
-    // Write the genesis block to data store
-    {
-      let res = self
-        .data
-        .write()
-        .expect("Failed to acquire lock on the data store")
-        .insert(&handle, &genesis_block);
+    let (handle, ledger_meta_block, _) = {
+      let res = self.ledger_store.create_ledger(&genesis_block);
       assert!(res.is_ok());
-    }
+      res.unwrap()
+    };
 
     // Make a request to the endorsers for NewLedger using the handle which returns a signature.
     let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
@@ -293,38 +262,15 @@ impl Call for CoordinatorState {
       }
     }
 
-    // Prepare an endorsed metadata block for the view ledger
-    let view = {
-      let res = self
-        .metadata
-        .read()
-        .expect("Failed to acquire read lock on the metadata store")
-        .read_latest(&NimbleDigest::default());
-
-      if res.is_err() {
-        return Err(Status::invalid_argument(
-          "Internal server error, this should not have occured",
-        ));
-      }
-      let endorsed_metablock = res.unwrap();
-      endorsed_metablock.get_metablock().hash()
-    };
-
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    let endorsed_metablock = EndorsedMetaBlock::new(&MetaBlock::genesis(&view, &handle), &receipt);
-
-    // Store the metadata block in the metadata store
-    {
-      let res = self
-        .metadata
-        .write()
-        .expect("Failed to acquire lock on the data store")
-        .insert(&handle, &endorsed_metablock);
-      assert!(res.is_ok()); // TODO: do error handling
-    }
+    // Store the receipt
+    let res = self
+      .ledger_store
+      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt);
+    assert!(res.is_ok());
 
     let reply = NewLedgerResp {
-      view: view.to_bytes(),
+      view: ledger_meta_block.get_view().to_bytes(),
       block: genesis_block.to_bytes(),
       receipt: Some(reformat_receipt(&receipt_bytes)),
     };
@@ -348,72 +294,22 @@ impl Call for CoordinatorState {
     let data_block = Block::new(&block);
     let hash_of_block = data_block.hash();
 
-    let prev_metablock = {
-      // Compare the Conditional Tail Hash in CheckLatest()
-      let cond_tail_hash_info = {
-        let d = NimbleDigest::from_bytes(&cond_tail_hash);
-        if d.is_err() {
-          return Err(Status::invalid_argument("Incorrect tail hash provided"));
-        }
-        d.unwrap()
-      };
-
-      // read the current tail endorsed metablock from state
-      let res = self
-        .metadata
-        .read()
-        .expect("Failed to acquire lock on state")
-        .read_latest(&handle);
-      assert!(res.is_ok());
-
-      let prev_metablock = res.unwrap().get_metablock().clone();
-
-      // we will perform the conditional hash check only if the provided tail is not the default
-      if cond_tail_hash_info != NimbleDigest::default()
-        && cond_tail_hash_info != prev_metablock.hash()
-      {
-        return Err(Status::invalid_argument(
-          "Incorrect/stale tail hash provided",
-        ));
+    let cond_tail_hash_info = {
+      let d = NimbleDigest::from_bytes(&cond_tail_hash);
+      if d.is_err() {
+        return Err(Status::invalid_argument("Incorrect tail hash provided"));
       }
-
-      prev_metablock
+      d.unwrap()
     };
 
-    // Write the block to the data store
-    {
+    let (ledger_meta_block, ledger_tail_hash) = {
+      // TODO: shall we *move* the block?
       let res = self
-        .data
-        .write()
-        .expect("Failed to acquire lock on state")
-        .append(&handle, &data_block);
+        .ledger_store
+        .append_ledger(&handle, &data_block, &cond_tail_hash_info);
       assert!(res.is_ok());
-    }
-
-    let view = {
-      let res = self
-        .metadata
-        .read()
-        .expect("Failed to acquire read lock on the metadata store")
-        .read_latest(&NimbleDigest::default());
-
-      if res.is_err() {
-        return Err(Status::invalid_argument(
-          "Internal server error, this should not have occured",
-        ));
-      }
-      let endorsed_metablock = res.unwrap();
-      endorsed_metablock.get_metablock().hash()
+      res.unwrap()
     };
-
-    let metablock = MetaBlock::new(
-      &view,
-      &prev_metablock.hash(),
-      &hash_of_block,
-      prev_metablock.get_height() + 1,
-    );
-
-    let cond_updated_tail_hash = metablock.hash();
 
     // Retrieve all public keys of current active endorsers and connections to them
     let (_endorser_pk_vec, endorser_conn_vec) = self
@@ -434,7 +330,7 @@ impl Call for CoordinatorState {
             .append(
               handle.to_bytes(),
               hash_of_block.to_bytes(),
-              cond_updated_tail_hash.to_bytes(),
+              ledger_tail_hash.to_bytes(),
             )
             .await,
         )
@@ -448,21 +344,15 @@ impl Call for CoordinatorState {
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt);
-    let endorsed_metablock = EndorsedMetaBlock::new(&metablock, &receipt);
-
-    {
-      let res = self
-        .metadata
-        .write()
-        .expect("Failed to acquire lock on state")
-        .append(&handle, &endorsed_metablock);
-      assert!(res.is_ok());
-    }
+    let res = self
+      .ledger_store
+      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt);
+    assert!(res.is_ok());
 
     let reply = AppendResp {
-      view: view.to_bytes(),
-      prev: prev_metablock.hash().to_bytes(),
-      height: (prev_metablock.get_height() + 1) as u64,
+      view: ledger_meta_block.get_view().to_bytes(),
+      prev: ledger_meta_block.get_prev().to_bytes(),
+      height: ledger_meta_block.get_height() as u64,
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
     };
 
@@ -491,6 +381,12 @@ impl Call for CoordinatorState {
       h.unwrap()
     };
 
+    let ledger_entry = {
+      let res = self.ledger_store.read_ledger_tail(&handle);
+      assert!(res.is_ok());
+      res.unwrap()
+    };
+
     // Retrieve all public keys of current active endorsers and connections to them
     let (_endorser_pk_vec, endorser_conn_vec) = self
       .connections
@@ -498,7 +394,7 @@ impl Call for CoordinatorState {
       .expect("Unable to obtain read lock on connections")
       .get_all();
 
-    // 1. Read the information from the Endorsers
+    // Read the information from the Endorsers
     let mut receipt_bytes = Vec::new();
     let mut responses = Vec::with_capacity(endorser_conn_vec.len());
 
@@ -517,44 +413,13 @@ impl Call for CoordinatorState {
       }
     }
 
-    // 2. ReadLatest Block data from the Data structure.
-    let block = {
-      let res = self
-        .data
-        .read()
-        .expect("Failed to acquire read lock on the data store")
-        .read_latest(&handle);
-      if res.is_err() {
-        return Err(Status::invalid_argument(
-          "No data exists for the given handle",
-        ));
-      }
-      res.unwrap()
-    };
-
-    // 3. Read latest metablock and signatures from Metadata structure
-    let metadata = {
-      let res = self
-        .metadata
-        .read()
-        .expect("Failed to acquire read lock on the metadata store")
-        .read_latest(&handle);
-
-      if res.is_err() {
-        return Err(Status::invalid_argument(
-          "No metadata exists for the given handle",
-        ));
-      }
-      res.unwrap()
-    };
-
-    // 4. Pack the response structure (m, \sigma) from metadata structure
+    // Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
     let reply = ReadLatestResp {
-      view: metadata.get_metablock().get_view().to_bytes(),
-      block: block.to_bytes(),
-      prev: metadata.get_metablock().get_prev().to_bytes(),
-      height: metadata.get_metablock().get_height() as u64,
+      view: ledger_entry.aux.get_view().to_bytes(),
+      block: ledger_entry.block.to_bytes(),
+      prev: ledger_entry.aux.get_prev().to_bytes(),
+      height: ledger_entry.aux.get_height() as u64,
       receipt: Some(reformat_receipt(
         &ledger::Receipt::from_bytes(&receipt_bytes).to_bytes(),
       )), // Ideally collected signatures from majority endorsers
@@ -576,29 +441,18 @@ impl Call for CoordinatorState {
       res.unwrap()
     };
 
-    // 1. Retrieve the block data information from the main datastructure
-    let block = self
-      .data
-      .read()
-      .expect("Failed to acquire read lock")
-      .read_by_index(&handle, index as usize)
-      .unwrap(); // TODO: perform error handling
-
-    let metadata = self
-      .metadata
-      .read()
-      .expect("Failed to acquire read lock")
-      .read_by_index(&handle, index as usize)
-      .unwrap(); // TODO: perform error handling
-
-    // 2. Retrieve the information from the metadata structure.
-    let prev = metadata.get_metablock().get_prev();
-    let view = metadata.get_metablock().get_view();
+    let ledger_entry = {
+      let res = self
+        .ledger_store
+        .read_leger_by_index(&handle, index as usize);
+      assert!(res.is_ok());
+      res.unwrap()
+    };
     let reply = ReadByIndexResp {
-      view: view.to_bytes(),
-      block: block.to_bytes(),
-      prev: prev.to_bytes(),
-      receipt: Some(reformat_receipt(&metadata.get_receipt().to_bytes())),
+      view: ledger_entry.aux.get_view().to_bytes(),
+      block: ledger_entry.block.to_bytes(),
+      prev: ledger_entry.aux.get_prev().to_bytes(),
+      receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
     };
 
     Ok(Response::new(reply))

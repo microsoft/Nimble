@@ -10,6 +10,18 @@ pub enum StorageError {
   IncorrectConditionalData,
   /// returned if the key does not exist
   KeyDoesNotExist,
+  /// return if view ledger read lock cannot be acquired
+  ViewLedgerReadLockFailed,
+  /// return if view ledger write lock cannot be acquired
+  ViewLedgerWriteLockFailed,
+  /// return if ledger map read lock cannot be acquired
+  LedgerMapReadLockFailed,
+  /// return if ledger map write lock cannot be acquired
+  LedgerMapWriteLockFailed,
+  /// return if ledger read lock cannot be acquired
+  LedgerReadLockFailed,
+  /// return if ledger write lock cannot be acquired
+  LedgerWriteLockFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

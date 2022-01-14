@@ -1,7 +1,6 @@
-use crate::Handle;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  NimbleDigest, Nonce,
+  Handle, NimbleDigest, Nonce,
 };
 use std::collections::HashMap;
 use std::error::Error;

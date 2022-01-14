@@ -1,126 +1,345 @@
-use core::cmp::Eq;
-use std::collections::HashMap;
-use std::hash::Hash;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::{hash_map, BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
+use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
 
-#[derive(Debug, Default)]
-pub struct AppendOnlyStore<K, V> {
-  map: HashMap<K, Vec<V>>,
+#[derive(Debug, Default, Clone)]
+pub struct LedgerEntry {
+  pub block: Block,
+  pub aux: MetaBlock,
+  pub receipt: Receipt,
 }
 
-impl<K, V> AppendOnlyStore<K, V>
+pub trait LedgerStore {
+  fn new() -> Result<Self, StorageError>
+  where
+    Self: Sized;
+  fn create_ledger(&self, block: &Block)
+    -> Result<(Handle, MetaBlock, NimbleDigest), StorageError>;
+  fn append_ledger(
+    // TODO: should self be mutable?
+    &self,
+    handle: &Handle,
+    block: &Block,
+    cond: &NimbleDigest,
+  ) -> Result<(MetaBlock, NimbleDigest), StorageError>;
+  fn attach_ledger_receipt(
+    &self,
+    handle: &Handle,
+    aux: &MetaBlock,
+    receipt: &Receipt,
+  ) -> Result<(), StorageError>;
+  fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
+  fn read_leger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError>;
+  fn append_view_ledger(&self, handle: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError>;
+  fn attach_view_leger_receipt(
+    &self,
+    aux: &MetaBlock,
+    receipt: &Receipt,
+  ) -> Result<(), StorageError>;
+  fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError>;
+  fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, StorageError>;
+}
+
+#[derive(Serialize, Deserialize)]
+struct LedgerStoreState {
+  #[serde(serialize_with = "hashmap_serializer")]
+  ledger_tail_map: HashMap<Vec<u8>, (Vec<u8>, usize)>,
+  view_ledger_tail: (Vec<u8>, usize),
+}
+
+fn hashmap_serializer<S>(
+  v: &HashMap<Vec<u8>, (Vec<u8>, usize)>,
+  serializer: S,
+) -> Result<S::Ok, S::Error>
 where
-  K: Clone + Eq + Hash,
-  V: Clone,
+  S: Serializer,
 {
-  pub fn new() -> Self {
-    AppendOnlyStore {
-      map: HashMap::new(),
-    }
-  }
-
-  pub fn contains_key(&self, key: &K) -> Result<(), StorageError> {
-    if !self.map.contains_key(key) {
-      return Err(StorageError::KeyDoesNotExist);
-    }
-    Ok(())
-  }
-
-  pub fn insert(&mut self, key: &K, val: &V) -> Result<(), StorageError> {
-    // check if `map` already contains an entry for the supplied `key`
-    if self.map.contains_key(key) {
-      return Err(StorageError::DuplicateKey);
-    }
-
-    // store `val` as the first entry associated with `key` in `map`
-    self.map.insert(key.clone(), vec![val.clone()]);
-    Ok(())
-  }
-
-  pub fn append(&mut self, key: &K, val: &V) -> Result<(), StorageError> {
-    let cur_val_opt = self.map.get_mut(key);
-    match cur_val_opt {
-      // if the supplied `key` does not exist in `map` return an error
-      None => Err(StorageError::InvalidKey),
-      // if the supplied `key` exists in `map` append `val` to the vector associated with `key` in `map`
-      Some(cur_val) => {
-        cur_val.push(val.clone());
-        Ok(())
-      },
-    }
-  }
-
-  pub fn read_latest(&self, key: &K) -> Result<V, StorageError> {
-    let cur_val_opt = self.map.get(key);
-    match cur_val_opt {
-      // if the supplied `key` does not exist in `map` return an error
-      None => Err(StorageError::InvalidKey),
-      // if the supplied `key` exists in `map` return the last entry in the vector associated with `key` in `map`
-      Some(cur_val) => {
-        Ok(cur_val[cur_val.len() - 1].clone()) // TODO: use last method
-      },
-    }
-  }
-
-  pub fn read_by_index(&self, key: &K, idx: usize) -> Result<V, StorageError> {
-    let cur_val_opt = self.map.get(key);
-    match cur_val_opt {
-      // if the supplied `key` does not exist in `map` return an error
-      None => Err(StorageError::InvalidKey),
-      // if the supplied `key` exists in `map` return the entry at index `idx` in the vector associated with `key` in `map`
-      Some(cur_val) => {
-        if idx < cur_val.len() {
-          Ok(cur_val[idx].clone())
-        } else {
-          Err(StorageError::InvalidIndex)
-        }
-      },
-    }
-  }
+  let m: BTreeMap<_, _> = v.iter().collect();
+  m.serialize(serializer)
 }
 
-#[cfg(test)]
-mod tests {
-  use crate::store::AppendOnlyStore;
+type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
 
-  #[test]
-  pub fn check_store_creation_and_operations() {
-    let mut state = AppendOnlyStore::<Vec<u8>, Vec<u8>>::new();
+#[derive(Debug, Default)]
+pub struct InMemoryLedgerStore {
+  ledgers: Arc<RwLock<HashMap<Handle, LedgerArray>>>,
+  view_ledger: Arc<RwLock<Vec<LedgerEntry>>>,
+}
 
-    let key = b"endorser_issued_handle".to_vec();
-    let initial_value: Vec<u8> = vec![
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-      1, 2,
-    ];
+impl LedgerStore for InMemoryLedgerStore {
+  fn new() -> Result<Self, StorageError>
+  where
+    Self: Sized,
+  {
+    let ledgers = HashMap::new();
+    let mut view_ledger = Vec::new();
 
-    // [TEST]: Testing Coordinator insert and read_latest
-    let res = state.insert(&key, &initial_value);
-    assert!(res.is_ok());
+    let view_ledger_entry = LedgerEntry {
+      block: Block::new(&[0; 0]),
+      aux: MetaBlock::new(
+        &NimbleDigest::default(),
+        &NimbleDigest::default(),
+        &NimbleDigest::default(),
+        0,
+      ),
+      receipt: Receipt {
+        id_sigs: Vec::new(),
+      },
+    };
+    view_ledger.push(view_ledger_entry);
 
-    let res = state.read_latest(&key);
-    assert!(res.is_ok());
+    Ok(InMemoryLedgerStore {
+      ledgers: Arc::new(RwLock::new(ledgers)),
+      view_ledger: Arc::new(RwLock::new(view_ledger)),
+    })
+  }
 
-    let current_data = res.unwrap();
-    assert_eq!(current_data, initial_value);
+  fn create_ledger(
+    &self,
+    block: &Block,
+  ) -> Result<(Handle, MetaBlock, NimbleDigest), StorageError> {
+    if let Ok(view_ledger_array) = self.view_ledger.read() {
+      let handle = block.hash();
+      let block_hash = block.hash();
+      let aux = MetaBlock::new(
+        &view_ledger_array[view_ledger_array.len() - 1].aux.hash(),
+        &NimbleDigest::default(),
+        &block_hash,
+        0,
+      );
+      let ledger_entry = LedgerEntry {
+        block: block.clone(),
+        aux: aux.clone(),
+        receipt: Receipt {
+          id_sigs: Vec::new(),
+        },
+      };
+      if let Ok(mut ledgers_map) = self.ledgers.write() {
+        if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
+          let tail_hash = ledger_entry.aux.hash();
+          e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
+          Ok((handle, aux, tail_hash))
+        } else {
+          Err(StorageError::DuplicateKey)
+        }
+      } else {
+        Err(StorageError::LedgerMapWriteLockFailed)
+      }
+    } else {
+      Err(StorageError::ViewLedgerReadLockFailed)
+    }
+  }
 
-    let new_value_appended: Vec<u8> = vec![
-      2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
-      2, 1,
-    ];
+  fn append_ledger(
+    &self,
+    handle: &Handle,
+    block: &Block,
+    cond: &NimbleDigest,
+  ) -> Result<(MetaBlock, NimbleDigest), StorageError> {
+    if let Ok(view_ledger_array) = self.view_ledger.read() {
+      if let Ok(ledgers_map) = self.ledgers.read() {
+        if ledgers_map.contains_key(handle) {
+          if let Ok(mut ledgers) = ledgers_map[handle].write() {
+            let last_entry = &ledgers[ledgers.len() - 1].aux;
+            if *cond == NimbleDigest::default() || *cond == last_entry.hash() {
+              let block_hash = block.hash();
+              let ledger_entry = LedgerEntry {
+                block: block.clone(),
+                aux: MetaBlock::new(
+                  &view_ledger_array[view_ledger_array.len() - 1].aux.hash(),
+                  &last_entry.hash(),
+                  &block_hash,
+                  last_entry.get_height() + 1,
+                ),
+                receipt: Receipt {
+                  id_sigs: Vec::new(),
+                },
+              };
+              let tail_hash = ledger_entry.aux.hash();
+              let aux = ledger_entry.aux.clone();
+              ledgers.push(ledger_entry);
+              Ok((aux, tail_hash))
+            } else {
+              Err(StorageError::IncorrectConditionalData)
+            }
+          } else {
+            Err(StorageError::LedgerWriteLockFailed)
+          }
+        } else {
+          Err(StorageError::KeyDoesNotExist)
+        }
+      } else {
+        Err(StorageError::LedgerMapReadLockFailed)
+      }
+    } else {
+      Err(StorageError::ViewLedgerReadLockFailed)
+    }
+  }
 
-    let res = state.append(&key, &new_value_appended);
-    assert!(res.is_ok());
+  fn attach_ledger_receipt(
+    &self,
+    handle: &Handle,
+    aux: &MetaBlock,
+    receipt: &Receipt,
+  ) -> Result<(), StorageError> {
+    if let Ok(ledgers_map) = self.ledgers.read() {
+      if ledgers_map.contains_key(handle) {
+        if let Ok(mut ledgers) = ledgers_map[handle].write() {
+          if aux.get_height() < ledgers.len() {
+            ledgers[aux.get_height()].receipt = receipt.clone();
+            Ok(())
+          } else {
+            Err(StorageError::InvalidIndex)
+          }
+        } else {
+          Err(StorageError::LedgerWriteLockFailed)
+        }
+      } else {
+        Err(StorageError::KeyDoesNotExist)
+      }
+    } else {
+      Err(StorageError::LedgerMapReadLockFailed)
+    }
+  }
 
-    let res = state.read_latest(&key);
-    assert!(res.is_ok());
+  fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError> {
+    if let Ok(ledgers_map) = self.ledgers.read() {
+      if ledgers_map.contains_key(handle) {
+        if let Ok(ledgers) = ledgers_map[handle].read() {
+          Ok(ledgers[ledgers.len() - 1].clone())
+        } else {
+          Err(StorageError::LedgerReadLockFailed)
+        }
+      } else {
+        Err(StorageError::KeyDoesNotExist)
+      }
+    } else {
+      Err(StorageError::LedgerMapReadLockFailed)
+    }
+  }
 
-    let current_tail = res.unwrap();
-    assert_eq!(current_tail, new_value_appended);
+  fn read_leger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError> {
+    if let Ok(ledgers_map) = self.ledgers.read() {
+      if ledgers_map.contains_key(handle) {
+        if let Ok(ledgers) = ledgers_map[handle].read() {
+          if idx < ledgers.len() {
+            Ok(ledgers[idx].clone())
+          } else {
+            Err(StorageError::InvalidIndex)
+          }
+        } else {
+          Err(StorageError::LedgerReadLockFailed)
+        }
+      } else {
+        Err(StorageError::KeyDoesNotExist)
+      }
+    } else {
+      Err(StorageError::LedgerMapReadLockFailed)
+    }
+  }
 
-    let res = state.read_by_index(&key, 0);
-    assert!(res.is_ok());
-    let data_at_index = res.unwrap();
-    assert_eq!(data_at_index, initial_value)
+  fn append_view_ledger(&self, block: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError> {
+    if let Ok(mut view_ledger_array) = self.view_ledger.write() {
+      if let Ok(ledger_map) = self.ledgers.read() {
+        let last_view_ledger_entry_aux = &view_ledger_array[view_ledger_array.len() - 1].aux;
+        let block_hash = block.hash();
+
+        let state_hash = {
+          if ledger_map.is_empty() || view_ledger_array.len() == 1 {
+            NimbleDigest::default()
+          } else {
+            let ledger_store_state = LedgerStoreState {
+              ledger_tail_map: ledger_map
+                .iter()
+                .map(|(handle, ledger)| {
+                  (
+                    handle.to_bytes(),
+                    ({
+                      let ledger_array = ledger.read().expect("failed to read a ledger");
+                      let last_ledger_entry_aux = &ledger_array[ledger_array.len() - 1].aux;
+                      (
+                        last_ledger_entry_aux.hash().to_bytes(),
+                        last_ledger_entry_aux.get_height(),
+                      )
+                    }),
+                  )
+                })
+                .collect(),
+              view_ledger_tail: (
+                last_view_ledger_entry_aux.hash().to_bytes(),
+                last_view_ledger_entry_aux.get_height(),
+              ),
+            };
+            let serialized_ledger_store_state = bincode::serialize(&ledger_store_state).unwrap();
+            NimbleDigest::digest(&serialized_ledger_store_state)
+          }
+        };
+
+        let ledger_entry = LedgerEntry {
+          block: block.clone(),
+          aux: MetaBlock::new(
+            &state_hash,
+            &if view_ledger_array.len() == 1 {
+              NimbleDigest::default()
+            } else {
+              last_view_ledger_entry_aux.hash()
+            },
+            &block_hash,
+            last_view_ledger_entry_aux.get_height() + 1,
+          ),
+          receipt: Receipt {
+            id_sigs: Vec::new(),
+          },
+        };
+        let tail_hash = ledger_entry.aux.hash();
+        let aux = ledger_entry.aux.clone();
+        view_ledger_array.push(ledger_entry);
+        Ok((aux, tail_hash))
+      } else {
+        Err(StorageError::LedgerMapReadLockFailed)
+      }
+    } else {
+      Err(StorageError::ViewLedgerWriteLockFailed)
+    }
+  }
+
+  fn attach_view_leger_receipt(
+    &self,
+    aux: &MetaBlock,
+    receipt: &Receipt,
+  ) -> Result<(), StorageError> {
+    if let Ok(mut view_ledger_array) = self.view_ledger.write() {
+      if aux.get_height() < view_ledger_array.len() {
+        view_ledger_array[aux.get_height()].receipt = receipt.clone();
+        Ok(())
+      } else {
+        Err(StorageError::InvalidIndex)
+      }
+    } else {
+      Err(StorageError::ViewLedgerWriteLockFailed)
+    }
+  }
+
+  fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError> {
+    if let Ok(view_ledger_array) = self.view_ledger.read() {
+      Ok(view_ledger_array[view_ledger_array.len() - 1].clone())
+    } else {
+      Err(StorageError::ViewLedgerReadLockFailed)
+    }
+  }
+
+  fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, StorageError> {
+    if let Ok(view_ledger_array) = self.view_ledger.read() {
+      if idx < view_ledger_array.len() {
+        Ok(view_ledger_array[idx].clone())
+      } else {
+        Err(StorageError::InvalidIndex)
+      }
+    } else {
+      Err(StorageError::ViewLedgerReadLockFailed)
+    }
   }
 }

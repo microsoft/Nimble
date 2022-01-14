@@ -53,6 +53,8 @@ impl NimbleDigest {
   }
 }
 
+pub type Handle = NimbleDigest;
+
 /// A cryptographic Nonce
 #[derive(Clone, Debug, Copy)]
 pub struct Nonce {
