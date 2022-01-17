@@ -40,6 +40,28 @@ CMD echo "[Nimble] Building Nimble"
 RUN cargo build --release
 CMD echo "[Nimble] Build Complete"
 
+# Light weight individual images.
+FROM rustlang/rust:nightly as benchmark
+MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
+COPY --from=build /NimbleLedger/target/release/bench .
+CMD ls -al
+
+FROM rustlang/rust:nightly as client
+MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
+COPY --from=build /NimbleLedger/target/release/client .
+CMD ls -al
+
+FROM rustlang/rust:nightly as coordinator
+MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
+COPY --from=build /NimbleLedger/target/release/coordinator .
+CMD ls -al
+
+FROM rustlang/rust:nightly as endorser
+MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
+COPY --from=build /NimbleLedger/target/release/endorser .
+CMD ls -al
+
+# Default container image created.
 FROM rustlang/rust:nightly
 MAINTAINER ["Sudheesh Singanamalla", "Srinath Setty"]
 COPY --from=build /NimbleLedger/target/release/bench .
@@ -47,4 +69,3 @@ COPY --from=build /NimbleLedger/target/release/client .
 COPY --from=build /NimbleLedger/target/release/coordinator .
 COPY --from=build /NimbleLedger/target/release/endorser .
 CMD ls -al
-
