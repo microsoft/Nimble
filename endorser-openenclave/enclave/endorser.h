@@ -44,9 +44,9 @@ public:
   int initialize_state(init_endorser_data_t *state, signature_t* signature);
   int new_ledger(handle_t* handle, signature_t* signature);
   int read_latest(handle_t* handle, nonce_t* nonce, signature_t* signature);
-  int append(handle_t *handle, digest_t* block_hash, signature_t* signature);
+  int append(handle_t *handle, digest_t* block_hash, digest_t *cond_updated_tail_hash, signature_t* signature);
   int read_latest_view_ledger(nonce_t* nonce, signature_t* signature);
-  int append_view_ledger(digest_t* block_hash, signature_t* signature);
+  int append_view_ledger(digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature);
   int get_public_key(endorser_id_t* endorser_id);
   void terminate();
 };

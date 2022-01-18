@@ -40,6 +40,7 @@ message ReadLatestResp {
 message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
+  bytes cond_updated_tail_hash = 3;
 }
 
 message AppendResp {
@@ -56,6 +57,7 @@ message ReadLatestViewLedgerResp {
 
 message AppendViewLedgerReq {
   bytes block_hash = 1;
+  bytes cond_updated_tail_hash = 2;
 }
 
 message AppendViewLedgerResp {
@@ -77,6 +79,7 @@ message InitializeStateReq {
   bytes view_ledger_tail = 2; // the view ledger tail
   uint64 view_ledger_height = 3; // the view ledger height
   bytes block_hash = 4; // the block hash of the latest block on the view ledger
+  bytes cond_updated_tail_hash = 5; // the conditional updated tail hash of the latest block on the view ledger
 }
 
 message InitializeStateResp {

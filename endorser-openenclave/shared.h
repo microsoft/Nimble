@@ -52,6 +52,7 @@ typedef struct _init_endorser_data {
   digest_t view_ledger_tail;
   unsigned long long view_ledger_height;
   digest_t block_hash;
+  digest_t cond_updated_tail_hash;
 } init_endorser_data_t;
 
 #endif /* _SHARED_H */

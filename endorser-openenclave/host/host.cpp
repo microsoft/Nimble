@@ -77,7 +77,9 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         string t = request->view_ledger_tail();
         unsigned long long h = request->view_ledger_height();
         string b_h = request->block_hash();
-        if (t.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+        string cond_h = request->cond_updated_tail_hash();
+
+        if (t.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES || cond_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
           return Status(StatusCode::INVALID_ARGUMENT, "one or both of view ledger tail and block hash are invalid");
         }
 
@@ -97,6 +99,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(state.view_ledger_tail.v, t.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         state.view_ledger_height = h;
         memcpy(state.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(state.cond_updated_tail_hash.v, cond_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
 
         int ret = 0;
         oe_result_t result;
@@ -172,16 +175,19 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status Append(ServerContext *context, const AppendReq* request, AppendResp* reply) override {
         string h = request->handle();
         string b_h = request->block_hash();
+        string cond_h = request->cond_updated_tail_hash();
 
-        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES || cond_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
         }
 
         // Request data
         handle_t handle;
         digest_t block_hash;
+        digest_t cond_updated_tail_hash;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(cond_updated_tail_hash.v, cond_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
 
         // OE Prepare
         int ret = 0;
@@ -189,7 +195,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         signature_t signature;
-        result = append(enclave, &ret, &handle, &block_hash, &signature);
+        result = append(enclave, &ret, &handle, &block_hash, &cond_updated_tail_hash, &signature);
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }
@@ -228,14 +234,17 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
     Status AppendViewLedger(ServerContext *context, const AppendViewLedgerReq* request, AppendViewLedgerResp* reply) override {
         string b_h = request->block_hash();
+        string cond_h = request->cond_updated_tail_hash();
 
-        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES || cond_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
         }
 
         // Request data
         digest_t block_hash;
+        digest_t cond_updated_tail_hash;
         memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(cond_updated_tail_hash.v, cond_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
 
         // OE Prepare
         int ret = 0;
@@ -243,7 +252,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         signature_t signature;
-        result = append_view_ledger(enclave, &ret, &block_hash, &signature);
+        result = append_view_ledger(enclave, &ret, &block_hash, &cond_updated_tail_hash, &signature);
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }

@@ -103,7 +103,7 @@ int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t*
 
   this->is_initialized = true;
 
-  return append_view_ledger(&state->block_hash, signature);
+  return append_view_ledger(&state->block_hash, &state->cond_updated_tail_hash, signature);
 
  exit:
   return ret;
@@ -196,7 +196,7 @@ exit:
   return ret;
 }
   
-int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t* signature) {
+int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature) {
   int ret = 0;
   int res = 0;
 
@@ -237,6 +237,13 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, signature_t
   // hash the metadata block
   digest_t h_m;
   calc_digest((unsigned char *) &m, sizeof(meta_block_t), &h_m);
+
+  // perform a check on the post-state of the append
+  if (memcmp(h_m.v, cond_updated_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES) != 0) {
+    TRACE_ENCLAVE("The provided cond_updated_tail_hash did not match with the local computation of the same hash");
+    ret = 1;
+    goto exit;
+  }
 
   // Produce a signature
   res = calc_signature(this->eckey, &h_m, signature);
@@ -319,7 +326,7 @@ int calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, compar
   }
 }
 
-int ecall_dispatcher::append_view_ledger(digest_t* block_hash, signature_t* signature) {
+int ecall_dispatcher::append_view_ledger(digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature) {
   int ret = 0;
   int res = 0;
 
@@ -351,6 +358,13 @@ int ecall_dispatcher::append_view_ledger(digest_t* block_hash, signature_t* sign
   // hash the metadata block
   digest_t h_m;
   calc_digest((unsigned char *) &m, sizeof(meta_block_t), &h_m);
+
+  // perform a check on the post-state of the append
+  if (memcmp(h_m.v, cond_updated_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES) != 0) {
+    TRACE_ENCLAVE("The provided cond_updated_tail_hash did not match with the local computation of the same hash");
+    ret = 1;
+    goto exit;
+  }
 
   // Produce a signature
   res = calc_signature(this->eckey, &h_m, signature);
