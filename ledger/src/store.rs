@@ -33,7 +33,7 @@ pub trait LedgerStore {
   ) -> Result<(), StorageError>;
   fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
   fn read_leger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError>;
-  fn append_view_ledger(&self, handle: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError>;
+  fn append_view_ledger(&self, block: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError>;
   fn attach_view_leger_receipt(
     &self,
     aux: &MetaBlock,
