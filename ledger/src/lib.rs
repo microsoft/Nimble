@@ -2,7 +2,7 @@ mod errors;
 pub mod signature;
 pub mod store;
 use crate::errors::VerificationError;
-use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
+use crate::signature::{PublicKey, Signature, SignatureTrait};
 use digest::Output;
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
@@ -182,7 +182,7 @@ impl Block {
   }
 
   pub fn genesis(
-    pk_vec: &[PublicKey],
+    pk_vec: &[Vec<u8>],
     service_nonce_bytes: &[u8],
     client_nonce_bytes: &[u8],
     app_bytes: &[u8],
@@ -195,16 +195,13 @@ impl Block {
       }
       (nonce_res.unwrap(), client_res.unwrap())
     };
-    let pk_vec_bytes = (0..pk_vec.len())
-      .map(|i| pk_vec[i].to_bytes().to_vec())
-      .collect::<Vec<Vec<u8>>>();
 
     Ok(Block {
       block: concat(vec![
         nonce.get(),
         client_nonce.get(),
         vec![pk_vec.len() as u8],
-        concat(pk_vec_bytes),
+        concat(pk_vec.to_owned()),
         app_bytes.to_vec(),
       ]),
     })
