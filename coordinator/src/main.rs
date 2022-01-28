@@ -2,7 +2,7 @@ mod errors;
 mod network;
 
 use crate::network::ConnectionStore;
-use ledger::store::{InMemoryLedgerStore, LedgerStore};
+use ledger::store::{in_memory::InMemoryLedgerStore, LedgerStore};
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
 use std::collections::HashMap;
 use tonic::transport::Server;
