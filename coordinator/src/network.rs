@@ -88,12 +88,11 @@ impl ConnectionStore {
       .collect();
 
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let ledger_tail_map = ledger_tail_map_proto.clone();
@@ -101,6 +100,7 @@ impl ConnectionStore {
       let view_ledger_height = view_ledger_tail_height.1 as u64;
       let block_hash = block_hash.to_bytes();
       let cond_updated_tail_hash = cond_updated_tail_hash.to_bytes();
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .initialize_state(tonic::Request::new(InitializeStateReq {
@@ -111,17 +111,17 @@ impl ConnectionStore {
             cond_updated_tail_hash,
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let InitializeStateResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -130,32 +130,32 @@ impl ConnectionStore {
 
   pub async fn create_ledger(&self, ledger_handle: &Handle) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let handle = *ledger_handle;
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .new_ledger(tonic::Request::new(NewLedgerReq {
             handle: handle.to_bytes(),
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let NewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -169,17 +169,17 @@ impl ConnectionStore {
     tail_hash: &NimbleDigest,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let handle = *ledger_handle;
       let block = *block_hash;
       let tail = *tail_hash;
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .append(tonic::Request::new(AppendReq {
@@ -188,17 +188,17 @@ impl ConnectionStore {
             cond_updated_tail_hash: tail.to_bytes(),
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let AppendResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -211,16 +211,16 @@ impl ConnectionStore {
     client_nonce: &Nonce,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let handle = *ledger_handle;
       let nonce = *client_nonce;
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .read_latest(tonic::Request::new(ReadLatestReq {
@@ -228,17 +228,17 @@ impl ConnectionStore {
             nonce: nonce.get(),
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let ReadLatestResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -252,16 +252,16 @@ impl ConnectionStore {
     tail_hash: &NimbleDigest,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let block = *block_hash;
       let tail = *tail_hash;
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .append_view_ledger(tonic::Request::new(AppendViewLedgerReq {
@@ -269,17 +269,17 @@ impl ConnectionStore {
             cond_updated_tail_hash: tail.to_bytes(),
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let AppendViewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -292,32 +292,32 @@ impl ConnectionStore {
     client_nonce: &Nonce,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (index, (_pk, ec)) in self
+    for (pk, ec) in self
       .store
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .enumerate()
     {
       let mut endorser_client = ec.clone();
       let nonce = *client_nonce;
+      let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .read_latest_view_ledger(tonic::Request::new(ReadLatestViewLedgerReq {
             nonce: nonce.get(),
           }))
           .await;
-        (index, response)
+        (pk_bytes, response)
       });
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((index, Ok(resp))) = res {
+      if let Ok((pk, Ok(resp))) = res {
         let ReadLatestViewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((index, signature));
+        receipt_bytes.push((pk, signature));
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);

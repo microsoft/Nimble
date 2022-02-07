@@ -2,7 +2,7 @@ mod errors;
 pub mod signature;
 pub mod store;
 use crate::errors::VerificationError;
-use crate::signature::{PublicKey, Signature, SignatureTrait};
+use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
@@ -79,17 +79,17 @@ impl Nonce {
 
 #[derive(Debug, Clone)]
 pub struct IdSig {
-  id: usize,
+  id: PublicKey,
   sig: Signature,
 }
 
 impl IdSig {
-  pub fn get_id_and_sig(&self) -> (usize, &Signature) {
-    (self.id, &self.sig)
+  pub fn get_id_and_sig(&self) -> (&PublicKey, &Signature) {
+    (&self.id, &self.sig)
   }
 
-  pub fn get_id(&self) -> usize {
-    self.id
+  pub fn get_id(&self) -> &PublicKey {
+    &self.id
   }
 
   pub fn get_sig(&self) -> &Signature {
@@ -104,13 +104,13 @@ pub struct Receipt {
 
 impl Receipt {
   // TODO: return error in case `from_bytes` fails
-  pub fn from_bytes(receipt_bytes: &[(usize, Vec<u8>)]) -> Receipt {
+  pub fn from_bytes(receipt_bytes: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
     Receipt {
       id_sigs: (0..receipt_bytes.len())
         .map(|i| {
-          let (id, sig_bytes) = receipt_bytes[i].clone();
+          let (id_bytes, sig_bytes) = receipt_bytes[i].clone();
           IdSig {
-            id,
+            id: PublicKey::from_bytes(&id_bytes).unwrap(),
             sig: Signature::from_bytes(&sig_bytes).unwrap(),
           }
         })
@@ -118,22 +118,22 @@ impl Receipt {
     }
   }
 
-  pub fn to_bytes(&self) -> Vec<(usize, Vec<u8>)> {
+  pub fn to_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
     self
       .id_sigs
       .iter()
-      .map(|x| (x.id, x.sig.to_bytes().to_vec()))
+      .map(|x| (x.id.to_bytes().to_vec(), x.sig.to_bytes().to_vec()))
       .collect()
   }
 
   pub fn verify(&self, msg: &[u8], pk_vec: &[PublicKey]) -> Result<(), VerificationError> {
-    // check if the indexes in the receipt are unique
+    // check if the provided public keys in the receipt are unique
     let id_sigs = &self.id_sigs;
     let unique_ids = {
       let mut uniq = HashSet::new();
       (0..id_sigs.len())
-        .map(|i| id_sigs[i].get_id())
-        .collect::<Vec<usize>>()
+        .map(|i| id_sigs[i].get_id().to_bytes().to_vec())
+        .collect::<Vec<Vec<u8>>>()
         .into_iter()
         .all(|x| uniq.insert(x));
       uniq
@@ -143,20 +143,25 @@ impl Receipt {
       return Err(VerificationError::DuplicateIds);
     }
 
-    // verify the signatures in the receipt by indexing into the public keys in self.pk
+    // check if we have the simple majority
+    if id_sigs.len() < pk_vec.len() / 2 + 1 {
+      return Err(VerificationError::InsufficientQuorum);
+    }
+
+    // verify the signatures in the receipt and ensure that the provided public keys are in pk_vec
     let res = (0..id_sigs.len()).try_for_each(|i| {
       let id = id_sigs[i].get_id();
       let sig = id_sigs[i].get_sig();
-      if id < pk_vec.len() {
-        let pk = &pk_vec[id];
-        let res = sig.verify(pk, msg);
+      // check the inclusion of purported public key in the provided list and then verify signature
+      if !pk_vec.iter().any(|pk| pk.to_bytes() == id.to_bytes()) {
+        Err(VerificationError::InvalidPublicKey)
+      } else {
+        let res = sig.verify(id, msg);
         if res.is_err() {
           Err(VerificationError::InvalidSignature)
         } else {
           Ok(())
         }
-      } else {
-        Err(VerificationError::IndexOutofBounds)
       }
     });
 

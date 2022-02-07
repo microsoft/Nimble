@@ -1,12 +1,12 @@
 use crate::coordinator_proto::Receipt;
 use std::time::Duration;
 
-pub fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(usize, Vec<u8>)> {
+pub fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(Vec<u8>, Vec<u8>)> {
   assert!(receipt.is_some());
   let id_sigs = receipt.clone().unwrap().id_sigs;
   (0..id_sigs.len())
-    .map(|i| (id_sigs[i].pk_idx as usize, id_sigs[i].sig.clone()))
-    .collect::<Vec<(usize, Vec<u8>)>>()
+    .map(|i| (id_sigs[i].id.clone(), id_sigs[i].sig.clone()))
+    .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
 }
 
 pub fn generate_random_bytes(buffer_size: usize) -> Vec<u8> {

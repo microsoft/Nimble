@@ -80,11 +80,11 @@ impl CoordinatorState {
   }
 }
 
-fn reformat_receipt(receipt: &[(usize, Vec<u8>)]) -> Receipt {
+fn reformat_receipt(receipt: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
   let id_sigs = receipt
     .iter()
     .map(|(id, sig)| IdSig {
-      pk_idx: *id as u64,
+      id: id.clone(),
       sig: sig.clone(),
     })
     .collect();

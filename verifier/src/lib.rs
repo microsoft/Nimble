@@ -66,7 +66,7 @@ impl VerificationKey {
 pub fn verify_new_ledger(
   view_bytes: &[u8],
   block_bytes: &[u8],
-  receipt_bytes: &[(usize, Vec<u8>)],
+  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
   nonce: &[u8],
 ) -> Result<(Vec<u8>, VerificationKey, Vec<u8>), VerificationError> {
   if receipt_bytes.len() < MIN_NUM_ENDORSERS {
@@ -185,7 +185,7 @@ pub fn verify_read_latest(
   prev_bytes: &[u8],
   height: usize,
   nonce_bytes: &[u8],
-  receipt_bytes: &[(usize, Vec<u8>)],
+  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
 ) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
   if receipt_bytes.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -243,7 +243,7 @@ pub fn verify_read_by_index(
   block_bytes: &[u8],
   prev_bytes: &[u8],
   idx: usize,
-  receipt_bytes: &[(usize, Vec<u8>)],
+  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
 ) -> Result<(), VerificationError> {
   if receipt_bytes.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -291,7 +291,7 @@ pub fn verify_append(
   block_bytes: &[u8],
   prev: &[u8],
   height: usize,
-  receipt_bytes: &[(usize, Vec<u8>)],
+  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
 ) -> Result<Vec<u8>, VerificationError> {
   if receipt_bytes.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);

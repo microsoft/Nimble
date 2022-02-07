@@ -10,7 +10,7 @@ service Call {
 }
 
 message IdSig {
-  uint64 pk_idx = 1;
+  bytes id = 1;
   bytes sig = 2;
 }
 

@@ -38,7 +38,7 @@ impl BsonBinaryData for Handle {
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
   pub aux: Vec<u8>,
-  pub receipt: Vec<(usize, Vec<u8>)>,
+  pub receipt: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
