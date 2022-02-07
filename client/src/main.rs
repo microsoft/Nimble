@@ -166,14 +166,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &block,
     &prev,
     height as usize,
-    &nonce.to_vec(),
+    nonce.as_ref(),
     &reformat_receipt(&receipt),
   );
   println!("Read Latest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (mut last_known_tail, block_data_verified) = res.unwrap();
-  assert_eq!(block_data_verified, vec![]); // This is empty since the block is genesis.
+  let (mut last_known_tail, block_data_verified): (Vec<u8>, Vec<u8>) = res.unwrap();
+  assert_eq!(block_data_verified, Vec::<u8>::new()); // This is empty since the block is genesis.
 
   // Step 4: Append
   let b1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let res = verify_append(
       &vk,
       &view,
-      &block_to_append.to_vec(),
+      block_to_append.as_ref(),
       &prev,
       height as usize,
       &reformat_receipt(&receipt),
@@ -242,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &block,
     &prev,
     height as usize,
-    &nonce.to_vec(),
+    nonce.as_ref(),
     &reformat_receipt(&receipt),
   );
   println!(
@@ -255,7 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let conditional_tail_hash_expected = get_tail_hash(&view, &block, &prev, height as usize);
   assert!(conditional_tail_hash_expected.is_ok());
   assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
-  assert_ne!(latest_block_verified, vec![]); // This should not be empty since the block is returned
+  assert_ne!(latest_block_verified, Vec::<u8>::new()); // This should not be empty since the block is returned
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
@@ -308,7 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = verify_append(
     &vk,
     &view,
-    &message.to_vec(),
+    message,
     &prev,
     height as usize,
     &reformat_receipt(&receipt),
@@ -342,7 +342,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &block,
     &prev,
     height as usize,
-    &nonce.to_vec(),
+    nonce.as_ref(),
     &reformat_receipt(&receipt),
   );
   println!(

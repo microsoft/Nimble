@@ -1,27 +1,8 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
-use crate::store::{LedgerEntry, LedgerStore};
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{hash_map, BTreeMap, HashMap};
+use crate::store::{LedgerEntry, LedgerStore, LedgerStoreState};
+use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
-
-#[derive(Serialize, Deserialize)]
-struct LedgerStoreState {
-  #[serde(serialize_with = "hashmap_serializer")]
-  ledger_tail_map: HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  view_ledger_tail: (Vec<u8>, usize),
-}
-
-fn hashmap_serializer<S>(
-  v: &HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-  S: Serializer,
-{
-  let m: BTreeMap<_, _> = v.iter().collect();
-  m.serialize(serializer)
-}
 
 type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
 
@@ -183,7 +164,7 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  fn read_leger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError> {
+  fn read_ledger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(ledgers) = ledgers_map[handle].read() {
@@ -268,7 +249,7 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  fn attach_view_leger_receipt(
+  fn attach_view_ledger_receipt(
     &self,
     aux: &MetaBlock,
     receipt: &Receipt,
@@ -303,5 +284,13 @@ impl LedgerStore for InMemoryLedgerStore {
     } else {
       Err(StorageError::ViewLedgerReadLockFailed)
     }
+  }
+
+  #[cfg(test)]
+  fn reset_store(&self) -> Result<(), StorageError> {
+    // not really needed for in-memory since state is already volatile.
+    // this API is only for testing persistent storage services.
+    // we could implement it here anyway, but choose not to for now.
+    Ok(())
   }
 }

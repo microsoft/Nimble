@@ -70,7 +70,7 @@ impl CoordinatorState {
       .unwrap();
 
     // (5) Store the receipt in the view ledger
-    let res = ledger_store.attach_view_leger_receipt(&view_ledger_meta_block, &receipt);
+    let res = ledger_store.attach_view_ledger_receipt(&view_ledger_meta_block, &receipt);
     assert!(res.is_ok());
 
     CoordinatorState {
@@ -257,7 +257,7 @@ impl Call for CoordinatorState {
     let ledger_entry = {
       let res = self
         .ledger_store
-        .read_leger_by_index(&handle, index as usize);
+        .read_ledger_by_index(&handle, index as usize);
       assert!(res.is_ok());
       res.unwrap()
     };
