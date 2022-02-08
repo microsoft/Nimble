@@ -2,7 +2,9 @@ mod errors;
 mod network;
 
 use crate::network::ConnectionStore;
-use ledger::store::{in_memory::InMemoryLedgerStore, LedgerStore};
+use ledger::store::{
+  in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+};
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
 use std::collections::HashMap;
 use tonic::transport::Server;
@@ -20,23 +22,23 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp, Receipt,
 };
 
-#[derive(Debug, Default)]
-pub struct CoordinatorState {
-  ledger_store: InMemoryLedgerStore,
+pub struct CoordinatorState<S>
+where
+  S: LedgerStore + Send + Sync,
+{
+  ledger_store: S,
   connections: ConnectionStore, // a map from a public key to a connection object
 }
 
 #[derive(Debug, Default)]
 pub struct CallServiceStub {}
 
-impl CoordinatorState {
-  pub async fn new(hostnames: Vec<&str>) -> Self {
+impl<S> CoordinatorState<S>
+where
+  S: LedgerStore + Send + Sync,
+{
+  pub async fn new(hostnames: Vec<&str>, ledger_store: S) -> Self {
     let mut connections = ConnectionStore::new();
-    let ledger_store = {
-      let res = InMemoryLedgerStore::new();
-      assert!(res.is_ok());
-      res.unwrap()
-    };
 
     // Connect in series. TODO: Make these requests async and concurrent
     for hostname in hostnames {
@@ -92,7 +94,10 @@ fn reformat_receipt(receipt: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
 }
 
 #[tonic::async_trait]
-impl Call for CoordinatorState {
+impl<S> Call for CoordinatorState<S>
+where
+  S: LedgerStore + Send + Sync + 'static,
+{
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
@@ -275,6 +280,10 @@ impl Call for CoordinatorState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
+      .arg(Arg::with_name("store").help("The type of store used by the service. Default: InMemory")
+          .default_value("memory")
+          .index(3),
+      )
       .arg(Arg::with_name("host").help("The hostname to run the service on. Default: [::1]")
                .default_value("[::1]")
                .index(2),
@@ -288,20 +297,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           .use_delimiter(true)
           .default_value("http://[::1]:9090,http://[::1]:9091,http://[::1]:9092,http://[::1]:9093,http://[::1]:9094")
           .required(true));
+
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
   let port_number = cli_matches.value_of("port").unwrap();
+  let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
   println!("Endorser_hostnames: {:?}", endorser_hostnames);
-  let server = CoordinatorState::new(endorser_hostnames).await;
 
-  println!("Running gRPC Coordinator Service at {:?}", addr);
+  match store {
+    "mongodb_cosmos" => {
+      let ledger_store = MongoCosmosLedgerStore::new().unwrap();
+      let server = CoordinatorState::new(endorser_hostnames, ledger_store).await;
+      println!("Running gRPC Coordinator Service at {:?}", addr);
 
-  Server::builder()
-    .add_service(CallServer::new(server))
-    .serve(addr)
-    .await?;
+      Server::builder()
+        .add_service(CallServer::new(server))
+        .serve(addr)
+        .await?;
+    },
+    _ => {
+      // in memory is default
+      let ledger_store = InMemoryLedgerStore::new().unwrap();
+      let server = CoordinatorState::new(endorser_hostnames, ledger_store).await;
+      println!("Running gRPC Coordinator Service at {:?}", addr);
+
+      Server::builder()
+        .add_service(CallServer::new(server))
+        .serve(addr)
+        .await?;
+    },
+  };
 
   Ok(())
 }
