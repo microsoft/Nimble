@@ -437,7 +437,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
     Status InitializeState(ServerContext *context, const InitializeStateReq *request, InitializeStateResp* reply) override {
         signature_t signature;
-        if (!init_endorser(request->ledger_tail_map(),
+        if (init_endorser(request->ledger_tail_map(),
                            request->block_hash().c_str(),
                            request->view_ledger_tail().c_str(),
                            request->view_ledger_height(),
