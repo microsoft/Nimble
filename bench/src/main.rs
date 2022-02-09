@@ -9,9 +9,11 @@ use tokio::time::Instant;
 use tonic::transport::{Channel, Endpoint};
 
 use coordinator_proto::call_client::CallClient;
-use coordinator_proto::{AppendReq, NewLedgerReq, NewLedgerResp};
+use coordinator_proto::{
+  AppendReq, NewLedgerReq, NewLedgerResp, ReadViewByIndexReq, ReadViewByIndexResp,
+};
 use ledger::NimbleDigest;
-use verifier::{verify_append, verify_new_ledger, VerificationKey};
+use verifier::{verify_append, verify_new_ledger, VerifierState};
 
 use crate::cli::Args;
 use crate::errors::ClientError;
@@ -97,6 +99,7 @@ async fn prepare_concurrent_clients(
 }
 
 async fn benchmark_newledger(
+  vs: &VerifierState,
   conn_pool: &[CoordinatorConnection],
   num_concurrent_clients: usize,
   num_reqs_per_client: usize,
@@ -210,6 +213,7 @@ async fn benchmark_newledger(
   for (newledger_res, client_nonce) in &responses {
     // NOTE: Every NewLedger response is individually verified and MUST pass.
     let res = verify_new_ledger(
+      vs,
       &newledger_res.view,
       &newledger_res.block,
       &reformat_receipt(&newledger_res.receipt),
@@ -230,6 +234,7 @@ async fn benchmark_newledger(
     .into_par_iter()
     .map(|i: usize| {
       verify_new_ledger(
+        vs,
         &responses[i].0.view,
         &responses[i].0.block,
         &reformat_receipt(&responses[i].0.receipt),
@@ -257,8 +262,8 @@ async fn benchmark_newledger(
 }
 
 async fn benchmark_append(
+  vs: &VerifierState,
   conn_pool: &[CoordinatorConnection],
-  vk: &VerificationKey,
   num_concurrent_clients: usize,
   num_reqs_per_client: usize,
   block_size: usize,
@@ -358,7 +363,7 @@ async fn benchmark_append(
   for append_res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
     let _res = verify_append(
-      vk,
+      vs,
       &append_res.view,
       &block.to_vec(),
       &append_res.prev,
@@ -380,7 +385,7 @@ async fn benchmark_append(
     .into_par_iter()
     .map(|i: usize| {
       verify_append(
-        vk,
+        vs,
         &responses[i].view,
         &block.to_vec(),
         &responses[i].prev,
@@ -428,6 +433,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     },
   };
 
+  // Initialization: Fetch view ledger to build VerifierState
+  let mut vs = VerifierState::new();
+
+  let req = tonic::Request::new(ReadViewByIndexReq {
+    index: 1, // the first entry on the view ledger starts at 1
+  });
+
+  let ReadViewByIndexResp {
+    view,
+    block,
+    prev,
+    receipt,
+  } = coordinator_connection
+    .client
+    .read_view_by_index(req)
+    .await?
+    .into_inner();
+
+  let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
+  println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
+  assert!(res.is_ok());
+
   // Step 1: NewLedger Request (With Application Data Embedded)
   let app_bytes: Vec<u8> = generate_random_bytes(app_byte_size);
   let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
@@ -445,11 +472,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(
+    &vs,
+    &view,
+    &block,
+    &reformat_receipt(&receipt),
+    &client_nonce,
+  );
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (handle, vk, ret_app_bytes) = res.unwrap();
+  let (handle, ret_app_bytes) = res.unwrap();
   assert_eq!(ret_app_bytes, app_bytes.to_vec());
 
   let num_concurrent_clients = config.clients;
@@ -463,6 +496,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match benchmark_type {
       BenchmarkRequestType::BenchmarkNewLedger => {
         let newledger_benchmark_ok = benchmark_newledger(
+          &vs,
           &conn_pool,
           num_concurrent_clients,
           num_reqs_per_client,
@@ -474,8 +508,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       },
       BenchmarkRequestType::BenchmarkAppend => {
         let append_benchmark_ok = benchmark_append(
+          &vs,
           &conn_pool,
-          &vk,
           num_concurrent_clients,
           num_reqs_per_client,
           app_byte_size,

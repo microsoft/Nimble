@@ -19,7 +19,7 @@ use clap::{App, Arg};
 use coordinator_proto::call_server::{Call, CallServer};
 use coordinator_proto::{
   AppendReq, AppendResp, IdSig, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp, Receipt,
+  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
 };
 
 pub struct CoordinatorState<S>
@@ -109,12 +109,9 @@ where
     // Generate a Unique Value, this is the coordinator chosen nonce.
     let service_nonce = Uuid::new_v4().as_bytes().to_vec();
 
-    // Retrieve all public keys of current active endorsers and connections to them
-    let endorser_pk_vec = self.connections.get_all();
-
     // Package the contents into a Block
     let genesis_block = {
-      let genesis_op = Block::genesis(&endorser_pk_vec, &service_nonce, &client_nonce, &app_bytes);
+      let genesis_op = Block::genesis(&service_nonce, &client_nonce, &app_bytes);
       if genesis_op.is_err() {
         return Err(Status::aborted("Failed to create a genesis block"));
       }
@@ -267,6 +264,26 @@ where
       res.unwrap()
     };
     let reply = ReadByIndexResp {
+      view: ledger_entry.aux.get_view().to_bytes(),
+      block: ledger_entry.block.to_bytes(),
+      prev: ledger_entry.aux.get_prev().to_bytes(),
+      receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
+    };
+
+    Ok(Response::new(reply))
+  }
+
+  async fn read_view_by_index(
+    &self,
+    request: Request<ReadViewByIndexReq>,
+  ) -> Result<Response<ReadViewByIndexResp>, Status> {
+    let ReadViewByIndexReq { index } = request.into_inner();
+    let ledger_entry = {
+      let res = self.ledger_store.read_view_ledger_by_index(index as usize);
+      assert!(res.is_ok());
+      res.unwrap()
+    };
+    let reply = ReadViewByIndexResp {
       view: ledger_entry.aux.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
       prev: ledger_entry.aux.get_prev().to_bytes(),

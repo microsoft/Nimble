@@ -173,6 +173,112 @@ impl Receipt {
   }
 }
 
+/// A ViewChangeReceipt is similar to a Receipt except that verification involves checking
+/// that a quorum of existing endorsers and all new endorsers sign the same message
+#[derive(Debug, Clone, Default)]
+pub struct ViewChangeReceipt {
+  id_sigs: Vec<IdSig>,
+}
+
+impl ViewChangeReceipt {
+  pub fn from_bytes(receipt_bytes: &[(Vec<u8>, Vec<u8>)]) -> ViewChangeReceipt {
+    let receipt = Receipt::from_bytes(receipt_bytes);
+    ViewChangeReceipt {
+      id_sigs: receipt.id_sigs,
+    }
+  }
+
+  pub fn to_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    self
+      .id_sigs
+      .iter()
+      .map(|x| (x.id.to_bytes().to_vec(), x.sig.to_bytes().to_vec()))
+      .collect()
+  }
+
+  pub fn verify(
+    &self,
+    msg: &[u8],
+    pk_vec_existing: &[PublicKey],
+    pk_vec_proposed: &[PublicKey],
+  ) -> Result<(), VerificationError> {
+    // check if the provided public keys in the receipt are unique
+    let unique_ids = {
+      let mut uniq = HashSet::new();
+      (0..self.id_sigs.len())
+        .map(|i| self.id_sigs[i].get_id().to_bytes().to_vec())
+        .collect::<Vec<Vec<u8>>>()
+        .into_iter()
+        .all(|x| uniq.insert(x));
+      uniq
+    };
+
+    if self.id_sigs.len() != unique_ids.len() {
+      return Err(VerificationError::DuplicateIds);
+    }
+
+    // we require a majority of endorsers in the latest view to have signed the provided message
+    // we also require all new endorsers in the proposed latest view to have signed the provided metblock
+    // (the latter check ensures that the new endorsers are initialized with the right state)
+
+    let num_sigs_from_pk_vec_existing = (0..pk_vec_existing.len())
+      .filter(|&i| {
+        let id = pk_vec_existing[i].to_bytes();
+        self.id_sigs.iter().any(|x| x.get_id().to_bytes() == id)
+      })
+      .count();
+
+    // check if we have the simple majority
+    if num_sigs_from_pk_vec_existing < pk_vec_existing.len() / 2 + 1 {
+      return Err(VerificationError::InsufficientQuorum);
+    }
+
+    let pk_vec_proposed_but_not_in_existing = {
+      // compute the set difference between pk_vec_proposed and pk_vec_existing
+      let mut diff = HashSet::new();
+      for pk in pk_vec_proposed {
+        diff.insert(pk.to_bytes());
+      }
+      for pk in pk_vec_existing {
+        diff.remove(&pk.to_bytes());
+      }
+      diff
+    };
+
+    // check that we have a signature from every public key in pk_vec_proposed_but_not_in_existing
+    let mut num_sigs_from_pk_vec_proposed_but_not_in_existing = 0;
+    for pk in &pk_vec_proposed_but_not_in_existing {
+      if self.id_sigs.iter().any(|x| x.get_id().to_bytes() == *pk) {
+        num_sigs_from_pk_vec_proposed_but_not_in_existing += 1;
+      }
+    }
+
+    if num_sigs_from_pk_vec_proposed_but_not_in_existing
+      != pk_vec_proposed_but_not_in_existing.len()
+    {
+      return Err(VerificationError::InsufficientQuorum);
+    }
+
+    // verify the signatures in the receipt and ensure that the provided public keys are in pk_vec
+    let res = (0..self.id_sigs.len()).try_for_each(|i| {
+      let id = self.id_sigs[i].get_id();
+      let sig = self.id_sigs[i].get_sig();
+      let res = sig.verify(id, msg);
+      if res.is_err() {
+        Err(VerificationError::InvalidSignature)
+      } else {
+        Ok(())
+      }
+    });
+
+    if res.is_err() {
+      Err(VerificationError::InvalidReceipt)
+    } else {
+      Ok(())
+    }
+  }
+}
+
 /// A block in a ledger is a byte array
 #[derive(Clone, Debug, Default)]
 pub struct Block {
@@ -187,7 +293,6 @@ impl Block {
   }
 
   pub fn genesis(
-    pk_vec: &[Vec<u8>],
     service_nonce_bytes: &[u8],
     client_nonce_bytes: &[u8],
     app_bytes: &[u8],
@@ -202,13 +307,7 @@ impl Block {
     };
 
     Ok(Block {
-      block: concat(vec![
-        nonce.get(),
-        client_nonce.get(),
-        vec![pk_vec.len() as u8],
-        concat(pk_vec.to_owned()),
-        app_bytes.to_vec(),
-      ]),
+      block: concat(vec![nonce.get(), client_nonce.get(), app_bytes.to_vec()]),
     })
   }
 }

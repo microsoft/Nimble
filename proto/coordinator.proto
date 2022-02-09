@@ -7,6 +7,7 @@ service Call {
   rpc Append(AppendReq) returns (AppendResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc ReadByIndex(ReadByIndexReq) returns (ReadByIndexResp);
+  rpc ReadViewByIndex(ReadViewByIndexReq) returns (ReadViewByIndexResp);
 }
 
 message IdSig {
@@ -61,6 +62,17 @@ message ReadByIndexReq {
 }
 
 message ReadByIndexResp {
+  bytes view = 1;
+  bytes block = 2;
+  bytes prev = 3;
+  Receipt receipt = 4;
+}
+
+message ReadViewByIndexReq {
+  uint64 index = 1;
+}
+
+message ReadViewByIndexResp {
   bytes view = 1;
   bytes block = 2;
   bytes prev = 3;

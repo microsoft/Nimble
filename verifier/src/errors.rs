@@ -18,4 +18,10 @@ pub enum VerificationError {
   InvalidView,
   /// returned if the number of provided receipts is zero
   InsufficientReceipts,
+  /// returned if the receipt provided to prove view change is invalid
+  InvalidViewChangeReceipt,
+  /// returned if the purported view is not in the verifier's state
+  ViewNotFound,
+  /// returned if the supplied metablock of the view ledger does not point to the tail in the verifier's state
+  ViewInMetaBlockNotLatest,
 }

@@ -11,11 +11,12 @@ use clap::{App, Arg};
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp, Receipt,
+  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
 };
 use rand::Rng;
 use verifier::{
   get_tail_hash, verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
+  VerifierState,
 };
 
 #[derive(Debug, Clone)]
@@ -64,6 +65,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     },
   };
 
+  // Initialization: Fetch view ledger to build VerifierState
+  let mut vs = VerifierState::new();
+
+  let req = tonic::Request::new(ReadViewByIndexReq {
+    index: 1, // the first entry on the view ledger starts at 1
+  });
+
+  let ReadViewByIndexResp {
+    view,
+    block,
+    prev,
+    receipt,
+  } = coordinator_connection
+    .client
+    .read_view_by_index(req)
+    .await?
+    .into_inner();
+
+  let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
+  println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
+  assert!(res.is_ok());
+
   // Step 0: Create some app data
   let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
@@ -83,11 +106,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(
+    &vs,
+    &view,
+    &block,
+    &reformat_receipt(&receipt),
+    &client_nonce,
+  );
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (_handle, _vk, ret_app_bytes) = res.unwrap();
+  let (_handle, ret_app_bytes) = res.unwrap();
   assert_eq!(ret_app_bytes, app_bytes.to_vec());
 
   // Step 1a. NewLedger Request with No Application Data Embedded
@@ -106,11 +135,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&view, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(
+    &vs,
+    &view,
+    &block,
+    &reformat_receipt(&receipt),
+    &client_nonce,
+  );
   println!("NewLedger (NoAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (handle, vk, app_bytes) = res.unwrap();
+  let (handle, app_bytes) = res.unwrap();
   assert_eq!(app_bytes.len(), 0);
 
   // Step 2: Read At Index
@@ -131,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = verify_read_by_index(
-    &vk,
+    &vs,
     &view,
     &block,
     &prev,
@@ -161,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = verify_read_latest(
-    &vk,
+    &vs,
     &view,
     &block,
     &prev,
@@ -204,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let res = verify_append(
-      &vk,
+      &vs,
       &view,
       block_to_append.as_ref(),
       &prev,
@@ -237,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert_eq!(block, b3.clone());
 
   let is_latest_valid = verify_read_latest(
-    &vk,
+    &vs,
     &view,
     &block,
     &prev,
@@ -276,7 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert_eq!(block, b2.clone());
 
   let res = verify_read_by_index(
-    &vk,
+    &vs,
     &view,
     &block,
     &prev,
@@ -306,7 +341,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = verify_append(
-    &vk,
+    &vs,
     &view,
     message,
     &prev,
@@ -337,7 +372,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert_eq!(block, message);
 
   let is_latest_valid = verify_read_latest(
-    &vk,
+    &vs,
     &view,
     &block,
     &prev,
