@@ -6,4 +6,18 @@ pub enum CoordinatorError {
   CannotResolveHostName,
   /// returned if the public key returned is invalid
   UnableToRetrievePublicKey,
+  /// returned if the call to initialize the endorser state fails
+  FailedToInitializeEndorser,
+  /// returned if the call to create ledger fails
+  FailedToCreateLedger,
+  /// returned if the call to append ledger fails
+  FailedToAppendLedger,
+  /// returned if the call to read ledger fails
+  FailedToReadLedger,
+  /// returned if the call to append view ledger fails
+  FailedToAppendViewLedger,
+  /// returned if the call to read view ledger fails
+  FailedToReadViewLedger,
+  /// returned if a call to the ledger store fails
+  FailedToCallLedgerStore,
 }

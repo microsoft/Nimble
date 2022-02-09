@@ -119,9 +119,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let InitializeStateResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let InitializeStateResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("initialize_state failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToInitializeEndorser);
+        }
+      } else {
+        eprintln!("initialize_state failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToInitializeEndorser);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -153,9 +161,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let NewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let NewLedgerResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("create_ledger failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToCreateLedger);
+        }
+      } else {
+        eprintln!("create_ledger failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToCreateLedger);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -196,9 +212,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let AppendResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let AppendResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("append_ledger failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToAppendLedger);
+        }
+      } else {
+        eprintln!("append_ledger failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToAppendLedger);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -236,9 +260,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let ReadLatestResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let ReadLatestResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("read_ledger_tail failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToReadLedger);
+        }
+      } else {
+        eprintln!("read_ledger_tail failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToReadLedger);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -277,9 +309,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let AppendViewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let AppendViewLedgerResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("append_view_ledger failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToAppendViewLedger);
+        }
+      } else {
+        eprintln!("append_view_ledger failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToAppendViewLedger);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
@@ -315,9 +355,17 @@ impl ConnectionStore {
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, Ok(resp))) = res {
-        let ReadLatestViewLedgerResp { signature } = resp.into_inner();
-        receipt_bytes.push((pk, signature));
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let ReadLatestViewLedgerResp { signature } = resp.into_inner();
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToReadViewLedger);
+        }
+      } else {
+        eprintln!("read_view_ledger_tail failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToReadViewLedger);
       }
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
