@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// A cryptographic digest
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Copy)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Copy, Ord, PartialOrd)]
 pub struct NimbleDigest {
   digest: Output<Sha256>,
 }

@@ -1,7 +1,8 @@
 use crate::errors::StorageError;
-use crate::store::{LedgerEntry, LedgerStore, LedgerStoreState};
+use crate::store::{LedgerEntry, LedgerStore};
 use crate::{Block, CustomSerde, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use bincode;
+use itertools::Itertools;
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
 use mongodb::error::UNKNOWN_TRANSACTION_COMMIT_RESULT;
@@ -644,13 +645,14 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let state_hash = if ledger_tail_map.is_empty() || view_ledger_tail.1 == 1 {
       NimbleDigest::default()
     } else {
-      let ledger_store_state = LedgerStoreState {
-        ledger_tail_map: ledger_tail_map.clone(),
-        view_ledger_tail: view_ledger_tail.clone(),
-      };
-
-      let serialized_ledger_store_state = bincode::serialize(&ledger_store_state).unwrap();
-      NimbleDigest::digest(&serialized_ledger_store_state)
+      let mut serialized_state = Vec::new();
+      for handle in ledger_tail_map.keys().sorted() {
+        let (tail, height) = ledger_tail_map.get(handle).unwrap();
+        serialized_state.extend_from_slice(handle);
+        serialized_state.extend_from_slice(tail);
+        serialized_state.extend_from_slice(&height.to_le_bytes());
+      }
+      NimbleDigest::digest(&serialized_state)
     };
 
     // 4. Compute new ledger entry

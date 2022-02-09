@@ -1,7 +1,5 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
 
 pub mod in_memory;
 pub mod mongodb_cosmos;
@@ -11,24 +9,6 @@ pub struct LedgerEntry {
   pub block: Block,
   pub aux: MetaBlock,
   pub receipt: Receipt,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LedgerStoreState {
-  #[serde(serialize_with = "hashmap_serializer")]
-  ledger_tail_map: HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  view_ledger_tail: (Vec<u8>, usize),
-}
-
-fn hashmap_serializer<S>(
-  v: &HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-  S: Serializer,
-{
-  let m: BTreeMap<_, _> = v.iter().collect();
-  m.serialize(serializer)
 }
 
 pub trait LedgerStore {

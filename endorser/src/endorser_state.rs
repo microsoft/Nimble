@@ -1,10 +1,10 @@
 use crate::errors::EndorserError;
+use itertools::Itertools;
 use ledger::{
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, Signature},
   MetaBlock, NimbleDigest, NimbleHashTrait,
 };
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// Endorser's internal state
 pub struct EndorserState {
@@ -19,24 +19,6 @@ pub struct EndorserState {
 
   /// whether the endorser is initialized
   is_initialized: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct EndorserStatePublic {
-  #[serde(serialize_with = "hashmap_serializer")]
-  ledger_tail_map: HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  view_ledger_tail: (Vec<u8>, usize),
-}
-
-fn hashmap_serializer<S>(
-  v: &HashMap<Vec<u8>, (Vec<u8>, usize)>,
-  serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-  S: Serializer,
-{
-  let m: BTreeMap<_, _> = v.iter().collect();
-  m.serialize(serializer)
 }
 
 impl EndorserState {
@@ -55,16 +37,14 @@ impl EndorserState {
     if self.ledger_tail_map.is_empty() && self.view_ledger_tail == (NimbleDigest::default(), 0) {
       NimbleDigest::default()
     } else {
-      let endorser_state_public = EndorserStatePublic {
-        ledger_tail_map: self
-          .ledger_tail_map
-          .iter()
-          .map(|(handle, (tail, height))| (handle.to_bytes(), (tail.to_bytes(), *height)))
-          .collect(),
-        view_ledger_tail: (self.view_ledger_tail.0.to_bytes(), self.view_ledger_tail.1),
-      };
-      let serialized_endorser_state_public = bincode::serialize(&endorser_state_public).unwrap();
-      NimbleDigest::digest(&serialized_endorser_state_public)
+      let mut serialized_state = Vec::new();
+      for handle in self.ledger_tail_map.keys().sorted() {
+        let (tail, height) = self.ledger_tail_map.get(handle).unwrap();
+        serialized_state.extend_from_slice(&handle.to_bytes());
+        serialized_state.extend_from_slice(&tail.to_bytes());
+        serialized_state.extend_from_slice(&height.to_le_bytes());
+      }
+      NimbleDigest::digest(&serialized_state)
     }
   }
 

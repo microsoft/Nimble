@@ -1,6 +1,7 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
-use crate::store::{LedgerEntry, LedgerStore, LedgerStoreState};
+use crate::store::{LedgerEntry, LedgerStore};
+use itertools::Itertools;
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
 
@@ -194,30 +195,17 @@ impl LedgerStore for InMemoryLedgerStore {
           if ledger_map.is_empty() || view_ledger_array.len() == 1 {
             NimbleDigest::default()
           } else {
-            let ledger_store_state = LedgerStoreState {
-              ledger_tail_map: ledger_map
-                .iter()
-                .map(|(handle, ledger)| {
-                  (
-                    handle.to_bytes(),
-                    ({
-                      let ledger_array = ledger.read().expect("failed to read a ledger");
-                      let last_ledger_entry_aux = &ledger_array[ledger_array.len() - 1].aux;
-                      (
-                        last_ledger_entry_aux.hash().to_bytes(),
-                        last_ledger_entry_aux.get_height(),
-                      )
-                    }),
-                  )
-                })
-                .collect(),
-              view_ledger_tail: (
-                last_view_ledger_entry_aux.hash().to_bytes(),
-                last_view_ledger_entry_aux.get_height(),
-              ),
-            };
-            let serialized_ledger_store_state = bincode::serialize(&ledger_store_state).unwrap();
-            NimbleDigest::digest(&serialized_ledger_store_state)
+            let mut serialized_state = Vec::new();
+            for handle in ledger_map.keys().sorted() {
+              let ledger_array = ledger_map[handle].read().expect("failed to read a ledger");
+              let last_ledger_entry_aux = &ledger_array[ledger_array.len() - 1].aux;
+              let tail = last_ledger_entry_aux.hash();
+              let height = last_ledger_entry_aux.get_height();
+              serialized_state.extend_from_slice(&handle.to_bytes());
+              serialized_state.extend_from_slice(&tail.to_bytes());
+              serialized_state.extend_from_slice(&height.to_le_bytes());
+            }
+            NimbleDigest::digest(&serialized_state)
           }
         };
 
