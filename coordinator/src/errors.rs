@@ -20,4 +20,10 @@ pub enum CoordinatorError {
   FailedToReadViewLedger,
   /// returned if a call to the ledger store fails
   FailedToCallLedgerStore,
+  /// returned if the endorser public key does not exist
+  InvalidEndorserPublicKey,
+  /// returned if the read lock cannot be acquired
+  FailedToAcquireReadLock,
+  /// returned if the write lock cannot be acquired
+  FailedToAcquireWriteLock,
 }

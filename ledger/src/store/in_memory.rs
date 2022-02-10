@@ -1,6 +1,6 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
-use crate::store::{LedgerEntry, LedgerStore};
+use crate::store::{LedgerEntry, LedgerStore, LedgerView};
 use itertools::Itertools;
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
@@ -185,7 +185,8 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  fn append_view_ledger(&self, block: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError> {
+  fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError> {
+    let mut ledger_tail_map = HashMap::new();
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       if let Ok(ledger_map) = self.ledgers.read() {
         let last_view_ledger_entry_aux = &view_ledger_array[view_ledger_array.len() - 1].aux;
@@ -204,6 +205,7 @@ impl LedgerStore for InMemoryLedgerStore {
               serialized_state.extend_from_slice(&handle.to_bytes());
               serialized_state.extend_from_slice(&tail.to_bytes());
               serialized_state.extend_from_slice(&height.to_le_bytes());
+              ledger_tail_map.insert(*handle, (tail, height));
             }
             NimbleDigest::digest(&serialized_state)
           }
@@ -228,7 +230,11 @@ impl LedgerStore for InMemoryLedgerStore {
         let tail_hash = ledger_entry.aux.hash();
         let aux = ledger_entry.aux.clone();
         view_ledger_array.push(ledger_entry);
-        Ok((aux, tail_hash))
+        Ok(LedgerView {
+          view_tail_aux: aux,
+          view_tail_hash: tail_hash,
+          ledger_tail_map,
+        })
       } else {
         Err(StorageError::LedgerMapReadLockFailed)
       }

@@ -1,5 +1,5 @@
 use crate::errors::StorageError;
-use crate::store::{LedgerEntry, LedgerStore};
+use crate::store::{LedgerEntry, LedgerStore, LedgerView};
 use crate::{Block, CustomSerde, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use bincode;
 use itertools::Itertools;
@@ -559,7 +559,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     self.attach_ledger_receipt(&self.view_handle, aux, receipt)
   }
 
-  fn append_view_ledger(&self, block: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError> {
+  fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError> {
     let client = self.client.clone();
     let ledgers = self.ledgers.clone();
 
@@ -594,7 +594,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .expect("failed to read all ledgers");
 
     // Initial LedgerStoreState
-    let mut ledger_tail_map: HashMap<Vec<u8>, (Vec<u8>, usize)> = HashMap::new();
+    let mut ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)> = HashMap::new();
     let mut view_ledger_tail: (Vec<u8>, usize) = (vec![], 0);
 
     // 2. Iterate through all non_view ledgers to update LedgerStoreState
@@ -619,7 +619,6 @@ impl LedgerStore for MongoCosmosLedgerStore {
         };
       } else {
         // ledger_entry is not view ledger
-        let ledger_handle = ledger_entry.key.bytes.clone();
 
         // get the tail of ledger
         let entry_val: SerializedLedgerEntry = {
@@ -631,11 +630,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
           MetaBlock::from_bytes(entry_val.aux.clone()).expect("failed to deserialize ledger aux");
 
         let res = ledger_tail_map.insert(
-          ledger_handle,
-          (
-            ledger_aux.hash().to_bytes().clone(),
-            ledger_aux.get_height(),
-          ),
+          NimbleDigest::from_bytes(&ledger_entry.key.bytes).unwrap(),
+          (ledger_aux.hash(), ledger_aux.get_height()),
         );
         assert!(res.is_none()); // since the key (ledger_handle) shouldn't exist.
       }
@@ -648,8 +644,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
       let mut serialized_state = Vec::new();
       for handle in ledger_tail_map.keys().sorted() {
         let (tail, height) = ledger_tail_map.get(handle).unwrap();
-        serialized_state.extend_from_slice(handle);
-        serialized_state.extend_from_slice(tail);
+        serialized_state.extend_from_slice(&handle.to_bytes());
+        serialized_state.extend_from_slice(&tail.to_bytes());
         serialized_state.extend_from_slice(&height.to_le_bytes());
       }
       NimbleDigest::digest(&serialized_state)
@@ -715,7 +711,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
       break;
     }
 
-    Ok((aux, tail_hash))
+    Ok(LedgerView {
+      view_tail_aux: aux,
+      view_tail_hash: tail_hash,
+      ledger_tail_map,
+    })
   }
 
   #[cfg(test)]

@@ -1,5 +1,6 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::StorageError;
+use std::collections::HashMap;
 
 pub mod in_memory;
 pub mod mongodb_cosmos;
@@ -9,6 +10,13 @@ pub struct LedgerEntry {
   pub block: Block,
   pub aux: MetaBlock,
   pub receipt: Receipt,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct LedgerView {
+  pub view_tail_aux: MetaBlock,
+  pub view_tail_hash: NimbleDigest,
+  pub ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
 }
 
 pub trait LedgerStore {
@@ -32,7 +40,7 @@ pub trait LedgerStore {
   ) -> Result<(), StorageError>;
   fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
   fn read_ledger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError>;
-  fn append_view_ledger(&self, block: &Block) -> Result<(MetaBlock, NimbleDigest), StorageError>;
+  fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError>;
   fn attach_view_ledger_receipt(
     &self,
     aux: &MetaBlock,

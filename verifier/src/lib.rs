@@ -3,7 +3,7 @@ mod errors;
 use crate::errors::VerificationError;
 use ledger::{
   signature::{CryptoError, PublicKey, PublicKeyTrait},
-  Block, CustomSerde, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt, ViewChangeReceipt,
+  Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt, ViewChangeReceipt,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -128,7 +128,7 @@ impl VerifierState {
       // (the latter check ensures that the new endorsers are initialized with the right state)
       let receipt = ViewChangeReceipt::from_bytes(receipt_bytes);
       let res = receipt.verify(
-        &metablock.to_bytes(),
+        &metablock.hash().to_bytes(),
         pk_vec_for_latest_view,
         &pk_vec_for_proposed_latest_view,
       );

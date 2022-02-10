@@ -62,17 +62,18 @@ impl ConnectionStore {
       return Err(CoordinatorError::UnableToRetrievePublicKey);
     }
 
-    self
-      .store
-      .write()
-      .expect("Failed to get write lock")
-      .insert(pk.clone(), client);
-
+    if let Ok(mut conn_map) = self.store.write() {
+      conn_map.insert(pk.clone(), client);
+    } else {
+      eprintln!("Failed to acquire the write lock");
+      return Err(CoordinatorError::FailedToAcquireWriteLock);
+    }
     Ok(pk)
   }
 
   pub async fn initialize_state(
     &mut self,
+    endorsers: &[Vec<u8>],
     ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
     view_ledger_tail_height: &(NimbleDigest, usize),
     block_hash: &NimbleDigest,
@@ -88,32 +89,36 @@ impl ConnectionStore {
       .collect();
 
     let mut jobs = Vec::new();
-    for (pk, ec) in self
-      .store
-      .read()
-      .expect("Failed to get the read lock")
-      .iter()
-    {
-      let mut endorser_client = ec.clone();
-      let ledger_tail_map = ledger_tail_map_proto.clone();
-      let view_ledger_tail = view_ledger_tail_height.0.to_bytes();
-      let view_ledger_height = view_ledger_tail_height.1 as u64;
-      let block_hash = block_hash.to_bytes();
-      let cond_updated_tail_hash = cond_updated_tail_hash.to_bytes();
-      let pk_bytes = pk.clone();
-      let job = tokio::spawn(async move {
-        let response = endorser_client
-          .initialize_state(tonic::Request::new(InitializeStateReq {
-            ledger_tail_map,
-            view_ledger_tail,
-            view_ledger_height,
-            block_hash,
-            cond_updated_tail_hash,
-          }))
-          .await;
-        (pk_bytes, response)
-      });
-      jobs.push(job);
+    if let Ok(conn_map) = self.store.read() {
+      for pk in endorsers {
+        if !conn_map.contains_key(pk) {
+          eprintln!("No endorser has this public key {:?}", pk);
+          return Err(CoordinatorError::InvalidEndorserPublicKey);
+        }
+        let mut endorser_client = conn_map[pk].clone();
+        let ledger_tail_map = ledger_tail_map_proto.clone();
+        let view_ledger_tail = view_ledger_tail_height.0.to_bytes();
+        let view_ledger_height = view_ledger_tail_height.1 as u64;
+        let block_hash = block_hash.to_bytes();
+        let cond_updated_tail_hash = cond_updated_tail_hash.to_bytes();
+        let pk_bytes = pk.clone();
+        let job = tokio::spawn(async move {
+          let response = endorser_client
+            .initialize_state(tonic::Request::new(InitializeStateReq {
+              ledger_tail_map,
+              view_ledger_tail,
+              view_ledger_height,
+              block_hash,
+              cond_updated_tail_hash,
+            }))
+            .await;
+          (pk_bytes, response)
+        });
+        jobs.push(job);
+      }
+    } else {
+      eprintln!("Failed to acquire the read lock");
+      return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -277,33 +282,37 @@ impl ConnectionStore {
     Ok(receipt)
   }
 
-  #[allow(dead_code)]
   pub async fn append_view_ledger(
     &self,
+    endorsers: &[Vec<u8>],
     block_hash: &NimbleDigest,
     tail_hash: &NimbleDigest,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (pk, ec) in self
-      .store
-      .read()
-      .expect("Failed to get the read lock")
-      .iter()
-    {
-      let mut endorser_client = ec.clone();
-      let block = *block_hash;
-      let tail = *tail_hash;
-      let pk_bytes = pk.clone();
-      let job = tokio::spawn(async move {
-        let response = endorser_client
-          .append_view_ledger(tonic::Request::new(AppendViewLedgerReq {
-            block_hash: block.to_bytes(),
-            cond_updated_tail_hash: tail.to_bytes(),
-          }))
-          .await;
-        (pk_bytes, response)
-      });
-      jobs.push(job);
+    if let Ok(conn_map) = self.store.read() {
+      for pk in endorsers {
+        if !conn_map.contains_key(pk) {
+          eprintln!("No endorser has this public key {:?}", pk);
+          return Err(CoordinatorError::InvalidEndorserPublicKey);
+        }
+        let mut endorser_client = conn_map[pk].clone();
+        let block = *block_hash;
+        let tail = *tail_hash;
+        let pk_bytes = pk.clone();
+        let job = tokio::spawn(async move {
+          let response = endorser_client
+            .append_view_ledger(tonic::Request::new(AppendViewLedgerReq {
+              block_hash: block.to_bytes(),
+              cond_updated_tail_hash: tail.to_bytes(),
+            }))
+            .await;
+          (pk_bytes, response)
+        });
+        jobs.push(job);
+      }
+    } else {
+      eprintln!("Failed to acquire the read lock");
+      return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
     let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
