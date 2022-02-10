@@ -412,23 +412,33 @@ where
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
-      .arg(Arg::with_name("store").help("The type of store used by the service. Default: InMemory")
-          .default_value("memory")
-          .index(3),
-      )
-      .arg(Arg::with_name("host").help("The hostname to run the service on. Default: [::1]")
-               .default_value("[::1]")
-               .index(2),
-      )
-      .arg(Arg::with_name("port").help("The port number to run the coordinator service on. Default: 8080")
-               .default_value("8080").index(1),)
-      .arg(Arg::with_name("endorser")
-          .short("e")
-          .long("endorser")
-          .help("List of URLs to Endorser Services")
-          .use_delimiter(true)
-          .default_value("http://[::1]:9090,http://[::1]:9091,http://[::1]:9092,http://[::1]:9093,http://[::1]:9094")
-          .required(true));
+    .arg(
+      Arg::with_name("store")
+        .help("The type of store used by the service. Default: InMemory")
+        .default_value("memory")
+        .index(3),
+    )
+    .arg(
+      Arg::with_name("host")
+        .help("The hostname to run the service on. Default: [::1]")
+        .default_value("[::1]")
+        .index(2),
+    )
+    .arg(
+      Arg::with_name("port")
+        .help("The port number to run the coordinator service on. Default: 8080")
+        .default_value("8080")
+        .index(1),
+    )
+    .arg(
+      Arg::with_name("endorser")
+        .short("e")
+        .long("endorser")
+        .help("List of URLs to Endorser Services")
+        .use_delimiter(true)
+        .default_value("http://[::1]:9090")
+        .required(true),
+    );
 
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();

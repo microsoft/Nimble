@@ -267,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("port")
-        .help("The port number to run the Service On. Default: 9090")
+        .help("The port number to run the Service On. Default: 9096")
         .default_value("9090")
         .index(1),
     );
@@ -277,7 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let server = EndorserServiceState::new();
 
-  println!("Running gRPC Endorser Service at {:?}", addr);
+  println!("Endorser host listening on {:?}", addr);
 
   Server::builder()
     .add_service(EndorserCallServer::new(server))

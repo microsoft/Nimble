@@ -456,7 +456,7 @@ int launch_endorser(const char *endorser_elf_fname, const char *private_key_file
 
 int main(int argc, const char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "%s <endorser-elf> <private-key>\n", argv[0]);
+        fprintf(stderr, "%s <endorser-elf> <private-key> [<port-number>]\n", argv[0]);
         return -1;
     }
 
@@ -485,14 +485,19 @@ int main(int argc, const char *argv[]) {
 
     // Spinning up gRPC Services.
     {
-        std::cout << "Attempting to run Endorser at Address 0.0.0.0:9096" << std::endl;
-        std::string server_address("0.0.0.0:9096");
+        std::string server_address("0.0.0.0:");
+        if (argc >= 4) {
+            server_address.append(argv[3]);
+        } else {
+            server_address.append("9090");
+        }
+        std::cout << "Attempting to run Endorser at Address " << server_address << std::endl;
         EndorserCallServiceImpl service;
         ServerBuilder builder;
         builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
         builder.RegisterService(&service);
         std::unique_ptr<Server> server(builder.BuildAndStart());
-        std::cout << "Server listening on " << server_address << std::endl;
+        std::cout << "Endorser host listening on " << server_address << std::endl;
         server->Wait();
     }
 

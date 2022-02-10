@@ -276,8 +276,8 @@ int main(int argc, const char *argv[]) {
   }
 
   cout << "Host: Entering main" << endl;
-  if (argc != 2) {
-    cerr << "Usage: " << argv[0] << " enclave_image_path [ --simulate  ]"
+  if (argc < 2) {
+    cerr << "Usage: " << argv[0] << " enclave_image_path [port_number] [ --simulate  ]"
          << endl;
     return 1;
   }
@@ -319,14 +319,19 @@ int main(int argc, const char *argv[]) {
 
   // Spinning up gRPC Services.
   {
-      std::cout << "Attempting to run Endorser at Address 0.0.0.0:9096" << std::endl;
-      std::string server_address("0.0.0.0:9096");
+      std::string server_address("0.0.0.0:");
+      if (argc >= 3) {
+        server_address.append(argv[2]);
+      } else {
+        server_address.append("9090");
+      }
+      std::cout << "Attempting to run Endorser at Address " << server_address << std::endl;
       EndorserCallServiceImpl service;
       ServerBuilder builder;
       builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
       builder.RegisterService(&service);
       std::unique_ptr<Server> server(builder.BuildAndStart());
-      std::cout << "Server listening on " << server_address << std::endl;
+      std::cout << "Endorser host listening on " << server_address << std::endl;
       server->Wait();
   }
   return 0;
