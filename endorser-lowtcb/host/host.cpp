@@ -261,7 +261,7 @@ int init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail_map,
         insert_chain(&chain);
     }
 
-    init_endorser_data.chains = &chains[1]; // ignore the first zero handle
+    init_endorser_data.chains = &chains[0];
     init_endorser_data.num_chains = hash_chain_map.size() - 2;
     ok = enclu_call(init_endorser_call, &init_endorser_data, signature, NULL);
     if (ok) {

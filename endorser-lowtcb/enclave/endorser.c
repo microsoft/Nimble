@@ -311,10 +311,10 @@ bool get_pubkey(endorser_id_t* endorser_id) {
 }
 
 bool check_pointer(void *ptr, uint64_t size) {
-  if ((uint64_t)ptr < ENCLAVE_BASE)
+  if ((uint64_t)ptr >= ENCLAVE_BASE + ENCLAVE_SIZE)
     return true;
 
-  if ((uint64_t)ptr + size >= ENCLAVE_BASE + ENCLAVE_SIZE)
+  if ((uint64_t)ptr + size <= ENCLAVE_BASE)
     return true;
 
   return false;
@@ -357,9 +357,6 @@ bool hash_state(unsigned char *state_hash) {
   st.total_len = 0;
 
   Hacl_Hash_Core_SHA2_init_256(st.block_state);
-
-  Hacl_Streaming_SHA2_update_256(&st, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  Hacl_Streaming_SHA2_update_256(&st, (unsigned char *)&view_ledger_height, sizeof(view_ledger_height));
 
   chain = &chains[0];
   for (i = 0; i < num_chains; i++) {
@@ -416,12 +413,26 @@ bool init_endorser(init_endorser_data_t *data, signature_t *signature) {
   memcpy(view_ledger_tail_hash.v, data->view_tail.v, HASH_VALUE_SIZE_IN_BYTES);
   view_ledger_height = data->view_height;
 
+  if (!check_pointer(data->chains, sizeof(chain_t) * MAX_NUM_CHAINS))
+    return false;
+
+  if (data->num_chains > MAX_NUM_CHAINS - 2)
+    return false;
+
+  memcpy(chains, data->chains, sizeof(chain_t) * (data->num_chains + 1));
+  memcpy(&chains[MAX_NUM_CHAINS-1], &data->chains[MAX_NUM_CHAINS-1], sizeof(chain_t));
   for (i = 0; i < data->num_chains; i++) {
-    chain = &data->chains[i];
-    if (!check_pointer(chain, sizeof(chain_t)) || !insert_chain(chain)) {
-      return false;
-    }
+      chain = &chains[i+1];
+      if (chain->pos != i + 1 ||
+          chain->prev >= MAX_NUM_CHAINS ||
+          chain->next >= MAX_NUM_CHAINS ||
+          chains[chain->prev].next != chain->pos ||
+          chains[chain->next].prev != chain->pos ||
+          memcmp_32(chains[chain->prev].handle.v, chain->handle.v) >= 0 ||
+          memcmp_32(chain->handle.v, chains[chain->next].handle.v) >= 0)
+          return false;
   }
+  num_chains = data->num_chains;
 
   endorser_state = endorser_initialized;
 
