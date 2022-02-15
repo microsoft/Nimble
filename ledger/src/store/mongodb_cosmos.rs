@@ -56,8 +56,8 @@ pub struct MongoCosmosLedgerStore {
   ledgers: Collection<DBEntry>,
 }
 
-impl LedgerStore for MongoCosmosLedgerStore {
-  fn new() -> Result<Self, StorageError> {
+impl MongoCosmosLedgerStore {
+  pub fn new() -> Result<Self, StorageError> {
     let conn_string = std::env::var_os("COSMOS_URL")
       .expect(
         "missing environment variable
@@ -120,7 +120,9 @@ impl LedgerStore for MongoCosmosLedgerStore {
       ledgers,
     })
   }
+}
 
+impl LedgerStore for MongoCosmosLedgerStore {
   fn create_ledger(
     &self,
     block: &Block,

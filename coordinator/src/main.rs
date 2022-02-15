@@ -22,25 +22,25 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
 };
 
-pub struct CoordinatorState<S>
-where
-  S: LedgerStore + Send + Sync,
-{
-  ledger_store: S,
+pub struct CoordinatorState {
+  ledger_store: Box<dyn LedgerStore + Send + Sync>,
   connections: ConnectionStore, // a map from a public key to a connection object
 }
 
 #[derive(Debug, Default)]
 pub struct CallServiceStub {}
 
-impl<S> CoordinatorState<S>
-where
-  S: LedgerStore + Send + Sync,
-{
-  pub fn new(ledger_store: S) -> Self {
-    CoordinatorState {
-      connections: ConnectionStore::new(),
-      ledger_store,
+impl CoordinatorState {
+  pub fn new(ledger_store_type: &str) -> Self {
+    match ledger_store_type {
+      "mongodb_cosmos" => CoordinatorState {
+        connections: ConnectionStore::new(),
+        ledger_store: Box::new(MongoCosmosLedgerStore::new().unwrap()),
+      },
+      _ => CoordinatorState {
+        connections: ConnectionStore::new(),
+        ledger_store: Box::new(InMemoryLedgerStore::new()),
+      },
     }
   }
 
@@ -162,10 +162,7 @@ fn reformat_receipt(receipt: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
 }
 
 #[tonic::async_trait]
-impl<S> Call for CoordinatorState<S>
-where
-  S: LedgerStore + Send + Sync + 'static,
-{
+impl Call for CoordinatorState {
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
@@ -491,33 +488,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
   println!("Endorser_hostnames: {:?}", endorser_hostnames);
 
-  match store {
-    "mongodb_cosmos" => {
-      let ledger_store = MongoCosmosLedgerStore::new().unwrap();
-      let mut server = CoordinatorState::new(ledger_store);
-      let res = server.add_endorsers(endorser_hostnames).await;
-      assert!(res.is_ok());
-      println!("Running gRPC Coordinator Service at {:?}", addr);
+  let mut server = CoordinatorState::new(store);
+  let res = server.add_endorsers(endorser_hostnames).await;
+  assert!(res.is_ok());
+  println!("Running gRPC Coordinator Service at {:?}", addr);
 
-      Server::builder()
-        .add_service(CallServer::new(server))
-        .serve(addr)
-        .await?;
-    },
-    _ => {
-      // in memory is default
-      let ledger_store = InMemoryLedgerStore::new().unwrap();
-      let mut server = CoordinatorState::new(ledger_store);
-      let res = server.add_endorsers(endorser_hostnames).await;
-      assert!(res.is_ok());
-      println!("Running gRPC Coordinator Service at {:?}", addr);
-
-      Server::builder()
-        .add_service(CallServer::new(server))
-        .serve(addr)
-        .await?;
-    },
-  };
+  Server::builder()
+    .add_service(CallServer::new(server))
+    .serve(addr)
+    .await?;
 
   Ok(())
 }
@@ -530,7 +509,6 @@ mod tests {
     ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
   };
   use crate::CoordinatorState;
-  use ledger::store::{in_memory::InMemoryLedgerStore, LedgerStore};
   use rand::Rng;
   use std::io::{BufRead, BufReader};
   use std::process::{Command, Stdio};
@@ -587,8 +565,7 @@ mod tests {
     }
 
     // Create the coordinator
-    let ledger_store = InMemoryLedgerStore::new().unwrap();
-    let mut coordinator = CoordinatorState::new(ledger_store);
+    let mut coordinator = CoordinatorState::new("memory");
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
 

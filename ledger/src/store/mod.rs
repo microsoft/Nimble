@@ -20,9 +20,6 @@ pub struct LedgerView {
 }
 
 pub trait LedgerStore {
-  fn new() -> Result<Self, StorageError>
-  where
-    Self: Sized;
   fn create_ledger(&self, block: &Block)
     -> Result<(Handle, MetaBlock, NimbleDigest), StorageError>;
   fn append_ledger(
@@ -105,7 +102,7 @@ mod tests {
 
   #[test]
   pub fn check_in_memory_store() {
-    let state = InMemoryLedgerStore::new().unwrap();
+    let state = InMemoryLedgerStore::new();
     check_store_creation_and_operations(&state);
   }
 

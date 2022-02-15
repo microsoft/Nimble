@@ -13,11 +13,8 @@ pub struct InMemoryLedgerStore {
   view_ledger: Arc<RwLock<Vec<LedgerEntry>>>,
 }
 
-impl LedgerStore for InMemoryLedgerStore {
-  fn new() -> Result<Self, StorageError>
-  where
-    Self: Sized,
-  {
+impl InMemoryLedgerStore {
+  pub fn new() -> Self {
     let ledgers = HashMap::new();
     let mut view_ledger = Vec::new();
 
@@ -35,12 +32,14 @@ impl LedgerStore for InMemoryLedgerStore {
     };
     view_ledger.push(view_ledger_entry);
 
-    Ok(InMemoryLedgerStore {
+    InMemoryLedgerStore {
       ledgers: Arc::new(RwLock::new(ledgers)),
       view_ledger: Arc::new(RwLock::new(view_ledger)),
-    })
+    }
   }
+}
 
+impl LedgerStore for InMemoryLedgerStore {
   fn create_ledger(
     &self,
     block: &Block,
