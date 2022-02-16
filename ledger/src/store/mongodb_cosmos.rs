@@ -57,26 +57,25 @@ pub struct MongoCosmosLedgerStore {
 }
 
 impl MongoCosmosLedgerStore {
-  pub fn new() -> Result<Self, StorageError> {
-    let conn_string = std::env::var_os("COSMOS_URL")
-      .expect(
-        "missing environment variable
-            //COSMOS_URL",
-      )
-      .to_str()
-      .expect("failed to get COSMOS_URL")
-      .to_owned();
+  pub fn new(args: &HashMap<String, String>) -> Result<Self, StorageError> {
+    if !args.contains_key("COSMOS_URL") {
+      return Err(StorageError::MissingArguments);
+    }
+    let conn_string = args["COSMOS_URL"].clone();
 
     // Below are the desired name of the db and the name of the collection
     // (they can be anything initially, but afterwards, they need to be the same
     // so you access the same db/collection and recover the stored data)
-    let nimble_db_name = "nimble_cosmosdb";
+    let mut nimble_db_name = String::from("nimble_cosmosdb");
+    if args.contains_key("NIMBLE_DB") {
+      nimble_db_name = args["NIMBLE_DB"].clone();
+    }
     let ledger_collection = "ledgers";
 
     let cosmos_client =
       Client::with_uri_str(&conn_string).expect("Connection with cosmosdb failed");
     let ledgers = cosmos_client
-      .database(nimble_db_name)
+      .database(&nimble_db_name)
       .collection(ledger_collection);
 
     // Initialized view ledger's entry

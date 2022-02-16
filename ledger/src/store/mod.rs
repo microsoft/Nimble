@@ -57,6 +57,7 @@ mod tests {
   use crate::store::LedgerStore;
   use crate::Block;
   use crate::NimbleDigest;
+  use std::collections::HashMap;
 
   pub fn check_store_creation_and_operations(state: &dyn LedgerStore) {
     let initial_value: Vec<u8> = vec![
@@ -112,8 +113,16 @@ mod tests {
       // The right env variable is not available so let's skip tests
       return;
     }
+    let mut args = HashMap::<String, String>::new();
+    args.insert(
+      String::from("COSMOS_URL"),
+      std::env::var_os("COSMOS_URL")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
 
-    let state = MongoCosmosLedgerStore::new().unwrap();
+    let state = MongoCosmosLedgerStore::new(&args).unwrap();
     check_store_creation_and_operations(&state);
   }
 }

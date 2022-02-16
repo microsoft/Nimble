@@ -7,6 +7,7 @@ use ledger::store::{
   in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
 };
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
+use std::collections::HashMap;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -31,11 +32,11 @@ pub struct CoordinatorState {
 pub struct CallServiceStub {}
 
 impl CoordinatorState {
-  pub fn new(ledger_store_type: &str) -> Self {
+  pub fn new(ledger_store_type: &str, args: &HashMap<String, String>) -> Self {
     match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
         connections: ConnectionStore::new(),
-        ledger_store: Box::new(MongoCosmosLedgerStore::new().unwrap()),
+        ledger_store: Box::new(MongoCosmosLedgerStore::new(args).unwrap()),
       },
       _ => CoordinatorState {
         connections: ConnectionStore::new(),
@@ -453,6 +454,12 @@ impl Call for CoordinatorState {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
     .arg(
+      Arg::with_name("nimbledb")
+        .help("The database name")
+        .index(5),
+    )
+    .arg(Arg::with_name("cosmosurl").help("The COSMOS URL").index(4))
+    .arg(
       Arg::with_name("store")
         .help("The type of store used by the service. Default: InMemory")
         .default_value("memory")
@@ -488,7 +495,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
   println!("Endorser_hostnames: {:?}", endorser_hostnames);
 
-  let mut server = CoordinatorState::new(store);
+  let mut ledger_store_args = HashMap::<String, String>::new();
+  if let Some(x) = cli_matches.value_of("cosmosurl") {
+    ledger_store_args.insert(String::from("COSMOS_URL"), x.to_string());
+  }
+  if let Some(x) = cli_matches.value_of("nimbledb") {
+    ledger_store_args.insert(String::from("NIMBLE_DB"), x.to_string());
+  }
+  let mut server = CoordinatorState::new(store, &ledger_store_args);
   let res = server.add_endorsers(endorser_hostnames).await;
   assert!(res.is_ok());
   println!("Running gRPC Coordinator Service at {:?}", addr);
@@ -510,6 +524,7 @@ mod tests {
   };
   use crate::CoordinatorState;
   use rand::Rng;
+  use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
   use std::process::{Command, Stdio};
   use verifier::{
@@ -545,6 +560,33 @@ mod tests {
       }
     };
 
+    let store = {
+      match std::env::var_os("LEDGER_STORE") {
+        None => String::from("memory"),
+        Some(x) => x.into_string().unwrap(),
+      }
+    };
+
+    let mut ledger_store_args = HashMap::<String, String>::new();
+    if std::env::var_os("COSMOS_URL").is_some() {
+      ledger_store_args.insert(
+        String::from("COSMOS_URL"),
+        std::env::var_os("COSMOS_URL")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+    if std::env::var_os("NIMBLE_DB").is_some() {
+      ledger_store_args.insert(
+        String::from("NIMBLE_DB"),
+        std::env::var_os("NIMBLE_DB")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
     // Launch the endorser
     let mut endorser = Command::new(endorser_cmd.clone())
       .args(endorser_args.clone().split_whitespace())
@@ -565,7 +607,7 @@ mod tests {
     }
 
     // Create the coordinator
-    let mut coordinator = CoordinatorState::new("memory");
+    let mut coordinator = CoordinatorState::new(&store, &ledger_store_args);
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
 

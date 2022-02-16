@@ -22,6 +22,8 @@ pub enum StorageError {
   LedgerReadLockFailed,
   /// return if ledger write lock cannot be acquired
   LedgerWriteLockFailed,
+  /// return if required arguments are missing
+  MissingArguments,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
