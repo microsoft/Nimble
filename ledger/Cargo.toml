@@ -20,3 +20,7 @@ mongodb = {version = "2.1.0", default-features = false, features = ["sync"]}
 
 [dev-dependencies]
 hex = "0.4.3"
+
+[features]
+default = ["full_ledger"]
+full_ledger = []

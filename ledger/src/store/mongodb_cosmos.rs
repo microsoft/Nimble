@@ -7,7 +7,6 @@ use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
 use mongodb::error::UNKNOWN_TRANSACTION_COMMIT_RESULT;
 use mongodb::options::{Acknowledgment, ReadConcern, TransactionOptions, WriteConcern};
-use mongodb::options::{FindOneOptions, FindOptions};
 use mongodb::sync::{Client, Collection, SessionCursor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,7 +45,8 @@ struct SerializedLedgerEntry {
 struct DBEntry {
   #[serde(rename = "_id")]
   key: Binary,
-  value: Vec<Binary>, // array of SerializedLedgerEntries (each entry is converted to Binary first)
+  value: Binary, // SerializedLedgerEntry
+  tail: bool,
 }
 
 #[derive(Debug)]
@@ -105,13 +105,25 @@ impl MongoCosmosLedgerStore {
             to deserialize view ledger handle",
       );
 
-    let new_entry = DBEntry {
+    let tail_entry = DBEntry {
       key: view_handle.to_bson_binary(),
-      value: vec![bson_entry],
+      value: bson_entry.clone(),
+      tail: true,
+    };
+
+    // This is the same as above, but this is basically the copy that will be stored
+    // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
+    let mut view_handle_with_index = view_handle.to_bytes();
+    view_handle_with_index.extend(0usize.to_le_bytes()); // "to_le" converts to little endian
+
+    let first_entry = DBEntry {
+      key: view_handle_with_index.to_bson_binary(),
+      value: bson_entry,
+      tail: false,
     };
 
     ledgers
-      .insert_one(&new_entry, None)
+      .insert_many(&vec![first_entry, tail_entry], None)
       .expect("failed to add view ledger");
 
     Ok(MongoCosmosLedgerStore {
@@ -145,15 +157,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .start_transaction(options)
       .expect("unable to start transaction");
 
-    // 1. Get the view_ledger's latest entry
-
-    // 1a. Create a projection at the database so we get the latest value without
-    // having to fetch en entire array of blobs. "-1" means latest.
-    let read_options = FindOneOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": -1},
-      })
-      .build();
+    // 1. Get the view_ledger's latest entry (which is located at handle self.view_handle)
 
     // 1b. Find the latest entry in the view ledger
     let view_entry: DBEntry = ledgers
@@ -161,14 +165,14 @@ impl LedgerStore for MongoCosmosLedgerStore {
         doc! {
             "_id": self.view_handle.to_bson_binary(),
         },
-        Some(read_options),
+        None,
         &mut session,
       )
       .expect("failed to read view ledger")
       .expect("view ledger's entry is None");
 
-    // 2. Recover the contents of the view ledger entry
-    let bson_view_entry: &Binary = &view_entry.value[0]; // only entry due to projection and above None check
+    // 2. Recover the contents of the view ledgevaluery
+    let bson_view_entry: &Binary = &view_entry.value;
     let view_entry: SerializedLedgerEntry =
       bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialized view entry");
 
@@ -193,15 +197,32 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .expect("failed to serialize data ledger entry")
       .to_bson_binary();
 
-    // 5. Add new ledger to database
-    let new_entry = DBEntry {
+    // 5. Add new ledger tail to database under its handle
+    let tail_entry = DBEntry {
       key: handle.to_bson_binary(),
-      value: vec![bson_data_ledger_entry],
+      value: bson_data_ledger_entry.clone(),
+      tail: true,
     };
 
-    ledgers
-      .insert_one_with_session(&new_entry, None, &mut session)
-      .expect("failed to add new entry to ledgers");
+    // 6. If we are keeping the full state of the ledger (including intermediaries)
+    if cfg!(feature = "full_ledger") {
+      let mut handle_with_index = handle.to_bytes();
+      handle_with_index.extend(0usize.to_le_bytes()); // to_le is little endian
+
+      let new_entry = DBEntry {
+        key: handle_with_index.to_bson_binary(), // handle = handle || idx (which is 0)
+        value: bson_data_ledger_entry,
+        tail: false,
+      };
+
+      ledgers
+        .insert_many_with_session(&vec![tail_entry, new_entry], None, &mut session)
+        .expect("failed to add new entry to ledgers");
+    } else {
+      ledgers
+        .insert_one_with_session(&tail_entry, None, &mut session)
+        .expect("failed to add new entry to ledgers");
+    };
 
     // 6. Commit transactions
     loop {
@@ -247,28 +268,20 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     // 1. Get the view_ledger's latest entry
 
-    // 1a. Create a projection at the database so we get the latest value without
-    // having to fetch en entire array of blobs. "-1" means latest.
-    let read_options = FindOneOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": -1},
-      })
-      .build();
-
     // 1b. Find the latest entry in the view ledger
     let view_entry: DBEntry = ledgers
       .find_one_with_session(
         doc! {
             "_id": self.view_handle.to_bson_binary(),
         },
-        Some(read_options.clone()),
+        None,
         &mut session,
       )
       .expect("failed to read view ledger")
       .expect("view ledger's entry is None");
 
     // 2. Recover the contents of the view ledger entry
-    let bson_view_entry: &Binary = &view_entry.value[0]; // only entry due to projection and above None check
+    let bson_view_entry: &Binary = &view_entry.value; // only entry due to projection and above None check
     let view_entry: SerializedLedgerEntry =
       bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialize view entry");
     let view_aux = MetaBlock::from_bytes(view_entry.aux).expect("deserialize error");
@@ -279,7 +292,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
         doc! {
             "_id": handle.to_bson_binary(),
         },
-        Some(read_options),
+        None,
         &mut session,
       )
       .expect("failed to read data ledger")
@@ -290,8 +303,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
       Some(s) => s,
     };
 
-    // 2. Recover the contents of the ledger entry and check condition
-    let bson_last_data_entry: &Binary = &last_data_entry.value[0]; // only entry due to projection and above None check
+    // 4. Recover the contents of the ledger entry and check condition
+    let bson_last_data_entry: &Binary = &last_data_entry.value;
     let last_data_entry: SerializedLedgerEntry = bincode::deserialize(&bson_last_data_entry.bytes)
       .expect("failed to deserialize last data entry");
     let last_data_aux = MetaBlock::from_bytes(last_data_entry.aux).expect("deserialize error");
@@ -300,7 +313,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       return Err(StorageError::IncorrectConditionalData);
     }
 
-    // 3. Construct the new entry we are going to append to data ledger
+    // 5. Construct the new entry we are going to append to data ledger
     let aux = MetaBlock::new(
       &view_aux.hash(),
       &last_data_aux.hash(),
@@ -323,21 +336,39 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     let tail_hash = aux.hash();
 
-    // 4. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
+    // 6. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
     ledgers
       .update_one_with_session(
         doc! {
            "_id": handle.to_bson_binary(),
         },
         doc! {
-            "$push": { "value": bson_new_ledger_entry }
+            "$set": {"value": bson_new_ledger_entry.clone()}
         },
         None,
         &mut session,
       )
       .expect("failed to append element");
 
-    // 5. Commit transactions
+    // 6b. If we want to keep intermediate state, then insert it under appropriate index
+    if cfg!(feature = "full_ledger") {
+      // This is the same as above, but this is basically the copy that will be stored
+      // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
+      let mut handle_with_index = handle.to_bytes();
+      handle_with_index.extend((last_data_aux.get_height() + 1).to_le_bytes());
+
+      let new_entry = DBEntry {
+        key: handle_with_index.to_bson_binary(), // handle = handle || idx
+        value: bson_new_ledger_entry,
+        tail: false,
+      };
+
+      ledgers
+        .insert_one_with_session(new_entry, None, &mut session)
+        .expect("failed to insert element");
+    }
+
+    // 7. Commit transactions
     loop {
       let result = session.commit_transaction();
 
@@ -360,121 +391,111 @@ impl LedgerStore for MongoCosmosLedgerStore {
     aux: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), StorageError> {
-    let client = self.client.clone();
-    let ledgers = self.ledgers.clone();
+    if cfg!(feature = "full_ledger") || handle == &self.view_handle {
+      let mut handle_with_index = handle.to_bytes();
+      handle_with_index.extend(aux.get_height().to_le_bytes()); // "to_le" converts to little endian
 
-    // transaction session
-    let mut session = client
-      .start_session(None)
-      .expect("unable to get client session");
+      let client = self.client.clone();
+      let ledgers = self.ledgers.clone();
 
-    // transaction properties: below is for serializability
-    let options = TransactionOptions::builder()
-      .read_concern(ReadConcern::majority())
-      .write_concern(WriteConcern::builder().w(Acknowledgment::Majority).build())
-      .build();
+      // transaction session
+      let mut session = client
+        .start_session(None)
+        .expect("unable to get client session");
 
-    session
-      .start_transaction(options)
-      .expect("unable to start transaction");
+      // transaction properties: below is for serializability
+      let options = TransactionOptions::builder()
+        .read_concern(ReadConcern::majority())
+        .write_concern(WriteConcern::builder().w(Acknowledgment::Majority).build())
+        .build();
 
-    // 1. Get the ledger's latest entry
+      session
+        .start_transaction(options)
+        .expect("unable to start transaction");
 
-    // 1a. Create a projection at the database so we get the value at idx without
-    // having to fetch en entire array of blobs. The notation "$slice": [idx, 1] means 1
-    // element after skipping the first idx elements in the array.
+      // 1. Get the ledger's latest entry
 
-    let read_options = FindOneOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": [aux.get_height() as u32, 1]},
-      })
-      .build();
-
-    // 1b. Find the appropriate entry in the ledger
-    let ledger_entry: DBEntry = match ledgers
-      .find_one_with_session(
-        doc! {
-            "_id": handle.to_bson_binary(),
+      // 1a. Find the appropriate entry in the ledger if the ledger is full
+      let ledger_entry: DBEntry = match ledgers
+        .find_one_with_session(
+          doc! {
+              "_id": handle_with_index.to_bson_binary(),
+          },
+          None,
+          &mut session,
+        )
+        .expect("failed to read data ledger")
+      {
+        None => {
+          return Err(StorageError::KeyDoesNotExist);
         },
-        Some(read_options),
-        &mut session,
-      )
-      .expect("failed to read data ledger")
-    {
-      None => {
-        return Err(StorageError::KeyDoesNotExist);
-      },
-      //XXX: also another possible error is InvalidIndex. See if there is a way to
-      //dissambiguate
-      Some(s) => s,
-    };
+        //XXX: also another possible error is InvalidIndex. See if there is a way to
+        //dissambiguate
+        Some(s) => s,
+      };
 
-    // 2. Recover the contents of the ledger entry
-    let read_bson_ledger_entry: &Binary = &ledger_entry.value[0]; // only entry due to projection and check
-    let mut ledger_entry: SerializedLedgerEntry =
-      bincode::deserialize(&read_bson_ledger_entry.bytes)
-        .expect("failed to deserialize ledger entry");
+      // 2. Recover the contents of the ledger entry
+      let read_bson_ledger_entry: &Binary = &ledger_entry.value; // only entry due to unique handles
+      let mut ledger_entry: SerializedLedgerEntry =
+        bincode::deserialize(&read_bson_ledger_entry.bytes)
+          .expect("failed to deserialize ledger entry");
 
-    // update receipt
-    ledger_entry.receipt = receipt.to_bytes();
+      // 3. Assert the fetched block is the right one
+      let ledger_aux =
+        MetaBlock::from_bytes(ledger_entry.aux.clone()).expect("failed to deserailize metablock");
+      assert_eq!(ledger_aux.get_height(), aux.get_height());
 
-    // re-serialize into bson binary
-    let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)
-      .expect("failed to serialized ledger entry")
-      .to_bson_binary();
+      // 4. Update receipt
+      ledger_entry.receipt = receipt.to_bytes();
 
-    // 3. Edit the value at index aux.get_height() in the ledger (array) named with handle.
-    let val = format!("value.{}", aux.get_height());
+      // 5. Re-serialize into bson binary
+      let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)
+        .expect("failed to serialized ledger entry")
+        .to_bson_binary();
 
-    ledgers
-      .update_one_with_session(
-        doc! {
-           "_id": handle.to_bson_binary(),
-        },
-        doc! {
-            "$set": { val: write_bson_ledger_entry }
-        },
-        None,
-        &mut session,
-      )
-      .expect("failed to update receipt");
+      ledgers
+        .update_one_with_session(
+          doc! {
+             "_id": handle_with_index.to_bson_binary(),
+          },
+          doc! {
+              "$set": {"value": write_bson_ledger_entry},
+          },
+          None,
+          &mut session,
+        )
+        .expect("failed to update receipt");
 
-    // 4. Commit transactions
-    loop {
-      let result = session.commit_transaction();
+      // 4. Commit transactions
+      loop {
+        let result = session.commit_transaction();
 
-      if let Err(ref error) = result {
-        println!("Error processing transaction: {:?}. Retrying.", error);
-        if error.contains_label(UNKNOWN_TRANSACTION_COMMIT_RESULT) {
-          continue;
+        if let Err(ref error) = result {
+          println!("Error processing transaction: {:?}. Retrying.", error);
+          if error.contains_label(UNKNOWN_TRANSACTION_COMMIT_RESULT) {
+            continue;
+          }
         }
+        result.expect("Transaction failed to commit");
+        break;
       }
-      result.expect("Transaction failed to commit");
-      break;
-    }
 
-    Ok(())
+      Ok(())
+    } else {
+      panic!("Calling attach_ledger_receipt without support for full ledger");
+    }
   }
 
   fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError> {
     let ledgers = self.ledgers.clone();
 
-    // Create a projection at the database so we get the latest value without
-    // having to fetch en entire array of blobs. "-1" means latest.
-    let read_options = FindOneOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": -1},
-      })
-      .build();
-
     // Find the latest value of view associated with the provided key.
-    // XXX: not in transaction, see if this is OK. Couldn't find in any documentation
     let ledger_entry = match ledgers
       .find_one(
         doc! {
             "_id": handle.to_bson_binary(),
         },
-        Some(read_options),
+        None,
       )
       .expect("failed to read ledger")
     {
@@ -487,7 +508,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     };
 
     // 2. Recover the contents of the ledger entry
-    let bson_entry: &Binary = &ledger_entry.value[0]; // only entry due to projection and check
+    let bson_entry: &Binary = &ledger_entry.value;
     let entry: SerializedLedgerEntry =
       bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
 
@@ -501,48 +522,45 @@ impl LedgerStore for MongoCosmosLedgerStore {
   }
 
   fn read_ledger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError> {
-    let ledgers = self.ledgers.clone();
+    if cfg!(feature = "full_ledger") || handle == &self.view_handle {
+      let ledgers = self.ledgers.clone();
 
-    // Create a projection at the database so we get the value at idx without
-    // having to fetch en entire array of blobs. The notation [idx, 1] means 1
-    // element after skipping the first idx elements in the array.
-    let read_options = FindOneOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": [idx as u32, 1]},
-      })
-      .build();
+      let mut handle_with_index = handle.to_bytes();
+      handle_with_index.extend(idx.to_le_bytes()); // "to_le" converts to little endian
 
-    // Find the latest value of view associated with the provided key.
-    // XXX: not in transaction, see if this is OK. Couldn't find in any documentation
-    let ledger_entry = match ledgers
-      .find_one(
-        doc! {
-            "_id": handle.to_bson_binary(),
+      // Find the latest value of view associated with the provided key.
+      let ledger_entry = match ledgers
+        .find_one(
+          doc! {
+              "_id": handle_with_index.to_bson_binary(),
+          },
+          None,
+        )
+        .expect("failed to read ledger")
+      {
+        None => {
+          return Err(StorageError::KeyDoesNotExist);
         },
-        Some(read_options),
-      )
-      .expect("failed to read ledger")
-    {
-      None => {
-        return Err(StorageError::KeyDoesNotExist);
-      },
-      //XXX: also another possible error is InvalidIndex. See if there is a way to
-      //dissambiguate
-      Some(s) => s,
-    };
+        //XXX: also another possible error is InvalidIndex. See if there is a way to
+        //dissambiguate
+        Some(s) => s,
+      };
 
-    // 2. Recover the contents of the ledger entry
-    let bson_entry: &Binary = &ledger_entry.value[0]; // only entry due to projection and check
-    let entry: SerializedLedgerEntry =
-      bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
+      // 2. Recover the contents of the ledger entry
+      let bson_entry: &Binary = &ledger_entry.value;
+      let entry: SerializedLedgerEntry =
+        bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
 
-    let res = LedgerEntry {
-      block: Block::from_bytes(entry.block.clone()).expect("failed to deserialize block"),
-      aux: MetaBlock::from_bytes(entry.aux.clone()).expect("failed to deserialized aux"),
-      receipt: Receipt::from_bytes(&entry.receipt),
-    };
+      let res = LedgerEntry {
+        block: Block::from_bytes(entry.block.clone()).expect("failed to deserialize block"),
+        aux: MetaBlock::from_bytes(entry.aux.clone()).expect("failed to deserialized aux"),
+        receipt: Receipt::from_bytes(&entry.receipt),
+      };
 
-    Ok(res)
+      Ok(res)
+    } else {
+      panic!("Calling read_ledger_by_index without support for full ledger");
+    }
   }
 
   fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError> {
@@ -582,17 +600,15 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     // 1. Read the last value of all ledgers (including view ledger)
 
-    // 1a. Create a projection at the database so we get the latest value without
-    // having to fetch en entire array of blobs for each ledger. "-1" means latest.
-    let read_options = FindOptions::builder()
-      .projection(doc! {
-          "value": {"$slice": -1},
-      })
-      .build();
-
-    // 1b. Probe cosmosdb for all ledgers
+    // Probe cosmosdb for all ledgers that are tail
     let mut all_ledgers: SessionCursor<DBEntry> = ledgers
-      .find_with_session(doc! {}, Some(read_options), &mut session)
+      .find_with_session(
+        doc! {
+            "tail": true,
+        },
+        None,
+        &mut session,
+      )
       .expect("failed to read all ledgers");
 
     // Initial LedgerStoreState
@@ -607,7 +623,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       if ledger_entry.key.bytes == self.view_handle.to_bytes() {
         // get the tail of view ledger
         let entry_val: SerializedLedgerEntry = {
-          let bson_entry: &Binary = &ledger_entry.value[0]; // only entry due to projection
+          let bson_entry: &Binary = &ledger_entry.value;
           bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry")
         };
 
@@ -624,7 +640,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
         // get the tail of ledger
         let entry_val: SerializedLedgerEntry = {
-          let bson_entry: &Binary = &ledger_entry.value[0]; // only entry due to projection
+          let bson_entry: &Binary = &ledger_entry.value; // only entry due to projection
           bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry")
         };
 
@@ -640,7 +656,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     }
 
     // 3. Compute state hash
-    let state_hash = if ledger_tail_map.is_empty() || view_ledger_tail.1 == 1 {
+    let state_hash = if ledger_tail_map.is_empty() || view_ledger_tail.1 == 0 {
       NimbleDigest::default()
     } else {
       let mut serialized_state = Vec::new();
@@ -658,7 +674,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       block: block.clone(),
       aux: MetaBlock::new(
         &state_hash,
-        &if view_ledger_tail.1 == 1 {
+        &if view_ledger_tail.1 == 0 {
           NimbleDigest::default()
         } else {
           NimbleDigest::from_bytes(&view_ledger_tail.0).expect("failed to deserialize")
@@ -685,21 +701,35 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .expect("failed to serialized new ledger entry")
       .to_bson_binary();
 
-    // 4. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
+    // 4. Updates the value new_ledger_entry to the tail named with handle.
     ledgers
       .update_one_with_session(
         doc! {
            "_id": self.view_handle.to_bson_binary(),
         },
         doc! {
-            "$push": { "value": bson_new_ledger_entry }
+            "$set": {"value": bson_new_ledger_entry.clone()},
         },
         None,
         &mut session,
       )
       .expect("failed to append element");
 
-    // 5. Commit transactions
+    // 5. Also stores new_ledger_entry as an entry at its corresponding index
+    let mut view_handle_with_index = self.view_handle.to_bytes();
+    view_handle_with_index.extend(new_ledger_entry.aux.get_height().to_le_bytes()); // "to_le" converts to little endian
+
+    let index_entry = DBEntry {
+      key: view_handle_with_index.to_bson_binary(),
+      value: bson_new_ledger_entry,
+      tail: false,
+    };
+
+    ledgers
+      .insert_one_with_session(&index_entry, None, &mut session)
+      .expect("failed to add view ledger");
+
+    // 6. Commit transactions
     loop {
       let result = session.commit_transaction();
 
