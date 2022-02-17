@@ -8,13 +8,13 @@ pub mod mongodb_cosmos;
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
   pub block: Block,
-  pub aux: MetaBlock,
+  pub metablock: MetaBlock,
   pub receipt: Receipt,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct LedgerView {
-  pub view_tail_aux: MetaBlock,
+  pub view_tail_metablock: MetaBlock,
   pub view_tail_hash: NimbleDigest,
   pub ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
 }
@@ -32,7 +32,7 @@ pub trait LedgerStore {
   fn attach_ledger_receipt(
     &self,
     handle: &Handle,
-    aux: &MetaBlock,
+    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), StorageError>;
   fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
@@ -40,7 +40,7 @@ pub trait LedgerStore {
   fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError>;
   fn attach_view_ledger_receipt(
     &self,
-    aux: &MetaBlock,
+    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), StorageError>;
   fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError>;

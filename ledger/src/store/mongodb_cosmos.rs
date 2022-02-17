@@ -37,7 +37,7 @@ impl BsonBinaryData for Handle {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
-  pub aux: Vec<u8>,
+  pub metablock: Vec<u8>,
   pub receipt: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
@@ -81,7 +81,7 @@ impl MongoCosmosLedgerStore {
     // Initialized view ledger's entry
     let entry = SerializedLedgerEntry {
       block: Block::new(&[0; 0]).to_bytes(),
-      aux: MetaBlock::new(
+      metablock: MetaBlock::new(
         &NimbleDigest::default(),
         &NimbleDigest::default(),
         &NimbleDigest::default(),
@@ -175,17 +175,22 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let view_entry: SerializedLedgerEntry =
       bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialized view entry");
 
-    let view_aux = MetaBlock::from_bytes(view_entry.aux).expect("deserialize error");
+    let view_metablock = MetaBlock::from_bytes(view_entry.metablock).expect("deserialize error");
 
     // 3. Use view ledger's entry and input block to get information we need for origin of new ledger
     let handle = block.hash();
     let block_hash = block.hash();
-    let aux = MetaBlock::new(&view_aux.hash(), &NimbleDigest::default(), &block_hash, 0);
+    let metablock = MetaBlock::new(
+      &view_metablock.hash(),
+      &NimbleDigest::default(),
+      &block_hash,
+      0,
+    );
 
     // 4. Create the ledger entry that we will add to the brand new ledger
     let data_ledger_entry = SerializedLedgerEntry {
       block: block.to_bytes(),
-      aux: aux.to_bytes(),
+      metablock: metablock.to_bytes(),
       receipt: Receipt {
         id_sigs: Vec::new(),
       }
@@ -237,8 +242,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
       break;
     }
 
-    let tail_hash = aux.hash();
-    Ok((handle, aux, tail_hash))
+    let tail_hash = metablock.hash();
+    Ok((handle, metablock, tail_hash))
   }
 
   fn append_ledger(
@@ -283,7 +288,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let bson_view_entry: &Binary = &view_entry.value; // only entry due to projection and above None check
     let view_entry: SerializedLedgerEntry =
       bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialize view entry");
-    let view_aux = MetaBlock::from_bytes(view_entry.aux).expect("deserialize error");
+    let view_metablock = MetaBlock::from_bytes(view_entry.metablock).expect("deserialize error");
 
     // 3. Check to see if the ledgers contain the handle and get last entry
     let last_data_entry: DBEntry = match ledgers
@@ -306,23 +311,24 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let bson_last_data_entry: &Binary = &last_data_entry.value;
     let last_data_entry: SerializedLedgerEntry = bincode::deserialize(&bson_last_data_entry.bytes)
       .expect("failed to deserialize last data entry");
-    let last_data_aux = MetaBlock::from_bytes(last_data_entry.aux).expect("deserialize error");
+    let last_data_metablock =
+      MetaBlock::from_bytes(last_data_entry.metablock).expect("deserialize error");
 
-    if *cond != NimbleDigest::default() && *cond != last_data_aux.hash() {
+    if *cond != NimbleDigest::default() && *cond != last_data_metablock.hash() {
       return Err(StorageError::IncorrectConditionalData);
     }
 
     // 5. Construct the new entry we are going to append to data ledger
-    let aux = MetaBlock::new(
-      &view_aux.hash(),
-      &last_data_aux.hash(),
+    let metablock = MetaBlock::new(
+      &view_metablock.hash(),
+      &last_data_metablock.hash(),
       &block.hash(),
-      last_data_aux.get_height() + 1,
+      last_data_metablock.get_height() + 1,
     );
 
     let new_ledger_entry = SerializedLedgerEntry {
       block: block.to_bytes(),
-      aux: aux.to_bytes(),
+      metablock: metablock.to_bytes(),
       receipt: Receipt {
         id_sigs: Vec::new(),
       }
@@ -333,7 +339,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .expect("failed to serialized new ledger entry")
       .to_bson_binary();
 
-    let tail_hash = aux.hash();
+    let tail_hash = metablock.hash();
 
     // 6. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
     ledgers
@@ -354,7 +360,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       // This is the same as above, but this is basically the copy that will be stored
       // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
       let mut handle_with_index = handle.to_bytes();
-      handle_with_index.extend((last_data_aux.get_height() + 1).to_le_bytes());
+      handle_with_index.extend((last_data_metablock.get_height() + 1).to_le_bytes());
 
       let new_entry = DBEntry {
         key: handle_with_index.to_bson_binary(), // handle = handle || idx
@@ -381,18 +387,18 @@ impl LedgerStore for MongoCosmosLedgerStore {
       break;
     }
 
-    Ok((aux, tail_hash))
+    Ok((metablock, tail_hash))
   }
 
   fn attach_ledger_receipt(
     &self,
     handle: &Handle,
-    aux: &MetaBlock,
+    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), StorageError> {
     if cfg!(feature = "full_ledger") || handle == &self.view_handle {
       let mut handle_with_index = handle.to_bytes();
-      handle_with_index.extend(aux.get_height().to_le_bytes()); // "to_le" converts to little endian
+      handle_with_index.extend(metablock.get_height().to_le_bytes()); // "to_le" converts to little endian
 
       let client = self.client.clone();
       let ledgers = self.ledgers.clone();
@@ -440,9 +446,9 @@ impl LedgerStore for MongoCosmosLedgerStore {
           .expect("failed to deserialize ledger entry");
 
       // 3. Assert the fetched block is the right one
-      let ledger_aux =
-        MetaBlock::from_bytes(ledger_entry.aux.clone()).expect("failed to deserailize metablock");
-      assert_eq!(ledger_aux.get_height(), aux.get_height());
+      let ledger_metablock = MetaBlock::from_bytes(ledger_entry.metablock.clone())
+        .expect("failed to deserailize metablock");
+      assert_eq!(ledger_metablock.get_height(), metablock.get_height());
 
       // 4. Update receipt
       ledger_entry.receipt = receipt.to_bytes();
@@ -513,7 +519,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     let res = LedgerEntry {
       block: Block::from_bytes(entry.block.clone()).expect("failed to deserialize block"),
-      aux: MetaBlock::from_bytes(entry.aux.clone()).expect("failed to deserialized aux"),
+      metablock: MetaBlock::from_bytes(entry.metablock.clone())
+        .expect("failed to deserialized metablock"),
       receipt: Receipt::from_bytes(&entry.receipt),
     };
 
@@ -552,7 +559,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
       let res = LedgerEntry {
         block: Block::from_bytes(entry.block.clone()).expect("failed to deserialize block"),
-        aux: MetaBlock::from_bytes(entry.aux.clone()).expect("failed to deserialized aux"),
+        metablock: MetaBlock::from_bytes(entry.metablock.clone())
+          .expect("failed to deserialized metablock"),
         receipt: Receipt::from_bytes(&entry.receipt),
       };
 
@@ -572,10 +580,10 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
   fn attach_view_ledger_receipt(
     &self,
-    aux: &MetaBlock,
+    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), StorageError> {
-    self.attach_ledger_receipt(&self.view_handle, aux, receipt)
+    self.attach_ledger_receipt(&self.view_handle, metablock, receipt)
   }
 
   fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError> {
@@ -627,11 +635,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
         };
 
         view_ledger_tail = {
-          let view_ledger_aux =
-            MetaBlock::from_bytes(entry_val.aux.clone()).expect("failed to deserialize ledger aux");
+          let view_ledger_metablock = MetaBlock::from_bytes(entry_val.metablock.clone())
+            .expect("failed to deserialize ledger metablock");
           (
-            view_ledger_aux.hash().to_bytes(),
-            view_ledger_aux.get_height(),
+            view_ledger_metablock.hash().to_bytes(),
+            view_ledger_metablock.get_height(),
           )
         };
       } else {
@@ -643,12 +651,12 @@ impl LedgerStore for MongoCosmosLedgerStore {
           bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry")
         };
 
-        let ledger_aux =
-          MetaBlock::from_bytes(entry_val.aux.clone()).expect("failed to deserialize ledger aux");
+        let ledger_metablock = MetaBlock::from_bytes(entry_val.metablock.clone())
+          .expect("failed to deserialize ledger metablock");
 
         let res = ledger_tail_map.insert(
           NimbleDigest::from_bytes(&ledger_entry.key.bytes).unwrap(),
-          (ledger_aux.hash(), ledger_aux.get_height()),
+          (ledger_metablock.hash(), ledger_metablock.get_height()),
         );
         assert!(res.is_none()); // since the key (ledger_handle) shouldn't exist.
       }
@@ -671,7 +679,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     // 4. Compute new ledger entry
     let new_ledger_entry = LedgerEntry {
       block: block.clone(),
-      aux: MetaBlock::new(
+      metablock: MetaBlock::new(
         &state_hash,
         &if view_ledger_tail.1 == 0 {
           NimbleDigest::default()
@@ -686,13 +694,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
       },
     };
 
-    let tail_hash = new_ledger_entry.aux.hash();
-    let aux = new_ledger_entry.aux.clone();
+    let tail_hash = new_ledger_entry.metablock.hash();
+    let metablock = new_ledger_entry.metablock.clone();
 
     // 5. Serialize new ledger entry
     let serialized_new_ledger_entry = SerializedLedgerEntry {
       block: new_ledger_entry.block.to_bytes(),
-      aux: new_ledger_entry.aux.to_bytes(),
+      metablock: new_ledger_entry.metablock.to_bytes(),
       receipt: new_ledger_entry.receipt.to_bytes(),
     };
 
@@ -716,7 +724,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     // 5. Also stores new_ledger_entry as an entry at its corresponding index
     let mut view_handle_with_index = self.view_handle.to_bytes();
-    view_handle_with_index.extend(new_ledger_entry.aux.get_height().to_le_bytes()); // "to_le" converts to little endian
+    view_handle_with_index.extend(new_ledger_entry.metablock.get_height().to_le_bytes()); // "to_le" converts to little endian
 
     let index_entry = DBEntry {
       key: view_handle_with_index.to_bson_binary(),
@@ -743,7 +751,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     }
 
     Ok(LedgerView {
-      view_tail_aux: aux,
+      view_tail_metablock: metablock,
       view_tail_hash: tail_hash,
       ledger_tail_map,
     })

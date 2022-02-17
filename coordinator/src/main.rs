@@ -92,8 +92,8 @@ impl CoordinatorState {
           &new_endorsers,
           &ledger_view.ledger_tail_map,
           &(
-            *ledger_view.view_tail_aux.get_prev(),
-            ledger_view.view_tail_aux.get_height() - 1,
+            *ledger_view.view_tail_metablock.get_prev(),
+            ledger_view.view_tail_metablock.get_height() - 1,
           ),
           &view_ledger_genesis_block.hash(),
           &ledger_view.view_tail_hash,
@@ -138,7 +138,7 @@ impl CoordinatorState {
     // Store the receipt in the view ledger
     let res = self
       .ledger_store
-      .attach_view_ledger_receipt(&ledger_view.view_tail_aux, &receipt);
+      .attach_view_ledger_receipt(&ledger_view.view_tail_metablock, &receipt);
     if res.is_err() {
       eprintln!(
         "Failed to attach view ledger receipt in the ledger store ({:?})",
@@ -372,10 +372,10 @@ impl Call for CoordinatorState {
     // Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
     let reply = ReadLatestResp {
-      view: ledger_entry.aux.get_view().to_bytes(),
+      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
-      prev: ledger_entry.aux.get_prev().to_bytes(),
-      height: ledger_entry.aux.get_height() as u64,
+      prev: ledger_entry.metablock.get_prev().to_bytes(),
+      height: ledger_entry.metablock.get_height() as u64,
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
     };
 
@@ -412,9 +412,9 @@ impl Call for CoordinatorState {
       res.unwrap()
     };
     let reply = ReadByIndexResp {
-      view: ledger_entry.aux.get_view().to_bytes(),
+      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
-      prev: ledger_entry.aux.get_prev().to_bytes(),
+      prev: ledger_entry.metablock.get_prev().to_bytes(),
       receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
     };
 
@@ -440,9 +440,9 @@ impl Call for CoordinatorState {
       res.unwrap()
     };
     let reply = ReadViewByIndexResp {
-      view: ledger_entry.aux.get_view().to_bytes(),
+      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
-      prev: ledger_entry.aux.get_prev().to_bytes(),
+      prev: ledger_entry.metablock.get_prev().to_bytes(),
       receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
     };
 
