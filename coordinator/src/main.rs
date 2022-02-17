@@ -280,7 +280,12 @@ impl Call for CoordinatorState {
     let receipt = {
       let res = self
         .connections
-        .append_ledger(&handle, &hash_of_block, &ledger_tail_hash)
+        .append_ledger(
+          &handle,
+          &hash_of_block,
+          &ledger_tail_hash,
+          ledger_meta_block.get_height(),
+        )
         .await;
       if res.is_err() {
         eprintln!(

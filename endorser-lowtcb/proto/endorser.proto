@@ -41,6 +41,7 @@ message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
   bytes cond_updated_tail_hash = 3;
+  uint64 cond_updated_tail_height = 4;
 }
 
 message AppendResp {

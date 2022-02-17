@@ -55,4 +55,17 @@ typedef struct _init_endorser_data {
   digest_t cond_updated_tail_hash;
 } init_endorser_data_t;
 
+// The following status code should match with grpc
+typedef enum _endorser_status_code {
+  OK = 0,
+  INVALID_ARGUMENT = 3,
+  NOT_FOUND = 5,
+  ALREADY_EXISTS = 6,
+  FAILED_PRECONDITION = 9,
+  ABORTED = 10,
+  OUT_OF_RANGE = 11,
+  INTERNAL = 13,
+  UNAVAILABLE = 14,
+} endorser_status_code;
+
 #endif /* _SHARED_H */

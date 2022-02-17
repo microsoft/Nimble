@@ -59,6 +59,7 @@ typedef struct _init_endorser_data {
 typedef struct _append_ledger_data {
   digest_t block_hash;
   digest_t cond_updated_tail_hash;
+  unsigned long long cond_updated_tail_height;
 } append_ledger_data_t;
 
 typedef enum _endorser_call {
@@ -71,5 +72,18 @@ typedef enum _endorser_call {
   read_view_ledger_call = 6,
   append_view_ledger_call = 7,
 } endorser_call_t;
+
+// The following status code should match with grpc
+typedef enum _endorser_status_code {
+  OK = 0,
+  INVALID_ARGUMENT = 3,
+  NOT_FOUND = 5,
+  ALREADY_EXISTS = 6,
+  FAILED_PRECONDITION = 9,
+  ABORTED = 10,
+  OUT_OF_RANGE = 11,
+  INTERNAL = 13,
+  UNAVAILABLE = 14,
+} endorser_status_code;
 
 #endif /* _SHARED_H */

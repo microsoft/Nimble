@@ -5,14 +5,14 @@ enclave {
     include "../shared.h"
 
     trusted {
-        public int setup([out] endorser_id_t* endorser_id);
-        public int initialize_state([in] init_endorser_data_t *state, [out] signature_t* signature);
-        public int new_ledger([in] handle_t* handle, [out] signature_t* signature);
-        public int read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] signature_t* signature);
-        public int append([in] handle_t* handle, [in] digest_t* block_hash, [in] digest_t* cond_updated_tail_hash, [out] signature_t* signature);
-        public int read_latest_view_ledger([in] nonce_t* nonce, [out] signature_t* signature);
-        public int append_view_ledger([in] digest_t* block_hash, [in] digest_t* cond_updated_tail_hash, [out] signature_t* signature);
-        public int get_public_key([out] endorser_id_t* endorser_id);
+        public endorser_status_code setup([out] endorser_id_t* endorser_id);
+        public endorser_status_code initialize_state([in] init_endorser_data_t *state, [out] signature_t* signature);
+        public endorser_status_code new_ledger([in] handle_t* handle, [out] signature_t* signature);
+        public endorser_status_code read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] signature_t* signature);
+        public endorser_status_code append([in] handle_t* handle, [in] digest_t* block_hash, [in] digest_t* cond_updated_tail_hash, [in] uint64_t* cond_updated_tail_height, [out] signature_t* signature);
+        public endorser_status_code read_latest_view_ledger([in] nonce_t* nonce, [out] signature_t* signature);
+        public endorser_status_code append_view_ledger([in] digest_t* block_hash, [in] digest_t* cond_updated_tail_hash, [out] signature_t* signature);
+        public endorser_status_code get_public_key([out] endorser_id_t* endorser_id);
         public void terminate();
     };
     

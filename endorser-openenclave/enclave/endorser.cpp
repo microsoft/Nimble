@@ -38,10 +38,12 @@ int private_to_public_key(EC_KEY *eckey, endorser_id_t *endorser_id) {
   assert(res == PUBLIC_KEY_SIZE_IN_BYTES);
   memcpy(endorser_id->pk, pk, PUBLIC_KEY_SIZE_IN_BYTES);
   free(pk);
+
+  return 1;
 }
 
-int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::setup(endorser_id_t* endorser_id) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
   // set is_initialized to false 
@@ -49,13 +51,13 @@ int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
 
   eckey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
   if (eckey == NULL) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
     TRACE_ENCLAVE("EC_KEY_new_by_curve_name returned NULL");
     goto exit;
   }
   
   if (!EC_KEY_generate_key(eckey)) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
     TRACE_ENCLAVE("EC_KEY_generate_key returned 1");
     goto exit;
   }
@@ -63,7 +65,7 @@ int ecall_dispatcher::setup(endorser_id_t* endorser_id) {
   // convert private key into a public key that we send back 
   res = private_to_public_key(this->eckey, endorser_id);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
     TRACE_ENCLAVE("Error converting private key to public key");
     goto exit;
   }
@@ -72,14 +74,14 @@ exit:
   return ret;
 }
 
-int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK;
   int i = 0;
 
   // check if the endorser is already initialized 
   // and return an error if the endorser is already initialized
   if (this->is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::ABORTED;
     goto exit;
   }
 
@@ -89,7 +91,7 @@ int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t*
     // check if the handle already exists
     if (this->ledger_tail_map.find(state->ledger_tail_map[i].handle) != this->ledger_tail_map.end()) {
       TRACE_ENCLAVE("[Enclave] initialize_state:: Handle already exists %d",(int) this->ledger_tail_map.count(state->ledger_tail_map[i].handle));
-      ret = 1;
+      ret = endorser_status_code::ALREADY_EXISTS;
       goto exit;
     }
  
@@ -109,20 +111,20 @@ int ecall_dispatcher::initialize_state(init_endorser_data_t *state, signature_t*
   return ret;
 }
 
-int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
   // check if the state is initialized
   if (!is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::UNAVAILABLE;
     goto exit;
   }
 
   // check if the handle already exists
   if (this->ledger_tail_map.find(*handle) != this->ledger_tail_map.end()) {
     TRACE_ENCLAVE("[Enclave] New Ledger :: Handle already exists %d",(int) this->ledger_tail_map.count(*handle));
-    ret = 1;
+    ret = endorser_status_code::ALREADY_EXISTS;
     goto exit;
   }
   
@@ -140,7 +142,7 @@ int ecall_dispatcher::new_ledger(handle_t* handle, signature_t* signature) {
   // Produce a signature
   res = calc_signature(this->eckey, &h_m, signature);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
     goto exit;
   }
@@ -152,21 +154,21 @@ exit:
   return ret;
 }
   
-int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
   unsigned long long height;
   digest_t prev;
 
   // check if the state is initialized
   if (!is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::UNAVAILABLE;
     goto exit;
   }
 
   // check if the handle exists, exit if there is no handle found to read
   if (this->ledger_tail_map.find(*handle) == this->ledger_tail_map.end()) {
-    ret = 1;
+    ret = endorser_status_code::NOT_FOUND;
     TRACE_ENCLAVE("[Read Latest] Exited at the handle existence check. Requested Handle does not exist\n");
     goto exit;
   }
@@ -187,7 +189,7 @@ int ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, signature_t*
   // Produce a signature
   res = calc_signature(this->eckey, &h_nonced_tail, signature);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
     goto exit;
   }
@@ -196,8 +198,8 @@ exit:
   return ret;
 }
   
-int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* cond_updated_tail_hash, uint64_t* cond_updated_tail_height, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
   digest_t prev;
@@ -205,14 +207,14 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* c
  
   // check if the state is initialized
   if (!is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::UNAVAILABLE;
     goto exit;
   } 
   
   // check if the handle exists
   if (this->ledger_tail_map.find(*handle) == this->ledger_tail_map.end()) {
     TRACE_ENCLAVE("[Append] Exited at the handle existence check. Requested handle does not exist\n");
-    ret = 1;
+    ret = endorser_status_code::NOT_FOUND;
     goto exit;
   }
   
@@ -221,9 +223,21 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* c
   height = get<1>(this->ledger_tail_map[*handle]);
 
   // check for integer overflow of height
-  if (height == UINT_MAX) {
-    TRACE_ENCLAVE("The number of blocks has reached UINT_MAX");
-    ret = 1;
+  if (height == ULLONG_MAX) {
+    TRACE_ENCLAVE("The number of blocks has reached ULLONG_MAX");
+    ret = endorser_status_code::OUT_OF_RANGE;
+    goto exit;
+  }
+
+  if (*cond_updated_tail_height <= height) {
+    TRACE_ENCLAVE("The new tail height is too small");
+    ret = endorser_status_code::ALREADY_EXISTS;
+    goto exit;
+  }
+
+  if (*cond_updated_tail_height > height + 1) {
+    TRACE_ENCLAVE("The new append entry is out of order");
+    ret = endorser_status_code::FAILED_PRECONDITION;
     goto exit;
   }
 
@@ -241,14 +255,14 @@ int ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, digest_t* c
   // perform a check on the post-state of the append
   if (memcmp(h_m.v, cond_updated_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES) != 0) {
     TRACE_ENCLAVE("The provided cond_updated_tail_hash did not match with the local computation of the same hash");
-    ret = 1;
+    ret = endorser_status_code::INVALID_ARGUMENT;
     goto exit;
   }
 
   // Produce a signature
   res = calc_signature(this->eckey, &h_m, signature);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
     goto exit;
   }
@@ -260,12 +274,12 @@ exit:
   return ret;
 }
   
-int ecall_dispatcher::get_public_key(endorser_id_t* endorser_id) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::get_public_key(endorser_id_t* endorser_id) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
   res = private_to_public_key(this->eckey, endorser_id);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
     TRACE_ENCLAVE("Error converting private key to public key");
     goto exit;
   }
@@ -274,14 +288,14 @@ exit:
   return ret;
 }
 
-int ecall_dispatcher::read_latest_view_ledger(nonce_t* nonce, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::read_latest_view_ledger(nonce_t* nonce, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK; 
   int res = 0;
   unsigned long long height;
 
   // check if the state is initialized
   if (!is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::UNAVAILABLE;
     goto exit;
   }
 
@@ -297,7 +311,7 @@ int ecall_dispatcher::read_latest_view_ledger(nonce_t* nonce, signature_t* signa
   // Produce a signature
   res = calc_signature(this->eckey, &h_nonced_tail, signature);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
     goto exit;
   }
@@ -306,7 +320,7 @@ exit:
   return ret;
 }
 
-int calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, comparator> *ledger_tail_map, digest_t *hash_of_state) {
+void calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, comparator> *ledger_tail_map, digest_t *hash_of_state) {
   int num_entries = ledger_tail_map->size();
   ledger_tail_map_entry_t entries[num_entries];
   int i = 0;
@@ -326,22 +340,22 @@ int calc_hash_of_state(map<handle_t, tuple<digest_t, unsigned long long>, compar
   }
 }
 
-int ecall_dispatcher::append_view_ledger(digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature) {
-  int ret = 0;
+endorser_status_code ecall_dispatcher::append_view_ledger(digest_t* block_hash, digest_t* cond_updated_tail_hash, signature_t* signature) {
+  endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
   digest_t hash_of_state;
  
   // check if the state is initialized
   if (!is_initialized) {
-    ret = 1;
+    ret = endorser_status_code::UNAVAILABLE;
     goto exit;
   } 
   
   // obtain the current value of the view ledger information, and check if the height will overflow after the append
-  if (this->view_ledger_height == UINT_MAX) {
-    TRACE_ENCLAVE("The number of blocks has reached UINT_MAX in the view ledger");
-    ret = 1;
+  if (this->view_ledger_height == ULLONG_MAX) {
+    TRACE_ENCLAVE("The number of blocks has reached ULLONG_MAX in the view ledger");
+    ret = endorser_status_code::OUT_OF_RANGE;
     goto exit;
   }
 
@@ -362,14 +376,14 @@ int ecall_dispatcher::append_view_ledger(digest_t* block_hash, digest_t* cond_up
   // perform a check on the post-state of the append
   if (memcmp(h_m.v, cond_updated_tail_hash->v, HASH_VALUE_SIZE_IN_BYTES) != 0) {
     TRACE_ENCLAVE("The provided cond_updated_tail_hash did not match with the local computation of the same hash");
-    ret = 1;
+    ret = endorser_status_code::INVALID_ARGUMENT;
     goto exit;
   }
 
   // Produce a signature
   res = calc_signature(this->eckey, &h_m, signature);
   if (res == 0) {
-    ret = 1;
+    ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
     goto exit;
   }

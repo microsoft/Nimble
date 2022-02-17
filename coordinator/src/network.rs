@@ -6,6 +6,7 @@ use ledger::{
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::{Channel, Endpoint};
+use tonic::{Code, Status};
 
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
@@ -183,11 +184,53 @@ impl ConnectionStore {
     Ok(receipt)
   }
 
+  async fn retry_append_ledger(
+    &self,
+    pk: &[u8],
+    ledger_handle: &Handle,
+    block_hash: &NimbleDigest,
+    tail_hash: &NimbleDigest,
+    tail_height: usize,
+  ) -> Result<tonic::Response<AppendResp>, tonic::Status> {
+    let job = {
+      if let Ok(conn_map) = self.store.read() {
+        if !conn_map.contains_key(pk) {
+          return Err(Status::aborted("No endorser has this public key"));
+        } else {
+          let mut endorser_client = conn_map[pk].clone();
+          let handle = *ledger_handle;
+          let block = *block_hash;
+          let tail = *tail_hash;
+          tokio::spawn(async move {
+            let response = endorser_client
+              .append(tonic::Request::new(AppendReq {
+                handle: handle.to_bytes(),
+                block_hash: block.to_bytes(),
+                cond_updated_tail_hash: tail.to_bytes(),
+                cond_updated_tail_height: tail_height as u64,
+              }))
+              .await;
+            response
+          })
+        }
+      } else {
+        return Err(Status::aborted("Failed to acquire the read lock"));
+      }
+    };
+
+    let res = job.await;
+    if res.is_err() {
+      return Err(Status::aborted("Failed to append in retry"));
+    }
+    res.unwrap()
+  }
+
   pub async fn append_ledger(
     &self,
     ledger_handle: &Handle,
     block_hash: &NimbleDigest,
     tail_hash: &NimbleDigest,
+    tail_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
     for (pk, ec) in self
@@ -207,6 +250,7 @@ impl ConnectionStore {
             handle: handle.to_bytes(),
             block_hash: block.to_bytes(),
             cond_updated_tail_hash: tail.to_bytes(),
+            cond_updated_tail_height: tail_height as u64,
           }))
           .await;
         (pk_bytes, response)
@@ -222,8 +266,28 @@ impl ConnectionStore {
           let AppendResp { signature } = resp.into_inner();
           receipt_bytes.push((pk, signature));
         } else {
-          eprintln!("append_ledger failed: {:?}", res2.unwrap_err());
-          return Err(CoordinatorError::FailedToAppendLedger);
+          let status = res2.unwrap_err();
+          if status.code() != Code::FailedPrecondition {
+            eprintln!("append_ledger failed: {:?}", status);
+            return Err(CoordinatorError::FailedToAppendLedger);
+          }
+          loop {
+            // This means an out-of-order append; let's retry.
+            let res3 = self
+              .retry_append_ledger(&pk, ledger_handle, block_hash, tail_hash, tail_height)
+              .await;
+            if let Ok(resp) = res3 {
+              let AppendResp { signature } = resp.into_inner();
+              receipt_bytes.push((pk, signature));
+              break;
+            } else {
+              if status.code() == Code::FailedPrecondition {
+                continue;
+              }
+              eprintln!("append_ledger failed: {:?}", status);
+              return Err(CoordinatorError::FailedToAppendLedger);
+            }
+          }
         }
       } else {
         eprintln!("append_ledger failed: {:?}", res.unwrap_err());

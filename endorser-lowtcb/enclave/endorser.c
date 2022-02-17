@@ -133,7 +133,7 @@ void sgx_ereport(
   sgx_report_t* report                  // 512-byte aligned
 );
 
-bool start_endorser(sgx_target_info_t *sgx_target_info, sgx_report_t *sgx_report) {
+endorser_status_code start_endorser(sgx_target_info_t *sgx_target_info, sgx_report_t *sgx_report) {
   int i;
   chain_t *first_chain;
   chain_t *last_chain;
@@ -143,7 +143,7 @@ bool start_endorser(sgx_target_info_t *sgx_target_info, sgx_report_t *sgx_report
   unsigned char report_data[64] __attribute__ ((aligned (128))) = { 0 };
 
   if (endorser_state != endorser_none)
-    return false;
+    return UNAVAILABLE;
 
   _Static_assert(PRIVATE_KEY_SIZE_IN_BYTES % sizeof(unsigned long long) == 0);
   for (i = 0; i < PRIVATE_KEY_SIZE_IN_BYTES; i += sizeof(unsigned long long))
@@ -174,7 +174,7 @@ bool start_endorser(sgx_target_info_t *sgx_target_info, sgx_report_t *sgx_report
 
   endorser_state = endorser_started;
 
-  return true;
+  return OK;
 }
 
 bool check_chain(chain_t* chain) {
@@ -205,14 +205,14 @@ bool insert_chain(chain_t* chain) {
   return true;
 }
 
-bool create_ledger(chain_t* chain, signature_t* signature) {
+endorser_status_code create_ledger(chain_t* chain, signature_t* signature) {
   // create the genesis metadata block
   meta_block_t m;
   chain_t local_chain;
   int i;
 
   if (endorser_state != endorser_initialized)
-    return false;
+    return UNAVAILABLE;
 
   memcpy(&local_chain, chain, sizeof(chain_t));
   memcpy(m.view, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -226,27 +226,27 @@ bool create_ledger(chain_t* chain, signature_t* signature) {
   // pos, prev, next should be set up by the caller
   local_chain.height = 0;
   if (!insert_chain(&local_chain))
-    return false;
+    return INVALID_ARGUMENT;
 
   // Produce an EdDSA Signature from HACL*
   sign_digest(signature->v, local_chain.digest.v);
   memcpy(chain->digest.v, local_chain.digest.v, HASH_VALUE_SIZE_IN_BYTES);
   chain->height = local_chain.height;
 
-  return true;
+  return OK;
 }
 
-bool read_ledger(chain_t* chain, nonce_t* nonce, signature_t* signature) {
+endorser_status_code read_ledger(chain_t* chain, nonce_t* nonce, signature_t* signature) {
   chain_t local_chain;
   unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
   unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
 
   if (endorser_state != endorser_initialized)
-    return false;
+    return UNAVAILABLE;
 
   memcpy(&local_chain, chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
-    return false;
+    return INVALID_ARGUMENT;
 
   // combine the running hash and the nonce value
   memcpy(tail_with_nonce, local_chain.digest.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -258,24 +258,30 @@ bool read_ledger(chain_t* chain, nonce_t* nonce, signature_t* signature) {
   // produce an ECDSA signature
   sign_digest(signature->v, h_nonced_tail);
 
-  return true;
+  return OK;
 }
   
-bool append_ledger(chain_t* chain, append_ledger_data_t* ledger_data, signature_t* signature) {
+endorser_status_code append_ledger(chain_t* chain, append_ledger_data_t* ledger_data, signature_t* signature) {
   chain_t local_chain;
   meta_block_t m;
   digest_t new_tail_hash;
 
   if (endorser_state != endorser_initialized)
-    return false;
+    return UNAVAILABLE;
 
   memcpy(&local_chain, chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
-    return false;
+    return INVALID_ARGUMENT;
 
   // check for integer overflow of height
-  if (local_chain.height == (unsigned long long)-1)
-    return false;
+  if (local_chain.height == ULLONG_MAX)
+    return OUT_OF_RANGE;
+
+  if (ledger_data->cond_updated_tail_height <= local_chain.height)
+    return ALREADY_EXISTS;
+
+  if (ledger_data->cond_updated_tail_height > local_chain.height + 1)
+    return FAILED_PRECONDITION;
 
   // create the metadata block
   memcpy(m.view, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -288,7 +294,7 @@ bool append_ledger(chain_t* chain, append_ledger_data_t* ledger_data, signature_
   calc_digest((unsigned char *)&m, sizeof(meta_block_t), new_tail_hash.v);
 
   if (!equal_32(new_tail_hash.v, ledger_data->cond_updated_tail_hash.v))
-    return false;
+    return INVALID_ARGUMENT;
 
   // Sign the contents
   sign_digest(signature->v, new_tail_hash.v);
@@ -299,15 +305,15 @@ bool append_ledger(chain_t* chain, append_ledger_data_t* ledger_data, signature_
   memcpy(chains[chain->pos].digest.v, new_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
   chains[chain->pos].height = chain->height;
 
-  return true;
+  return OK;
 }
 
-bool get_pubkey(endorser_id_t* endorser_id) {
+endorser_status_code get_pubkey(endorser_id_t* endorser_id) {
   if (endorser_state == endorser_none)
-    return false;
+    return UNAVAILABLE;
 
   memcpy(endorser_id->pk, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
-  return true;
+  return OK;
 }
 
 bool check_pointer(void *ptr, uint64_t size) {
@@ -320,12 +326,12 @@ bool check_pointer(void *ptr, uint64_t size) {
   return false;
 }
 
-bool read_view_ledger(nonce_t *nonce, signature_t *signature) {
+endorser_status_code read_view_ledger(nonce_t *nonce, signature_t *signature) {
   unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
   unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
 
   if (endorser_state != endorser_initialized)
-    return false;
+    return UNAVAILABLE;
 
   // combine the running hash and the nonce value
   memcpy(tail_with_nonce, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -337,10 +343,10 @@ bool read_view_ledger(nonce_t *nonce, signature_t *signature) {
   // produce an ECDSA signature
   sign_digest(signature->v, h_nonced_tail);
 
-  return true;
+  return OK;
 }
 
-bool hash_state(unsigned char *state_hash) {
+void hash_state(unsigned char *state_hash) {
   Hacl_Streaming_SHA2_state_sha2_256 st;
   unsigned char buf[64];
   unsigned int block_state[8];
@@ -349,7 +355,7 @@ bool hash_state(unsigned char *state_hash) {
 
   if (num_chains == 0 && equal_32(view_ledger_tail_hash.v, zero_digest.v)) {
     memcpy(state_hash, zero_digest.v, HASH_VALUE_SIZE_IN_BYTES);
-    return true;
+    return;
   }
 
   st.buf = &buf[0];
@@ -366,22 +372,21 @@ bool hash_state(unsigned char *state_hash) {
 
   Hacl_Streaming_SHA2_finish_256(&st, state_hash);
 
-  return true;
+  return;
 }
 
-bool append_view_ledger(append_ledger_data_t *ledger_data, signature_t *signature) {
+endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, signature_t *signature) {
   meta_block_t m;
   digest_t new_tail_hash;
 
   if (endorser_state != endorser_initialized)
-    return false;
+    return UNAVAILABLE;
 
-  if (!hash_state(m.state))
-    return false;
+  hash_state(m.state);
 
   // check for integer overflow of height
   if (view_ledger_height == (unsigned long long)-1)
-    return false;
+    return OUT_OF_RANGE;
 
   memcpy(m.prev, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
   memcpy(m.cur, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -391,7 +396,7 @@ bool append_view_ledger(append_ledger_data_t *ledger_data, signature_t *signatur
   calc_digest((unsigned char *)&m, sizeof(meta_block_t), new_tail_hash.v);
 
   if (!equal_32(new_tail_hash.v, ledger_data->cond_updated_tail_hash.v))
-    return false;
+    return INVALID_ARGUMENT;
 
   view_ledger_height = view_ledger_height + 1;
   memcpy(view_ledger_tail_hash.v, new_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
@@ -399,25 +404,25 @@ bool append_view_ledger(append_ledger_data_t *ledger_data, signature_t *signatur
   // produce an ECDSA signature
   sign_digest(signature->v, view_ledger_tail_hash.v);
 
-  return true;
+  return OK;
 }
 
-bool init_endorser(init_endorser_data_t *data, signature_t *signature) {
+endorser_status_code init_endorser(init_endorser_data_t *data, signature_t *signature) {
   unsigned long long i;
   chain_t *chain;
   append_ledger_data_t ledger_data;
 
   if (endorser_state != endorser_started)
-    return false;
+    return UNAVAILABLE;
 
   memcpy(view_ledger_tail_hash.v, data->view_tail.v, HASH_VALUE_SIZE_IN_BYTES);
   view_ledger_height = data->view_height;
 
   if (!check_pointer(data->chains, sizeof(chain_t) * MAX_NUM_CHAINS))
-    return false;
+    return INVALID_ARGUMENT;
 
   if (data->num_chains > MAX_NUM_CHAINS - 2)
-    return false;
+    return INVALID_ARGUMENT;
 
   memcpy(chains, data->chains, sizeof(chain_t) * (data->num_chains + 1));
   memcpy(&chains[MAX_NUM_CHAINS-1], &data->chains[MAX_NUM_CHAINS-1], sizeof(chain_t));
@@ -430,7 +435,7 @@ bool init_endorser(init_endorser_data_t *data, signature_t *signature) {
           chains[chain->next].prev != chain->pos ||
           memcmp_32(chains[chain->prev].handle.v, chain->handle.v) >= 0 ||
           memcmp_32(chain->handle.v, chains[chain->next].handle.v) >= 0)
-          return false;
+          return INVALID_ARGUMENT;
   }
   num_chains = data->num_chains;
 
@@ -438,14 +443,11 @@ bool init_endorser(init_endorser_data_t *data, signature_t *signature) {
 
   memcpy(ledger_data.block_hash.v, data->view_block.v, HASH_VALUE_SIZE_IN_BYTES);
   memcpy(ledger_data.cond_updated_tail_hash.v, data->cond_updated_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  if (!append_view_ledger(&ledger_data, signature))
-    return false;
-
-  return true;
+  return append_view_ledger(&ledger_data, signature);
 }
 
-bool endorser_entry(endorser_call_t endorser_call, void *param1, void *param2, void *param3) {
-  bool ret = false;
+endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1, void *param2, void *param3) {
+  endorser_status_code ret = INTERNAL;
 
   switch (endorser_call) {
   case start_endorser_call:

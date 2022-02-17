@@ -107,6 +107,7 @@ impl EndorserState {
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
     cond_updated_tail_hash: &NimbleDigest,
+    cond_updated_tail_height: usize,
   ) -> Result<Signature, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
@@ -127,6 +128,14 @@ impl EndorserState {
       }
       res.unwrap()
     };
+
+    if cond_updated_tail_height < height_plus_one {
+      return Err(EndorserError::InvalidTailHeight);
+    }
+
+    if cond_updated_tail_height > height_plus_one {
+      return Err(EndorserError::OutOfOrderAppend);
+    }
 
     let updated_tail_hash =
       MetaBlock::new(&self.view_ledger_tail.0, prev, block_hash, height_plus_one).hash();
@@ -369,7 +378,12 @@ mod tests {
 
     let signature = {
       endorser_state
-        .append(&handle, &block_hash_to_append, &updated_metablock.hash())
+        .append(
+          &handle,
+          &block_hash_to_append,
+          &updated_metablock.hash(),
+          updated_metablock.get_height(),
+        )
         .unwrap()
     };
     let new_ledger_height = {

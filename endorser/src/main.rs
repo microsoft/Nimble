@@ -1,4 +1,5 @@
 use crate::endorser_state::EndorserState;
+use crate::errors::EndorserError;
 use clap::{App, Arg};
 use ledger::{
   signature::{PublicKeyTrait, SignatureTrait},
@@ -93,6 +94,7 @@ impl EndorserCall for EndorserServiceState {
       handle,
       block_hash,
       cond_updated_tail_hash,
+      cond_updated_tail_height,
     } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
@@ -111,6 +113,7 @@ impl EndorserCall for EndorserServiceState {
       &handle_instance.unwrap(),
       &block_hash_instance.unwrap(),
       &cond_updated_tail_hash_instance.unwrap(),
+      cond_updated_tail_height as usize,
     );
 
     match res {
@@ -121,7 +124,16 @@ impl EndorserCall for EndorserServiceState {
         Ok(Response::new(reply))
       },
 
-      Err(_) => Err(Status::aborted("Failed to append")),
+      Err(error) => match error {
+        EndorserError::OutOfOrderAppend => Err(Status::failed_precondition("Out of order append")),
+        EndorserError::InvalidConditionalTail => {
+          Err(Status::aborted("Invalid conditional tail hash"))
+        },
+        EndorserError::InvalidLedgerName => Err(Status::not_found("Ledger handle not found")),
+        EndorserError::LedgerHeightOverflow => Err(Status::out_of_range("Ledger height overflow")),
+        EndorserError::InvalidTailHeight => Err(Status::already_exists("Invalid ledgher height")),
+        _ => Err(Status::aborted("Failed to append")),
+      },
     }
   }
 
