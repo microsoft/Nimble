@@ -28,7 +28,7 @@ pub struct BenchmarkLog {
   request_type: usize,
   avg_service_latency: f64,
   service_throughput: f64,
-  verification_throughput: f64,
+  verifier_time: f64,
 }
 
 impl BenchmarkLog {
@@ -39,7 +39,7 @@ impl BenchmarkLog {
     request_type: usize,
     avg_service_latency: f64,
     service_throughput: f64,
-    verification_throughput: f64,
+    verifier_time: f64,
   ) -> Self {
     BenchmarkLog {
       clients: num_clients,
@@ -48,7 +48,7 @@ impl BenchmarkLog {
       request_type,
       avg_service_latency,
       service_throughput,
-      verification_throughput,
+      verifier_time,
     }
   }
 }
@@ -63,9 +63,7 @@ pub fn check_file_path_and_setup_dirs_necessary(file_path: &str) -> Option<FileW
       Some(parent_path) => {
         let create_op = create_dir_all(parent_path);
         match create_op {
-          Ok(_) => {
-            println!("Initialized necessary directories for storing file.")
-          },
+          Ok(_) => {},
           Err(e) => {
             println!("{:?}", e);
           },

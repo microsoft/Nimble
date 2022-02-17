@@ -4,16 +4,15 @@ use std::convert::TryFrom;
 
 use clap::Parser;
 use rand::Rng;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tokio::time::Instant;
 use tonic::transport::{Channel, Endpoint};
 
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
-  AppendReq, NewLedgerReq, NewLedgerResp, ReadViewByIndexReq, ReadViewByIndexResp,
+  AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use ledger::NimbleDigest;
-use verifier::{verify_append, verify_new_ledger, VerifierState};
+use verifier::{verify_append, verify_new_ledger, verify_read_latest, VerifierState};
 
 use crate::cli::Args;
 use crate::errors::ClientError;
@@ -105,10 +104,10 @@ async fn benchmark_newledger(
   num_reqs_per_client: usize,
   app_bytes_size: usize,
 ) -> Result<BenchmarkLog, Box<dyn std::error::Error>> {
-  println!(
+  Timer::print(&format!(
     "Starting the NewLedger benchmark with {} clients each sending {} requests...",
     num_concurrent_clients, num_reqs_per_client
-  );
+  ));
 
   let benchmark_start = Timer::new("Benchmark::NewLedger");
 
@@ -132,9 +131,7 @@ async fn benchmark_newledger(
 
   let mut timer_map = HashMap::new();
 
-  let req_start = Timer::new(&format!("NewLedger_Requests R={}", num_total_reqs));
-
-  let req_create_start = Timer::new(&format!("NewLedger_Requests_Create R={}", num_total_reqs));
+  let req_create = Timer::new(&format!("NewLedger_CreateRequests R={}", num_total_reqs));
   for conn_state in conn_pool {
     for _ in 0..num_reqs_per_client {
       let mut conn = conn_state.clone();
@@ -153,20 +150,17 @@ async fn benchmark_newledger(
       }))
     }
   }
-  req_create_start.stop();
+  req_create.stop();
 
+  let req_start = Timer::new(&format!("NewLedger_IssueRequests R={}", num_total_reqs));
   let mut results = Vec::new();
   for resp in responses {
     let res = resp.await;
     results.push((res, Instant::now()));
   }
-
   let results_end = req_start.stop();
-  let telemetry_service_throughput = compute_throughput_per_second(&results_end, num_total_reqs);
-  Timer::print(&format!(
-    "NewLedger_Response_Throughput: {:?} req/s",
-    telemetry_service_throughput
-  ));
+  let throughput = num_total_reqs as f64 / results_end.as_secs_f64();
+  Timer::print(&format!("NewLedger_Throughput: {:?} req/s", throughput));
 
   let mut client_latencies = BTreeMap::new();
 
@@ -193,22 +187,14 @@ async fn benchmark_newledger(
   }
 
   let mut client_averages = Vec::new();
-  for (client_index, response_times) in client_latencies {
+  for (_client_index, response_times) in client_latencies {
     let client_average_t = compute_average(&response_times);
     client_averages.push(client_average_t);
-    // TODO: How to selectively enable this? Maybe a verbose flag?
-    Timer::print(&format!(
-      "NewLedger_Client_{}_AvgLatency: {:?}",
-      client_index, client_average_t
-    ));
   }
-  let telemetry_avg_service_latency = compute_average(&client_averages);
-  Timer::print(&format!(
-    "NewLedger_AllClients_AvgLatency: {:?}",
-    telemetry_avg_service_latency
-  ));
+  let latency = compute_average(&client_averages);
+  Timer::print(&format!("NewLedger_AvgLatency: {:?}", latency));
 
-  let seq_verification_start = Timer::new("Sequential Verification");
+  let seq_verification_start = Timer::new("Verification of responses");
 
   for (newledger_res, client_nonce) in &responses {
     // NOTE: Every NewLedger response is individually verified and MUST pass.
@@ -221,30 +207,9 @@ async fn benchmark_newledger(
     );
     assert!(res.is_ok());
   }
-  let seq_verification_end = seq_verification_start.stop();
-  let telemetry_verification_throughput =
-    compute_throughput_per_second(&seq_verification_end, num_total_reqs);
-  Timer::print(&format!(
-    "NewLedger_Verification_Throughput: {} ver/s",
-    telemetry_verification_throughput
-  ));
-
-  let par_verification_start = Timer::new("Parallel Verification");
-  let _parallel_verification_results: Vec<_> = (0..responses.len())
-    .into_par_iter()
-    .map(|i: usize| {
-      verify_new_ledger(
-        vs,
-        &responses[i].0.view,
-        &responses[i].0.block,
-        &reformat_receipt(&responses[i].0.receipt),
-        responses[i].1,
-      )
-      .is_ok()
-    })
-    .collect();
-
-  par_verification_start.stop();
+  let time_taken = seq_verification_start.stop();
+  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
+  Timer::print(&format!("NewLedger_Verify: {} s", verifier_time));
 
   benchmark_start.stop();
 
@@ -253,9 +218,9 @@ async fn benchmark_newledger(
     num_total_reqs,
     num_reqs_per_client,
     BenchmarkRequestType::BenchmarkNewLedger as usize,
-    telemetry_avg_service_latency.as_secs_f64(),
-    telemetry_service_throughput,
-    telemetry_verification_throughput,
+    latency.as_secs_f64(),
+    throughput,
+    verifier_time,
   );
 
   Ok(telemetry_resp)
@@ -269,10 +234,10 @@ async fn benchmark_append(
   block_size: usize,
   handle: &[u8],
 ) -> Result<BenchmarkLog, Box<dyn std::error::Error>> {
-  println!(
+  Timer::print(&format!(
     "Starting the Append benchmark with {} clients each sending {} requests...",
     num_concurrent_clients, num_reqs_per_client
-  );
+  ));
 
   let num_total_reqs = num_concurrent_clients * num_reqs_per_client;
   let block = generate_random_bytes(block_size);
@@ -284,8 +249,7 @@ async fn benchmark_append(
 
   let benchmark_start = Timer::new("Benchmark::Append");
 
-  let req_start = Timer::new(&format!("Append_Requests R={}", num_total_reqs));
-  let req_create_start = Timer::new(&format!("Append_Requests_Create R={}", num_total_reqs));
+  let req_create_start = Timer::new(&format!("Append_CreateRequests R={}", num_total_reqs));
   for conn_state in conn_pool {
     for _ in 0..num_reqs_per_client {
       let mut conn = conn_state.clone();
@@ -305,6 +269,123 @@ async fn benchmark_append(
   }
   req_create_start.stop();
 
+  let req_start = Timer::new(&format!("Append_IssueRequests R={}", num_total_reqs));
+  let mut results = Vec::new();
+  for resp in responses {
+    let res = resp.await;
+    results.push((res, Instant::now()));
+  }
+
+  let results_end = req_start.stop();
+  let throughput = num_total_reqs as f64 / results_end.as_secs_f64();
+  Timer::print(&format!("Append_Throughput: {:?} req/s", throughput));
+
+  let mut client_latencies = BTreeMap::new();
+
+  let mut responses = Vec::new();
+  for (r, recv_time) in results {
+    if r.is_ok() {
+      let (index, res) = r.unwrap();
+      let returned_resp = res.unwrap().into_inner();
+      responses.push(returned_resp);
+
+      // Insert latencies
+      let req_elapsed_t = recv_time.duration_since(timer_map[&index]);
+      match client_latencies.entry(index / num_reqs_per_client) {
+        Entry::Vacant(e) => {
+          e.insert(vec![req_elapsed_t]);
+        },
+        Entry::Occupied(mut e) => {
+          e.get_mut().push(req_elapsed_t);
+        },
+      }
+    } else {
+      println!("Request Failed: {:?}", r.unwrap());
+    }
+  }
+
+  let mut client_averages = Vec::new();
+  for (_client_index, response_times) in client_latencies {
+    let client_average_t = compute_average(&response_times);
+    client_averages.push(client_average_t);
+  }
+  let latency = compute_average(&client_averages);
+  Timer::print(&format!("Append_AvgLatency: {:?}", latency));
+
+  let seq_verification_start = Timer::new("Verification of responses");
+
+  for append_res in &responses {
+    // NOTE: Not every append is verified since we don't know the order they were received and processed.
+    let _res = verify_append(
+      vs,
+      &append_res.view,
+      &block.to_vec(),
+      &append_res.prev,
+      append_res.height as usize,
+      &reformat_receipt(&append_res.receipt),
+    );
+  }
+
+  let time_taken = seq_verification_start.stop();
+  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
+  Timer::print(&format!("Append_Verify: {} s", verifier_time));
+
+  benchmark_start.stop();
+
+  let telemetry = BenchmarkLog::new(
+    num_concurrent_clients,
+    num_total_reqs,
+    num_reqs_per_client,
+    BenchmarkRequestType::BenchmarkAppend as usize,
+    latency.as_secs_f64(),
+    throughput,
+    verifier_time,
+  );
+
+  Ok(telemetry)
+}
+
+async fn benchmark_read_latest(
+  vs: &VerifierState,
+  conn_pool: &[CoordinatorConnection],
+  num_concurrent_clients: usize,
+  num_reqs_per_client: usize,
+  handle: &[u8],
+) -> Result<BenchmarkLog, Box<dyn std::error::Error>> {
+  Timer::print(&format!(
+    "Starting the ReadLatest benchmark with {} clients each sending {} requests...",
+    num_concurrent_clients, num_reqs_per_client
+  ));
+
+  let num_total_reqs = num_concurrent_clients * num_reqs_per_client;
+  let mut i = 0;
+
+  let mut responses = Vec::new();
+
+  let mut timer_map = HashMap::new();
+
+  let benchmark_start = Timer::new("Benchmark::ReadLatest");
+  let nonce: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  let req_create_start = Timer::new(&format!("ReadLatest_CreateRequests R={}", num_total_reqs));
+  for conn_state in conn_pool {
+    for _ in 0..num_reqs_per_client {
+      let mut conn = conn_state.clone();
+      let q = tonic::Request::new(ReadLatestReq {
+        handle: handle.to_owned(),
+        nonce: nonce.to_vec(),
+      });
+      i += 1;
+
+      timer_map.insert(i, Instant::now());
+
+      responses.push(tokio::spawn(async move {
+        (i, conn.client.read_latest(q).await)
+      }))
+    }
+  }
+  req_create_start.stop();
+
+  let req_start = Timer::new(&format!("ReadLatest_IssueRequests R={}", num_total_reqs));
   let mut results = Vec::new();
   for resp in responses {
     let res = resp.await;
@@ -314,7 +395,7 @@ async fn benchmark_append(
   let results_end = req_start.stop();
   let telemetry_service_throughput = compute_throughput_per_second(&results_end, num_total_reqs);
   Timer::print(&format!(
-    "Append_Response_Throughput: {:?} req/s",
+    "ReadLatest_Throughput: {:?} req/s",
     telemetry_service_throughput
   ));
 
@@ -343,73 +424,46 @@ async fn benchmark_append(
   }
 
   let mut client_averages = Vec::new();
-  for (client_index, response_times) in client_latencies {
+  for (_client_index, response_times) in client_latencies {
     let client_average_t = compute_average(&response_times);
     client_averages.push(client_average_t);
-    // TODO: How to selectively enable this? Maybe a verbose flag?
-    Timer::print(&format!(
-      "Append_Client_{}_AvgLatency: {:?}",
-      client_index, client_average_t
-    ));
   }
   let telemetry_service_latency = compute_average(&client_averages);
   Timer::print(&format!(
-    "Append_AllClients_AvgLatency: {:?}",
+    "ReadLatest_AvgLatency: {:?}",
     telemetry_service_latency
   ));
 
-  let seq_verification_start = Timer::new("Sequential Verification");
+  let seq_verification_start = Timer::new("Verification of responses");
 
-  for append_res in &responses {
+  for res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_append(
+    let _res = verify_read_latest(
       vs,
-      &append_res.view,
-      &block.to_vec(),
-      &append_res.prev,
-      append_res.height as usize,
-      &reformat_receipt(&append_res.receipt),
+      &res.view,
+      &res.block,
+      &res.prev,
+      res.height as usize,
+      &nonce,
+      &reformat_receipt(&res.receipt),
     );
   }
 
-  let seq_verification_end = seq_verification_start.stop();
-  let telemetry_verification_throughput =
-    compute_throughput_per_second(&seq_verification_end, num_total_reqs);
-  Timer::print(&format!(
-    "Append_Verification_Throughput: {} ver/s",
-    telemetry_verification_throughput
-  ));
-
-  let par_verification_start = Timer::new("Parallel Verification");
-  let _parallel_verification_results: Vec<_> = (0..responses.len())
-    .into_par_iter()
-    .map(|i: usize| {
-      verify_append(
-        vs,
-        &responses[i].view,
-        &block.to_vec(),
-        &responses[i].prev,
-        responses[i].height as usize,
-        &reformat_receipt(&responses[i].receipt),
-      )
-      .is_ok()
-    })
-    .collect();
-  par_verification_start.stop();
+  let time_taken = seq_verification_start.stop();
+  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
+  Timer::print(&format!("ReadLatest_Verify: {} s", verifier_time));
 
   benchmark_start.stop();
 
-  let telemetry = BenchmarkLog::new(
+  Ok(BenchmarkLog::new(
     num_concurrent_clients,
     num_total_reqs,
     num_reqs_per_client,
     BenchmarkRequestType::BenchmarkAppend as usize,
     telemetry_service_latency.as_secs_f64(),
     telemetry_service_throughput,
-    telemetry_verification_throughput,
-  );
-
-  Ok(telemetry)
+    verifier_time,
+  ))
 }
 
 #[tokio::main]
@@ -452,7 +506,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
-  println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
+  Timer::print(&format!(
+    "Applying ReadViewByIndexResp Response: {:?}",
+    res.is_ok()
+  ));
   assert!(res.is_ok());
 
   // Step 1: NewLedger Request (With Application Data Embedded)
@@ -479,13 +536,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     &reformat_receipt(&receipt),
     &client_nonce,
   );
-  println!("NewLedger (WithAppData) : {:?}", res.is_ok());
+  Timer::print(&format!("NewLedger (WithAppData) : {:?}", res.is_ok()));
   assert!(res.is_ok());
 
   let (handle, ret_app_bytes) = res.unwrap();
   assert_eq!(ret_app_bytes, app_bytes.to_vec());
 
-  let num_concurrent_clients = config.clients;
+  let num_concurrent_clients = config.num_clients;
   let num_reqs_per_client = config.requests;
 
   let conn_pool =
@@ -495,7 +552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let benchmark_type = BenchmarkRequestType::try_from(benchmark_id).unwrap();
     match benchmark_type {
       BenchmarkRequestType::BenchmarkNewLedger => {
-        let newledger_benchmark_ok = benchmark_newledger(
+        let res = benchmark_newledger(
           &vs,
           &conn_pool,
           num_concurrent_clients,
@@ -503,11 +560,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           app_byte_size,
         )
         .await;
-        assert!(newledger_benchmark_ok.is_ok());
-        let _write_op = writer.write(&newledger_benchmark_ok.unwrap());
+        assert!(res.is_ok());
+        let _write_op = writer.write(&res.unwrap());
       },
       BenchmarkRequestType::BenchmarkAppend => {
-        let append_benchmark_ok = benchmark_append(
+        let res = benchmark_append(
           &vs,
           &conn_pool,
           num_concurrent_clients,
@@ -516,11 +573,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           &handle,
         )
         .await;
-        assert!(append_benchmark_ok.is_ok());
-        let _write_op = writer.write(&append_benchmark_ok.unwrap());
+        assert!(res.is_ok());
+        let _write_op = writer.write(&res.unwrap());
       },
       BenchmarkRequestType::BenchmarkReadLatest => {
-        unimplemented!("Benchmarking Read Latest API isn't implemented yet.");
+        let res = benchmark_read_latest(
+          &vs,
+          &conn_pool,
+          num_concurrent_clients,
+          num_reqs_per_client,
+          &handle,
+        )
+        .await;
+        assert!(res.is_ok());
+        let _write_op = writer.write(&res.unwrap());
       },
       BenchmarkRequestType::BenchmarkReadByIndex => {
         unimplemented!("Benchmarking Read By Index API isn't implemented yet.");

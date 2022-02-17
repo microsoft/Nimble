@@ -22,6 +22,3 @@ csv = "1.1.6"
 [build-dependencies]
 tonic-build = "0.5"
 prost-build = "0.8"
-
-[features]
-profile = []

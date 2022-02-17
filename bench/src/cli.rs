@@ -13,7 +13,7 @@ pub struct Args {
 
   /// The number of concurrent clients to use in the benchmark
   #[clap(short, long, default_value_t = 10)]
-  pub clients: usize,
+  pub num_clients: usize,
 
   /// The number of requests per client to use in the benchmark
   #[clap(short, long, default_value_t = 1000)]

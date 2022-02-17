@@ -4,15 +4,13 @@
 
 ## Build
 
-To build the `bench` to use the timer, enable the `features = profile` during build.
-
 ```shell
-$ cargo build --bin bench --release --features profile
+$ cargo build --bin bench --release
 ```
 
 ## Current support:
 
-1. `--clients`: Number of concurrent clients to be used in the benchmark.
+1. `--num_clients`: Number of concurrent clients to be used in the benchmark.
 2. `-r, --requests`: Number of requests to `methods` by each client.
 3. `-m, --methods`: A number/set of numbers between 1-4 corresponding to the APIs to benchmark.
    1. `1 = NewLedger`: Benchmark Creates `-r * -c` ledgers and uses `-a = 16` byte default app byte sizes.
@@ -91,7 +89,7 @@ OPTIONS:
             The number of random bytes to be generated as application bytes payload (NewLedger
             AppBytes/Append Block Size) [default: 16]
 
-    -c, --clients <CLIENTS>
+    -n, --num_clients <CLIENTS>
             The number of concurrent clients to use in the benchmark [default: 10]
 
     -h, --help

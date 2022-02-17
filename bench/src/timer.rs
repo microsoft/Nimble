@@ -1,23 +1,16 @@
-#[cfg(feature = "profile")]
 use colored::Colorize;
-#[cfg(feature = "profile")]
 use core::sync::atomic::AtomicUsize;
-#[cfg(feature = "profile")]
 use core::sync::atomic::Ordering;
 use std::time::Duration;
-#[cfg(feature = "profile")]
 use std::time::Instant;
 
-#[cfg(feature = "profile")]
 pub static CALL_DEPTH: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(feature = "profile")]
 pub struct Timer {
   label: String,
   timer: Instant,
 }
 
-#[cfg(feature = "profile")]
 impl Timer {
   #[inline(always)]
   pub fn new(label: &str) -> Self {
@@ -25,7 +18,7 @@ impl Timer {
     CALL_DEPTH.fetch_add(1, Ordering::Relaxed);
     let star = "* ";
     println!(
-      "{:indent$}{} [START] {}",
+      "{:indent$}{}{}",
       "",
       star,
       label.yellow().bold(),
@@ -42,7 +35,7 @@ impl Timer {
     let duration = self.timer.elapsed();
     let star = "* ";
     println!(
-      "{:indent$}{} [ END ] {} {:?}",
+      "{:indent$}{}{} {:?}",
       "",
       star,
       self.label.blue().bold(),
@@ -66,27 +59,4 @@ impl Timer {
     );
     CALL_DEPTH.fetch_sub(1, Ordering::Relaxed);
   }
-}
-
-#[cfg(not(feature = "profile"))]
-pub struct Timer {
-  _label: String,
-}
-
-#[cfg(not(feature = "profile"))]
-impl Timer {
-  #[inline(always)]
-  pub fn new(label: &str) -> Self {
-    Self {
-      _label: label.to_string(),
-    }
-  }
-
-  #[inline(always)]
-  pub fn stop(&self) -> Duration {
-    Duration::default()
-  }
-
-  #[inline(always)]
-  pub fn print(_msg: &str) {}
 }
