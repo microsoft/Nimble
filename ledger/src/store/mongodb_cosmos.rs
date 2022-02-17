@@ -757,7 +757,6 @@ impl LedgerStore for MongoCosmosLedgerStore {
     })
   }
 
-  #[cfg(test)]
   fn reset_store(&self) -> Result<(), StorageError> {
     self
       .ledgers

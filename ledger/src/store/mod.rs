@@ -46,7 +46,6 @@ pub trait LedgerStore {
   fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError>;
   fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, StorageError>;
 
-  #[cfg(test)]
   fn reset_store(&self) -> Result<(), StorageError>; // only used for testing
 }
 

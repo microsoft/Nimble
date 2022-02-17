@@ -284,7 +284,6 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  #[cfg(test)]
   fn reset_store(&self) -> Result<(), StorageError> {
     // not really needed for in-memory since state is already volatile.
     // this API is only for testing persistent storage services.

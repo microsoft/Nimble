@@ -149,6 +149,11 @@ impl CoordinatorState {
 
     Ok(())
   }
+
+  pub fn reset_ledger_store(&self) {
+    let res = self.ledger_store.reset_store();
+    assert!(res.is_ok());
+  }
 }
 
 fn reformat_receipt(receipt: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
@@ -541,7 +546,7 @@ mod tests {
   use rand::Rng;
   use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
-  use std::process::{Command, Stdio};
+  use std::process::{Child, Command, Stdio};
   use verifier::{
     get_tail_hash, verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
     VerifierState,
@@ -553,6 +558,26 @@ mod tests {
     (0..id_sigs.len())
       .map(|i| (id_sigs[i].id.clone(), id_sigs[i].sig.clone()))
       .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+  }
+
+  struct BoxChild {
+    pub child: Child,
+  }
+
+  impl Drop for BoxChild {
+    fn drop(&mut self) {
+      self.child.kill().expect("failed to kill a child process");
+    }
+  }
+
+  struct BoxCoordinator {
+    pub coordinator: CoordinatorState,
+  }
+
+  impl Drop for BoxCoordinator {
+    fn drop(&mut self) {
+      self.coordinator.reset_ledger_store();
+    }
   }
 
   #[tokio::test]
@@ -603,14 +628,16 @@ mod tests {
     }
 
     // Launch the endorser
-    let mut endorser = Command::new(endorser_cmd.clone())
-      .args(endorser_args.clone().split_whitespace())
-      .stdout(Stdio::piped())
-      .spawn()
-      .expect("endorser failed to start");
+    let mut endorser = BoxChild {
+      child: Command::new(endorser_cmd.clone())
+        .args(endorser_args.clone().split_whitespace())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("endorser failed to start"),
+    };
 
     // Wait for the endorser to be ready
-    let mut buf_reader = BufReader::new(endorser.stdout.take().unwrap());
+    let mut buf_reader = BufReader::new(endorser.child.stdout.take().unwrap());
     let mut endorser_output = String::new();
     while let Ok(buflen) = buf_reader.read_line(&mut endorser_output) {
       if buflen == 0 {
@@ -622,9 +649,15 @@ mod tests {
     }
 
     // Create the coordinator
-    let mut coordinator = CoordinatorState::new(&store, &ledger_store_args);
+    let mut box_coordinator = BoxCoordinator {
+      coordinator: CoordinatorState::new(&store, &ledger_store_args),
+    };
+    let coordinator = &mut box_coordinator.coordinator;
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
+
+    // Reset the ledger store
+    coordinator.reset_ledger_store();
 
     // Initialization: Fetch view ledger to build VerifierState
     let mut vs = VerifierState::new();
@@ -859,13 +892,15 @@ mod tests {
 
     // Step 6: change the view by adding a new endorser
     let endorser_args2 = endorser_args.clone() + " 9091";
-    let mut endorser2 = Command::new(endorser_cmd.clone())
-      .args(endorser_args2.split_whitespace())
-      .stdout(Stdio::piped())
-      .spawn()
-      .expect("endorser failed to start");
+    let mut endorser2 = BoxChild {
+      child: Command::new(endorser_cmd.clone())
+        .args(endorser_args2.split_whitespace())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("endorser failed to start"),
+    };
 
-    let mut buf_reader2 = BufReader::new(endorser2.stdout.take().unwrap());
+    let mut buf_reader2 = BufReader::new(endorser2.child.stdout.take().unwrap());
     let mut endorser2_output = String::new();
     while let Ok(buflen) = buf_reader2.read_line(&mut endorser2_output) {
       if buflen == 0 {
@@ -959,7 +994,9 @@ mod tests {
     );
     assert!(is_latest_valid.is_ok());
 
-    endorser.kill().expect("failed to kill endorser");
-    endorser2.kill().expect("failed to kill endorser");
+    // We access endorser and endorser2 below
+    // to stop them from being dropped earlier
+    println!("endorser1 process ID is {}", endorser.child.id());
+    println!("endorser2 process ID is {}", endorser2.child.id());
   }
 }
