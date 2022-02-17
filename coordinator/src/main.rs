@@ -455,27 +455,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
     .arg(
       Arg::with_name("nimbledb")
+        .short("n")
+        .long("nimbledb")
         .help("The database name")
-        .index(5),
+        .default_value("nimble_cosmosdb"),
     )
-    .arg(Arg::with_name("cosmosurl").help("The COSMOS URL").index(4))
+    .arg(
+      Arg::with_name("cosmosurl")
+        .short("c")
+        .long("cosmosurl")
+        .takes_value(true)
+        .help("The COSMOS URL"),
+    )
     .arg(
       Arg::with_name("store")
-        .help("The type of store used by the service. Default: InMemory")
-        .default_value("memory")
-        .index(3),
+        .short("s")
+        .long("store")
+        .help("The type of store used by the service.")
+        .default_value("memory"),
     )
     .arg(
       Arg::with_name("host")
-        .help("The hostname to run the service on. Default: [::1]")
-        .default_value("[::1]")
-        .index(2),
+        .short("t")
+        .long("host")
+        .help("The hostname to run the service on.")
+        .default_value("[::1]"),
     )
     .arg(
       Arg::with_name("port")
-        .help("The port number to run the coordinator service on. Default: 8080")
-        .default_value("8080")
-        .index(1),
+        .short("p")
+        .long("port")
+        .help("The port number to run the coordinator service on.")
+        .default_value("8080"),
     )
     .arg(
       Arg::with_name("endorser")
@@ -483,8 +494,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("endorser")
         .help("List of URLs to Endorser Services")
         .use_delimiter(true)
-        .default_value("http://[::1]:9090")
-        .required(true),
+        .default_value("http://[::1]:9090"),
     );
 
   let cli_matches = config.get_matches();
