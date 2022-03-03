@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageError {
   /// returned if the supplied key does not exist in the storage service
@@ -24,6 +26,39 @@ pub enum StorageError {
   LedgerWriteLockFailed,
   /// return if required arguments are missing
   MissingArguments,
+  /// return if the DB URL is invalid
+  InvalidDBUri,
+  /// return if failed to initialize the view ledger
+  FailedToInitializeViewLedger,
+}
+
+#[derive(Clone, Debug)]
+pub enum LedgerStoreError {
+  LedgerError(StorageError),
+  MongoDBError(mongodb::error::Error),
+}
+
+impl Display for LedgerStoreError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      LedgerStoreError::LedgerError(storage_error) => write!(f, "{:?}", storage_error),
+      LedgerStoreError::MongoDBError(mongodb_error) => write!(f, "{:?}", mongodb_error),
+    }
+  }
+}
+
+impl std::error::Error for LedgerStoreError {}
+
+impl From<StorageError> for LedgerStoreError {
+  fn from(err: StorageError) -> Self {
+    LedgerStoreError::LedgerError(err)
+  }
+}
+
+impl From<mongodb::error::Error> for LedgerStoreError {
+  fn from(err: mongodb::error::Error) -> Self {
+    LedgerStoreError::MongoDBError(err)
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

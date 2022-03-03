@@ -1,6 +1,7 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
-use crate::errors::StorageError;
+use crate::errors::{LedgerStoreError, StorageError};
 use crate::store::{LedgerEntry, LedgerStore, LedgerView};
+use async_trait::async_trait;
 use itertools::Itertools;
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
@@ -39,11 +40,12 @@ impl InMemoryLedgerStore {
   }
 }
 
+#[async_trait]
 impl LedgerStore for InMemoryLedgerStore {
-  fn create_ledger(
+  async fn create_ledger(
     &self,
     block: &Block,
-  ) -> Result<(Handle, MetaBlock, NimbleDigest), StorageError> {
+  ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError> {
     if let Ok(view_ledger_array) = self.view_ledger.read() {
       let handle = block.hash();
       let block_hash = block.hash();
@@ -68,22 +70,26 @@ impl LedgerStore for InMemoryLedgerStore {
           e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
           Ok((handle, metablock, tail_hash))
         } else {
-          Err(StorageError::DuplicateKey)
+          Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
         }
       } else {
-        Err(StorageError::LedgerMapWriteLockFailed)
+        Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerMapWriteLockFailed,
+        ))
       }
     } else {
-      Err(StorageError::ViewLedgerReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerReadLockFailed,
+      ))
     }
   }
 
-  fn append_ledger(
+  async fn append_ledger(
     &self,
     handle: &Handle,
     block: &Block,
     cond: &NimbleDigest,
-  ) -> Result<(MetaBlock, NimbleDigest), StorageError> {
+  ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError> {
     if let Ok(view_ledger_array) = self.view_ledger.read() {
       if let Ok(ledgers_map) = self.ledgers.read() {
         if ledgers_map.contains_key(handle) {
@@ -110,28 +116,36 @@ impl LedgerStore for InMemoryLedgerStore {
               ledgers.push(ledger_entry);
               Ok((metablock, tail_hash))
             } else {
-              Err(StorageError::IncorrectConditionalData)
+              Err(LedgerStoreError::LedgerError(
+                StorageError::IncorrectConditionalData,
+              ))
             }
           } else {
-            Err(StorageError::LedgerWriteLockFailed)
+            Err(LedgerStoreError::LedgerError(
+              StorageError::LedgerWriteLockFailed,
+            ))
           }
         } else {
-          Err(StorageError::KeyDoesNotExist)
+          Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
         }
       } else {
-        Err(StorageError::LedgerMapReadLockFailed)
+        Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerMapReadLockFailed,
+        ))
       }
     } else {
-      Err(StorageError::ViewLedgerReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerReadLockFailed,
+      ))
     }
   }
 
-  fn attach_ledger_receipt(
+  async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
     metablock: &MetaBlock,
     receipt: &Receipt,
-  ) -> Result<(), StorageError> {
+  ) -> Result<(), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
@@ -139,56 +153,72 @@ impl LedgerStore for InMemoryLedgerStore {
             ledgers[metablock.get_height()].receipt = receipt.clone();
             Ok(())
           } else {
-            Err(StorageError::InvalidIndex)
+            Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
           }
         } else {
-          Err(StorageError::LedgerWriteLockFailed)
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerWriteLockFailed,
+          ))
         }
       } else {
-        Err(StorageError::KeyDoesNotExist)
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
       }
     } else {
-      Err(StorageError::LedgerMapReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::LedgerMapReadLockFailed,
+      ))
     }
   }
 
-  fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError> {
+  async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(ledgers) = ledgers_map[handle].read() {
           Ok(ledgers[ledgers.len() - 1].clone())
         } else {
-          Err(StorageError::LedgerReadLockFailed)
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerReadLockFailed,
+          ))
         }
       } else {
-        Err(StorageError::KeyDoesNotExist)
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
       }
     } else {
-      Err(StorageError::LedgerMapReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::LedgerMapReadLockFailed,
+      ))
     }
   }
 
-  fn read_ledger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError> {
+  async fn read_ledger_by_index(
+    &self,
+    handle: &Handle,
+    idx: usize,
+  ) -> Result<LedgerEntry, LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(ledgers) = ledgers_map[handle].read() {
           if idx < ledgers.len() {
             Ok(ledgers[idx].clone())
           } else {
-            Err(StorageError::InvalidIndex)
+            Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
           }
         } else {
-          Err(StorageError::LedgerReadLockFailed)
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerReadLockFailed,
+          ))
         }
       } else {
-        Err(StorageError::KeyDoesNotExist)
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
       }
     } else {
-      Err(StorageError::LedgerMapReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::LedgerMapReadLockFailed,
+      ))
     }
   }
 
-  fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError> {
+  async fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, LedgerStoreError> {
     let mut ledger_tail_map = HashMap::new();
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       if let Ok(ledger_map) = self.ledgers.read() {
@@ -240,51 +270,61 @@ impl LedgerStore for InMemoryLedgerStore {
           ledger_tail_map,
         })
       } else {
-        Err(StorageError::LedgerMapReadLockFailed)
+        Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerMapReadLockFailed,
+        ))
       }
     } else {
-      Err(StorageError::ViewLedgerWriteLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerWriteLockFailed,
+      ))
     }
   }
 
-  fn attach_view_ledger_receipt(
+  async fn attach_view_ledger_receipt(
     &self,
     metablock: &MetaBlock,
     receipt: &Receipt,
-  ) -> Result<(), StorageError> {
+  ) -> Result<(), LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       if metablock.get_height() < view_ledger_array.len() {
         view_ledger_array[metablock.get_height()].receipt = receipt.clone();
         Ok(())
       } else {
-        Err(StorageError::InvalidIndex)
+        Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
       }
     } else {
-      Err(StorageError::ViewLedgerWriteLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerWriteLockFailed,
+      ))
     }
   }
 
-  fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError> {
+  async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
     if let Ok(view_ledger_array) = self.view_ledger.read() {
       Ok(view_ledger_array[view_ledger_array.len() - 1].clone())
     } else {
-      Err(StorageError::ViewLedgerReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerReadLockFailed,
+      ))
     }
   }
 
-  fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, StorageError> {
+  async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {
     if let Ok(view_ledger_array) = self.view_ledger.read() {
       if idx < view_ledger_array.len() {
         Ok(view_ledger_array[idx].clone())
       } else {
-        Err(StorageError::InvalidIndex)
+        Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
       }
     } else {
-      Err(StorageError::ViewLedgerReadLockFailed)
+      Err(LedgerStoreError::LedgerError(
+        StorageError::ViewLedgerReadLockFailed,
+      ))
     }
   }
 
-  fn reset_store(&self) -> Result<(), StorageError> {
+  async fn reset_store(&self) -> Result<(), LedgerStoreError> {
     // not really needed for in-memory since state is already volatile.
     // this API is only for testing persistent storage services.
     // we could implement it here anyway, but choose not to for now.

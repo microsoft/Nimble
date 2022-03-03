@@ -1,5 +1,6 @@
 use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
-use crate::errors::StorageError;
+use crate::errors::LedgerStoreError;
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 pub mod in_memory;
@@ -19,34 +20,41 @@ pub struct LedgerView {
   pub ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
 }
 
+#[async_trait]
 pub trait LedgerStore {
-  fn create_ledger(&self, block: &Block)
-    -> Result<(Handle, MetaBlock, NimbleDigest), StorageError>;
-  fn append_ledger(
+  async fn create_ledger(
+    &self,
+    block: &Block,
+  ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError>;
+  async fn append_ledger(
     // TODO: should self be mutable?
     &self,
     handle: &Handle,
     block: &Block,
     cond: &NimbleDigest,
-  ) -> Result<(MetaBlock, NimbleDigest), StorageError>;
-  fn attach_ledger_receipt(
+  ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError>;
+  async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
     metablock: &MetaBlock,
     receipt: &Receipt,
-  ) -> Result<(), StorageError>;
-  fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
-  fn read_ledger_by_index(&self, handle: &Handle, idx: usize) -> Result<LedgerEntry, StorageError>;
-  fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, StorageError>;
-  fn attach_view_ledger_receipt(
+  ) -> Result<(), LedgerStoreError>;
+  async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn read_ledger_by_index(
+    &self,
+    handle: &Handle,
+    idx: usize,
+  ) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, LedgerStoreError>;
+  async fn attach_view_ledger_receipt(
     &self,
     metablock: &MetaBlock,
     receipt: &Receipt,
-  ) -> Result<(), StorageError>;
-  fn read_view_ledger_tail(&self) -> Result<LedgerEntry, StorageError>;
-  fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, StorageError>;
+  ) -> Result<(), LedgerStoreError>;
+  async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
 
-  fn reset_store(&self) -> Result<(), StorageError>; // only used for testing
+  async fn reset_store(&self) -> Result<(), LedgerStoreError>; // only used for testing
 }
 
 #[cfg(test)]
@@ -58,7 +66,7 @@ mod tests {
   use crate::NimbleDigest;
   use std::collections::HashMap;
 
-  pub fn check_store_creation_and_operations(state: &dyn LedgerStore) {
+  pub async fn check_store_creation_and_operations(state: &dyn LedgerStore) {
     let initial_value: Vec<u8> = vec![
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       1, 2,
@@ -66,9 +74,12 @@ mod tests {
 
     let block = Block::new(&initial_value);
 
-    let (handle, _, _) = state.create_ledger(&block).expect("failed create ledger");
+    let (handle, _, _) = state
+      .create_ledger(&block)
+      .await
+      .expect("failed create ledger");
 
-    let res = state.read_ledger_tail(&handle);
+    let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
     let current_data = res.unwrap();
@@ -81,33 +92,35 @@ mod tests {
 
     let new_block = Block::new(&new_value_appended);
 
-    let res = state.append_ledger(&handle, &new_block, &NimbleDigest::default());
+    let res = state
+      .append_ledger(&handle, &new_block, &NimbleDigest::default())
+      .await;
     assert!(res.is_ok());
 
-    let res = state.read_ledger_tail(&handle);
+    let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
     let current_tail = res.unwrap();
     assert_eq!(current_tail.block.block, new_value_appended);
 
-    let res = state.read_ledger_by_index(&handle, 0);
+    let res = state.read_ledger_by_index(&handle, 0).await;
     assert!(res.is_ok());
 
     let data_at_index = res.unwrap();
     assert_eq!(data_at_index.block.block, initial_value);
 
-    let res = state.reset_store();
+    let res = state.reset_store().await;
     assert!(res.is_ok());
   }
 
-  #[test]
-  pub fn check_in_memory_store() {
+  #[tokio::test]
+  pub async fn check_in_memory_store() {
     let state = InMemoryLedgerStore::new();
-    check_store_creation_and_operations(&state);
+    check_store_creation_and_operations(&state).await;
   }
 
-  #[test]
-  pub fn check_mongo_cosmos_store() {
+  #[tokio::test]
+  pub async fn check_mongo_cosmos_store() {
     if std::env::var_os("COSMOS_URL").is_none() {
       // The right env variable is not available so let's skip tests
       return;
@@ -121,7 +134,7 @@ mod tests {
         .unwrap(),
     );
 
-    let state = MongoCosmosLedgerStore::new(&args).unwrap();
-    check_store_creation_and_operations(&state);
+    let state = MongoCosmosLedgerStore::new(&args).await.unwrap();
+    check_store_creation_and_operations(&state).await;
   }
 }

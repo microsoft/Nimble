@@ -32,11 +32,11 @@ pub struct CoordinatorState {
 pub struct CallServiceStub {}
 
 impl CoordinatorState {
-  pub fn new(ledger_store_type: &str, args: &HashMap<String, String>) -> Self {
+  pub async fn new(ledger_store_type: &str, args: &HashMap<String, String>) -> Self {
     match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
         connections: ConnectionStore::new(),
-        ledger_store: Box::new(MongoCosmosLedgerStore::new(args).unwrap()),
+        ledger_store: Box::new(MongoCosmosLedgerStore::new(args).await.unwrap()),
       },
       _ => CoordinatorState {
         connections: ConnectionStore::new(),
@@ -73,7 +73,8 @@ impl CoordinatorState {
     let ledger_view = {
       let res = self
         .ledger_store
-        .append_view_ledger(&view_ledger_genesis_block);
+        .append_view_ledger(&view_ledger_genesis_block)
+        .await;
       if res.is_err() {
         eprintln!(
           "Failed to append to the view ledger in the ledger store ({:?})",
@@ -138,7 +139,8 @@ impl CoordinatorState {
     // Store the receipt in the view ledger
     let res = self
       .ledger_store
-      .attach_view_ledger_receipt(&ledger_view.view_tail_metablock, &receipt);
+      .attach_view_ledger_receipt(&ledger_view.view_tail_metablock, &receipt)
+      .await;
     if res.is_err() {
       eprintln!(
         "Failed to attach view ledger receipt in the ledger store ({:?})",
@@ -150,8 +152,8 @@ impl CoordinatorState {
     Ok(())
   }
 
-  pub fn reset_ledger_store(&self) {
-    let res = self.ledger_store.reset_store();
+  pub async fn reset_ledger_store(&self) {
+    let res = self.ledger_store.reset_store().await;
     assert!(res.is_ok());
   }
 }
@@ -191,7 +193,7 @@ impl Call for CoordinatorState {
     };
 
     let (handle, ledger_meta_block, _) = {
-      let res = self.ledger_store.create_ledger(&genesis_block);
+      let res = self.ledger_store.create_ledger(&genesis_block).await;
       if res.is_err() {
         eprintln!(
           "Failed to create ledger in the ledger store ({:?})",
@@ -220,7 +222,8 @@ impl Call for CoordinatorState {
     // Store the receipt
     let res = self
       .ledger_store
-      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt);
+      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt)
+      .await;
     if res.is_err() {
       eprintln!(
         "Failed to attach ledger receipt to the ledger store ({:?})",
@@ -269,7 +272,8 @@ impl Call for CoordinatorState {
       // TODO: shall we *move* the block?
       let res = self
         .ledger_store
-        .append_ledger(&handle, &data_block, &cond_tail_hash_info);
+        .append_ledger(&handle, &data_block, &cond_tail_hash_info)
+        .await;
       if res.is_err() {
         eprintln!(
           "Failed to append to the ledger in the ledger store {:?}",
@@ -306,7 +310,8 @@ impl Call for CoordinatorState {
 
     let res = self
       .ledger_store
-      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt);
+      .attach_ledger_receipt(&handle, &ledger_meta_block, &receipt)
+      .await;
     if res.is_err() {
       eprintln!(
         "Failed to attach ledger receipt to the ledger store ({:?})",
@@ -352,7 +357,7 @@ impl Call for CoordinatorState {
     };
 
     let ledger_entry = {
-      let res = self.ledger_store.read_ledger_tail(&handle);
+      let res = self.ledger_store.read_ledger_tail(&handle).await;
       if res.is_err() {
         eprintln!(
           "Failed to read the ledger tail from the ledger store {:?}",
@@ -409,7 +414,8 @@ impl Call for CoordinatorState {
     let ledger_entry = {
       let res = self
         .ledger_store
-        .read_ledger_by_index(&handle, index as usize);
+        .read_ledger_by_index(&handle, index as usize)
+        .await;
       if res.is_err() {
         eprintln!(
           "Failed to read ledger by index from the ledger store {:?}",
@@ -437,7 +443,10 @@ impl Call for CoordinatorState {
   ) -> Result<Response<ReadViewByIndexResp>, Status> {
     let ReadViewByIndexReq { index } = request.into_inner();
     let ledger_entry = {
-      let res = self.ledger_store.read_view_ledger_by_index(index as usize);
+      let res = self
+        .ledger_store
+        .read_view_ledger_by_index(index as usize)
+        .await;
       if res.is_err() {
         eprintln!(
           "Failed to read view by index from the ledger store {:?}",
@@ -522,7 +531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Some(x) = cli_matches.value_of("nimbledb") {
     ledger_store_args.insert(String::from("NIMBLE_DB"), x.to_string());
   }
-  let mut server = CoordinatorState::new(store, &ledger_store_args);
+  let mut server = CoordinatorState::new(store, &ledger_store_args).await;
   let res = server.add_endorsers(endorser_hostnames).await;
   assert!(res.is_ok());
   println!("Running gRPC Coordinator Service at {:?}", addr);
@@ -574,11 +583,12 @@ mod tests {
     pub coordinator: CoordinatorState,
   }
 
+  /*
   impl Drop for BoxCoordinator {
     fn drop(&mut self) {
       self.coordinator.reset_ledger_store();
     }
-  }
+  }*/
 
   #[tokio::test]
   #[ignore]
@@ -650,14 +660,12 @@ mod tests {
 
     // Create the coordinator
     let mut box_coordinator = BoxCoordinator {
-      coordinator: CoordinatorState::new(&store, &ledger_store_args),
+      coordinator: CoordinatorState::new(&store, &ledger_store_args).await,
     };
     let coordinator = &mut box_coordinator.coordinator;
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
-
-    // Reset the ledger store
-    coordinator.reset_ledger_store();
+    println!("Add an endorser");
 
     // Initialization: Fetch view ledger to build VerifierState
     let mut vs = VerifierState::new();
@@ -998,5 +1006,6 @@ mod tests {
     // to stop them from being dropped earlier
     println!("endorser1 process ID is {}", endorser.child.id());
     println!("endorser2 process ID is {}", endorser2.child.id());
+    coordinator.reset_ledger_store().await;
   }
 }
