@@ -160,7 +160,7 @@ async fn benchmark_newledger(
   }
   let results_end = req_start.stop();
   let throughput = num_total_reqs as f64 / results_end.as_secs_f64();
-  Timer::print(&format!("NewLedger_Throughput: {:?} req/s", throughput));
+  Timer::print(&format!("NewLedger_Throughput: {:?} reqs/s", throughput));
 
   let mut client_latencies = BTreeMap::new();
 
@@ -208,8 +208,8 @@ async fn benchmark_newledger(
     assert!(res.is_ok());
   }
   let time_taken = seq_verification_start.stop();
-  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
-  Timer::print(&format!("NewLedger_Verify: {} s", verifier_time));
+  let verifier_time = time_taken.as_secs_f64() * 1000_f64 / (num_total_reqs as f64);
+  Timer::print(&format!("NewLedger_Verify: {} ms", verifier_time));
 
   benchmark_start.stop();
 
@@ -278,7 +278,7 @@ async fn benchmark_append(
 
   let results_end = req_start.stop();
   let throughput = num_total_reqs as f64 / results_end.as_secs_f64();
-  Timer::print(&format!("Append_Throughput: {:?} req/s", throughput));
+  Timer::print(&format!("Append_Throughput: {:?} reqs/s", throughput));
 
   let mut client_latencies = BTreeMap::new();
 
@@ -327,8 +327,8 @@ async fn benchmark_append(
   }
 
   let time_taken = seq_verification_start.stop();
-  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
-  Timer::print(&format!("Append_Verify: {} s", verifier_time));
+  let verifier_time = time_taken.as_secs_f64() * 1000_f64 / (num_total_reqs as f64);
+  Timer::print(&format!("Append_Verify: {} ms", verifier_time));
 
   benchmark_start.stop();
 
@@ -395,7 +395,7 @@ async fn benchmark_read_latest(
   let results_end = req_start.stop();
   let telemetry_service_throughput = compute_throughput_per_second(&results_end, num_total_reqs);
   Timer::print(&format!(
-    "ReadLatest_Throughput: {:?} req/s",
+    "ReadLatest_Throughput: {:?} reqs/s",
     telemetry_service_throughput
   ));
 
@@ -450,8 +450,8 @@ async fn benchmark_read_latest(
   }
 
   let time_taken = seq_verification_start.stop();
-  let verifier_time = time_taken.as_secs_f64() / (num_total_reqs as f64);
-  Timer::print(&format!("ReadLatest_Verify: {} s", verifier_time));
+  let verifier_time = time_taken.as_secs_f64() * 1000_f64 / (num_total_reqs as f64);
+  Timer::print(&format!("ReadLatest_Verify: {} ms", verifier_time));
 
   benchmark_start.stop();
 
