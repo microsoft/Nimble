@@ -1,7 +1,7 @@
 use crate::errors::CoordinatorError;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  Handle, NimbleDigest, Nonce, Receipt,
+  Handle, LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, Nonce, Receipt,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -16,7 +16,8 @@ use endorser_proto::endorser_call_client::EndorserCallClient;
 use endorser_proto::{
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
   GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
 #[derive(Debug, Default)]
@@ -75,7 +76,7 @@ impl ConnectionStore {
   pub async fn initialize_state(
     &mut self,
     endorsers: &[Vec<u8>],
-    ledger_tail_map: &HashMap<NimbleDigest, (NimbleDigest, usize)>,
+    ledger_tail_map: &LedgerTailMap,
     view_ledger_tail_height: &(NimbleDigest, usize),
     block_hash: &NimbleDigest,
     cond_updated_tail_hash: &NimbleDigest,
@@ -443,5 +444,85 @@ impl ConnectionStore {
     }
     let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
     Ok(receipt)
+  }
+
+  #[allow(dead_code)]
+  pub async fn read_latest_state(
+    &self,
+    view_ledger_height: usize,
+    to_lock: bool,
+    client_nonce: &Nonce,
+  ) -> Result<(Vec<(Vec<u8>, LedgerView, bool)>, Receipt), CoordinatorError> {
+    let mut jobs = Vec::new();
+    for (pk, ec) in self
+      .store
+      .read()
+      .expect("Failed to get the read lock")
+      .iter()
+    {
+      let mut endorser_client = ec.clone();
+      let nonce = *client_nonce;
+      let pk_bytes = pk.clone();
+      let job = tokio::spawn(async move {
+        let response = endorser_client
+          .read_latest_state(tonic::Request::new(ReadLatestStateReq {
+            nonce: nonce.get(),
+            view_ledger_height: view_ledger_height as u64,
+            to_lock,
+          }))
+          .await;
+        (pk_bytes, response)
+      });
+      jobs.push(job);
+    }
+
+    let mut ledger_views = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for job in jobs {
+      let res = job.await;
+      if let Ok((pk, res2)) = res {
+        if let Ok(resp) = res2 {
+          let ReadLatestStateResp {
+            ledger_tail_map,
+            view_ledger_tail_prev,
+            view_ledger_tail_view,
+            view_ledger_tail_height,
+            is_locked,
+            signature,
+          } = resp.into_inner();
+          let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
+            .into_iter()
+            .map(|e| {
+              (
+                NimbleDigest::from_bytes(&e.handle).unwrap(),
+                (
+                  NimbleDigest::from_bytes(&e.tail).unwrap(),
+                  e.height as usize,
+                ),
+              )
+            })
+            .collect();
+          let ledger_view = LedgerView {
+            view_tail_metablock: MetaBlock::new(
+              &NimbleDigest::default(),
+              &NimbleDigest::from_bytes(&view_ledger_tail_prev).unwrap(), // TODO: better error handling
+              &NimbleDigest::from_bytes(&view_ledger_tail_view).unwrap(),
+              view_ledger_tail_height as usize,
+            ),
+            ledger_tail_map: ledger_tail_map_rs,
+          };
+          ledger_views.push((pk.clone(), ledger_view, is_locked));
+          receipt_bytes.push((pk, signature));
+        } else {
+          eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToReadViewLedger);
+        }
+      } else {
+        eprintln!("read_view_ledger_tail failed: {:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToReadViewLedger);
+      }
+    }
+    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
+    Ok((ledger_views, receipt))
   }
 }

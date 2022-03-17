@@ -227,7 +227,7 @@ impl LedgerStore for InMemoryLedgerStore {
         let block_hash = block.hash();
 
         let state_hash = {
-          if ledger_map.is_empty() || view_ledger_array.len() == 1 {
+          if ledger_map.is_empty() {
             NimbleDigest::default()
           } else {
             let mut serialized_state = Vec::new();
@@ -261,12 +261,10 @@ impl LedgerStore for InMemoryLedgerStore {
             id_sigs: Vec::new(),
           },
         };
-        let tail_hash = ledger_entry.metablock.hash();
         let metablock = ledger_entry.metablock.clone();
         view_ledger_array.push(ledger_entry);
         Ok(LedgerView {
           view_tail_metablock: metablock,
-          view_tail_hash: tail_hash,
           ledger_tail_map,
         })
       } else {

@@ -20,18 +20,40 @@ pub mod endorser_proto {
 use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
-  GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq, NewLedgerResp,
-  ReadLatestReq, ReadLatestResp, ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
+  GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
+
+#[derive(Default, Copy, Debug, Clone)]
+pub struct EndorserFlags {
+  is_locked: bool,
+}
+
+impl EndorserFlags {
+  pub fn new() -> Self {
+    EndorserFlags { is_locked: false }
+  }
+
+  pub fn set_lock(&mut self, to_lock: bool) {
+    self.is_locked = to_lock;
+  }
+
+  pub fn get_lock(&self) -> bool {
+    self.is_locked
+  }
+}
 
 pub struct EndorserServiceState {
   state: Arc<RwLock<EndorserState>>,
+  flags: Arc<RwLock<EndorserFlags>>,
 }
 
 impl EndorserServiceState {
   pub fn new() -> Self {
     EndorserServiceState {
       state: Arc::new(RwLock::new(EndorserState::new())),
+      flags: Arc::new(RwLock::new(EndorserFlags::new())),
     }
   }
 }
@@ -264,6 +286,66 @@ impl EndorserCall for EndorserServiceState {
         Ok(Response::new(reply))
       },
       Err(_) => Err(Status::aborted("Failed to endorse_state")),
+    }
+  }
+
+  async fn read_latest_state(
+    &self,
+    request: Request<ReadLatestStateReq>,
+  ) -> Result<Response<ReadLatestStateResp>, Status> {
+    let ReadLatestStateReq {
+      nonce,
+      view_ledger_height,
+      to_lock,
+    } = request.into_inner();
+
+    let res = self
+      .state
+      .read()
+      .expect("Failed to acquire read lock")
+      .read_latest_state(&nonce);
+
+    match res {
+      Ok((ledger_view, signature)) => {
+        if to_lock && view_ledger_height == ledger_view.view_tail_metablock.get_height() as u64 {
+          self
+            .flags
+            .write()
+            .expect("Failed to acquire write lock")
+            .set_lock(to_lock);
+        }
+        let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
+          .ledger_tail_map
+          .iter()
+          .map(|(handle, (tail, height))| LedgerTailMapEntry {
+            handle: handle.to_bytes(),
+            tail: tail.to_bytes(),
+            height: *height as u64,
+          })
+          .collect();
+        let reply = ReadLatestStateResp {
+          ledger_tail_map,
+          view_ledger_tail_prev: ledger_view
+            .view_tail_metablock
+            .get_prev()
+            .to_bytes()
+            .to_vec(),
+          view_ledger_tail_view: ledger_view
+            .view_tail_metablock
+            .get_block_hash()
+            .to_bytes()
+            .to_vec(),
+          view_ledger_tail_height: ledger_view.view_tail_metablock.get_height() as u64,
+          is_locked: self
+            .flags
+            .read()
+            .expect("Failed to acquire read lock")
+            .get_lock(),
+          signature: signature.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(_) => Err(Status::aborted("Failed to read latest state")),
     }
   }
 }

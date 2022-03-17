@@ -2,8 +2,9 @@ mod errors;
 
 use crate::errors::VerificationError;
 use ledger::{
+  produce_hash_of_state,
   signature::{CryptoError, PublicKey, PublicKeyTrait},
-  Block, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt, ViewChangeReceipt,
+  Block, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt, ViewChangeReceipt,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -382,4 +383,33 @@ pub fn verify_append(
   } else {
     Ok(tail_hash_prime.to_bytes())
   }
+}
+
+pub fn verify_query_endorsers(
+  nonce_bytes: &[u8],
+  ledger_views: &[(Vec<u8>, LedgerView, bool)],
+  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+) -> Result<(), VerificationError> {
+  let mut receipt_map = HashMap::<Vec<u8>, Receipt>::new();
+  for (pk, signature) in receipt_bytes {
+    receipt_map.insert(
+      pk.clone(),
+      Receipt::from_bytes(&[(pk.clone(), signature.clone())]),
+    );
+  }
+  for (pk, ledger_view, _is_locked) in ledger_views {
+    if !receipt_map.contains_key(pk) {
+      return Err(VerificationError::InvalidePublicKey);
+    }
+    let receipt = &receipt_map[&pk.clone()];
+    let state_hash = produce_hash_of_state(&ledger_view.ledger_tail_map);
+    let nonced_hash =
+      NimbleDigest::digest(&([state_hash.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
+    let pub_key = PublicKey::from_bytes(pk).unwrap();
+    let res = receipt.verify(&nonced_hash, &[pub_key]);
+    if res.is_err() {
+      return Err(VerificationError::InvalidReceipt);
+    }
+  }
+  Ok(())
 }

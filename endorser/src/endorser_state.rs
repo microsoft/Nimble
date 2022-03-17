@@ -1,8 +1,8 @@
 use crate::errors::EndorserError;
-use itertools::Itertools;
 use ledger::{
+  produce_hash_of_state,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, Signature},
-  MetaBlock, NimbleDigest, NimbleHashTrait,
+  LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait,
 };
 use std::collections::HashMap;
 
@@ -12,10 +12,16 @@ pub struct EndorserState {
   keypair: PrivateKey,
 
   /// a map from fixed-sized labels to a tail hash and a counter
-  ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
+  ledger_tail_map: LedgerTailMap,
 
   /// the current tail of the view/membership ledger along with a counter
   view_ledger_tail: (NimbleDigest, usize),
+
+  /// the latest view
+  latest_view: NimbleDigest,
+
+  /// view ledger tail's prev (TODO: use MetaBlock)
+  view_ledger_tail_prev: NimbleDigest,
 
   /// whether the endorser is initialized
   is_initialized: bool,
@@ -28,23 +34,9 @@ impl EndorserState {
       keypair,
       ledger_tail_map: HashMap::new(),
       view_ledger_tail: (NimbleDigest::default(), 0_usize),
+      latest_view: NimbleDigest::default(),
+      view_ledger_tail_prev: NimbleDigest::default(),
       is_initialized: false,
-    }
-  }
-
-  fn produce_hash_of_state(&self) -> NimbleDigest {
-    // for empty state, hash is a vector of zeros
-    if self.ledger_tail_map.is_empty() && self.view_ledger_tail == (NimbleDigest::default(), 0) {
-      NimbleDigest::default()
-    } else {
-      let mut serialized_state = Vec::new();
-      for handle in self.ledger_tail_map.keys().sorted() {
-        let (tail, height) = self.ledger_tail_map.get(handle).unwrap();
-        serialized_state.extend_from_slice(&handle.to_bytes());
-        serialized_state.extend_from_slice(&tail.to_bytes());
-        serialized_state.extend_from_slice(&height.to_le_bytes());
-      }
-      NimbleDigest::digest(&serialized_state)
     }
   }
 
@@ -191,7 +183,7 @@ impl EndorserState {
     };
 
     // the view embedded in the view ledger is the hash of the current state of the endorser
-    let view = self.produce_hash_of_state();
+    let view = produce_hash_of_state(&self.ledger_tail_map);
 
     // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
     let updated_tail_hash = MetaBlock::new(&view, prev, block_hash, height_plus_one).hash();
@@ -205,9 +197,35 @@ impl EndorserState {
     let signature = self.keypair.sign(&updated_tail_hash.to_bytes()).unwrap();
 
     // update the internal state
+    self.view_ledger_tail_prev = self.view_ledger_tail.0;
     self.view_ledger_tail = (updated_tail_hash, height_plus_one);
+    self.latest_view = view;
 
     Ok(signature)
+  }
+
+  pub fn read_latest_state(&self, nonce: &[u8]) -> Result<(LedgerView, Signature), EndorserError> {
+    if !self.is_initialized {
+      return Err(EndorserError::NotInitialized);
+    }
+
+    let view = produce_hash_of_state(&self.ledger_tail_map);
+    let message = view.digest_with_bytes(nonce).to_bytes();
+    let signature = self.keypair.sign(&message).unwrap();
+
+    let meta_block = MetaBlock::new(
+      &NimbleDigest::default(), // TODO: this will be removed.
+      &self.view_ledger_tail_prev,
+      &self.latest_view,
+      self.view_ledger_tail.1,
+    );
+
+    let ledger_view = LedgerView {
+      view_tail_metablock: meta_block,
+      ledger_tail_map: self.ledger_tail_map.clone(),
+    };
+
+    Ok((ledger_view, signature))
   }
 }
 
@@ -242,7 +260,7 @@ mod tests {
       };
 
       // the view embedded in the view ledger is the hash of the current state of the endorser
-      let view = endorser_state.produce_hash_of_state();
+      let view = produce_hash_of_state(&endorser_state.ledger_tail_map);
 
       // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
       MetaBlock::new(&view, prev, &view_block_hash, height_plus_one).hash()
@@ -320,7 +338,7 @@ mod tests {
       };
 
       // the view embedded in the view ledger is the hash of the current state of the endorser
-      let view = endorser_state.produce_hash_of_state();
+      let view = produce_hash_of_state(&endorser_state.ledger_tail_map);
 
       // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
       MetaBlock::new(&view, prev, &view_block_hash, height_plus_one).hash()

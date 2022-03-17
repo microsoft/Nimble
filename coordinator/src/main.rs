@@ -3,8 +3,9 @@ mod network;
 
 use crate::errors::CoordinatorError;
 use crate::network::ConnectionStore;
-use ledger::store::{
-  in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+use ledger::{
+  store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore},
+  LedgerView,
 };
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
 use std::collections::HashMap;
@@ -97,7 +98,7 @@ impl CoordinatorState {
             ledger_view.view_tail_metablock.get_height() - 1,
           ),
           &view_ledger_genesis_block.hash(),
-          &ledger_view.view_tail_hash,
+          &ledger_view.view_tail_metablock.hash(),
         )
         .await;
       if res.is_err() {
@@ -117,7 +118,7 @@ impl CoordinatorState {
         .append_view_ledger(
           &existing_endorsers,
           &view_ledger_genesis_block.hash(),
-          &ledger_view.view_tail_hash,
+          &ledger_view.view_tail_metablock.hash(),
         )
         .await;
       if res.is_err() {
@@ -155,6 +156,25 @@ impl CoordinatorState {
   pub async fn reset_ledger_store(&self) {
     let res = self.ledger_store.reset_store().await;
     assert!(res.is_ok());
+  }
+
+  pub async fn query_endorsers(
+    &self,
+    client_nonce: &Nonce,
+  ) -> Result<(Vec<(Vec<u8>, LedgerView, bool)>, ledger::Receipt), CoordinatorError> {
+    let res = self.ledger_store.read_view_ledger_tail().await;
+    if res.is_err() {
+      eprintln!(
+        "Failed to read the view ledger tail ({:?})",
+        res.unwrap_err()
+      );
+      return Err(CoordinatorError::FailedToReadViewLedger);
+    }
+    let ledger_entry = res.unwrap();
+    self
+      .connections
+      .read_latest_state(ledger_entry.metablock.get_height(), false, client_nonce)
+      .await
   }
 }
 
@@ -552,13 +572,14 @@ mod tests {
     ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
   };
   use crate::CoordinatorState;
+  use ledger::Nonce;
   use rand::Rng;
   use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
   use std::process::{Child, Command, Stdio};
   use verifier::{
-    get_tail_hash, verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
-    VerifierState,
+    get_tail_hash, verify_append, verify_new_ledger, verify_query_endorsers, verify_read_by_index,
+    verify_read_latest, VerifierState,
   };
 
   fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -1001,6 +1022,18 @@ mod tests {
       is_latest_valid.is_ok()
     );
     assert!(is_latest_valid.is_ok());
+
+    // Step 9: query the state of endorsers
+    let nonce = Nonce::new(&rand::thread_rng().gen::<[u8; 16]>()).unwrap();
+    let (ledger_views, receipt) = coordinator.query_endorsers(&nonce).await.unwrap();
+
+    let is_query_endorsers_valid =
+      verify_query_endorsers(&nonce.get(), &ledger_views, &receipt.to_bytes());
+    println!(
+      "Verifying query_endorsers results: {:?}",
+      is_query_endorsers_valid.is_ok()
+    );
+    assert!(is_query_endorsers_valid.is_ok());
 
     // We access endorser and endorser2 below
     // to stop them from being dropped earlier

@@ -508,7 +508,7 @@ async fn append_view_ledger_transaction(
   }
 
   // 3. Compute state hash
-  let state_hash = if ledger_tail_map.is_empty() || view_ledger_tail.1 == 0 {
+  let state_hash = if ledger_tail_map.is_empty() {
     NimbleDigest::default()
   } else {
     let mut serialized_state = Vec::new();
@@ -539,7 +539,6 @@ async fn append_view_ledger_transaction(
     },
   };
 
-  let tail_hash = new_ledger_entry.metablock.hash();
   let metablock = new_ledger_entry.metablock.clone();
 
   // 5. Serialize new ledger entry
@@ -585,7 +584,6 @@ async fn append_view_ledger_transaction(
   commit_with_retry(session).await?;
   Ok(LedgerView {
     view_tail_metablock: metablock,
-    view_tail_hash: tail_hash,
     ledger_tail_map,
   })
 }

@@ -353,7 +353,7 @@ void hash_state(unsigned char *state_hash) {
   unsigned long long i;
   chain_t *chain;
 
-  if (num_chains == 0 && equal_32(view_ledger_tail_hash.v, zero_digest.v)) {
+  if (num_chains == 0) {
     memcpy(state_hash, zero_digest.v, HASH_VALUE_SIZE_IN_BYTES);
     return;
   }

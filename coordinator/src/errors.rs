@@ -26,4 +26,6 @@ pub enum CoordinatorError {
   FailedToAcquireReadLock,
   /// returned if the write lock cannot be acquired
   FailedToAcquireWriteLock,
+  /// returned if the call to read latest state fails
+  FailedToReadLatestState,
 }

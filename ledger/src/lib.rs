@@ -6,9 +6,9 @@ use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
-use itertools::concat;
+use itertools::{concat, Itertools};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 
 /// A cryptographic digest
@@ -54,6 +54,30 @@ impl NimbleDigest {
 }
 
 pub type Handle = NimbleDigest;
+
+pub type LedgerTailMap = HashMap<NimbleDigest, (NimbleDigest, usize)>;
+
+pub fn produce_hash_of_state(ledger_tail_map: &LedgerTailMap) -> NimbleDigest {
+  // for empty state, hash is a vector of zeros
+  if ledger_tail_map.is_empty() {
+    NimbleDigest::default()
+  } else {
+    let mut serialized_state = Vec::new();
+    for handle in ledger_tail_map.keys().sorted() {
+      let (tail, height) = ledger_tail_map.get(handle).unwrap();
+      serialized_state.extend_from_slice(&handle.to_bytes());
+      serialized_state.extend_from_slice(&tail.to_bytes());
+      serialized_state.extend_from_slice(&height.to_le_bytes());
+    }
+    NimbleDigest::digest(&serialized_state)
+  }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct LedgerView {
+  pub view_tail_metablock: MetaBlock,
+  pub ledger_tail_map: LedgerTailMap,
+}
 
 /// A cryptographic Nonce
 #[derive(Clone, Debug, Copy)]
@@ -361,6 +385,10 @@ impl MetaBlock {
 
   pub fn get_view(&self) -> &NimbleDigest {
     &self.view
+  }
+
+  pub fn get_block_hash(&self) -> &NimbleDigest {
+    &self.block_hash
   }
 }
 

@@ -24,4 +24,6 @@ pub enum VerificationError {
   ViewNotFound,
   /// returned if the supplied metablock of the view ledger does not point to the tail in the verifier's state
   ViewInMetaBlockNotLatest,
+  /// returned if a public key is not found in a receipt
+  InvalidePublicKey,
 }

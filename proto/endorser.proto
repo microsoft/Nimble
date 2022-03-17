@@ -11,6 +11,7 @@ service EndorserCall {
   rpc Append(AppendReq) returns (AppendResp);
   rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
   rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
+  rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
 }
 
 message GetPublicKeyReq {
@@ -85,4 +86,19 @@ message InitializeStateReq {
 
 message InitializeStateResp {
   bytes signature = 1;
+}
+
+message ReadLatestStateReq {
+  bytes nonce = 1;
+  uint64 view_ledger_height = 2;
+  bool to_lock = 3;
+}
+
+message ReadLatestStateResp {
+  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
+  bytes view_ledger_tail_prev = 2; // the view ledger tail's prev
+  bytes view_ledger_tail_view = 3; // the view ledger tail's view
+  uint64 view_ledger_tail_height = 4; // the view ledger tail's height
+  bool is_locked = 5; // the endorser is locked or not
+  bytes signature = 6; // signature of the nonced ledger tail map hash
 }

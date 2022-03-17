@@ -1,7 +1,6 @@
-use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
+use super::{Block, Handle, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use crate::errors::LedgerStoreError;
 use async_trait::async_trait;
-use std::collections::HashMap;
 
 pub mod in_memory;
 pub mod mongodb_cosmos;
@@ -11,13 +10,6 @@ pub struct LedgerEntry {
   pub block: Block,
   pub metablock: MetaBlock,
   pub receipt: Receipt,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct LedgerView {
-  pub view_tail_metablock: MetaBlock,
-  pub view_tail_hash: NimbleDigest,
-  pub ledger_tail_map: HashMap<NimbleDigest, (NimbleDigest, usize)>,
 }
 
 #[async_trait]
