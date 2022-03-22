@@ -1,12 +1,19 @@
 use crate::coordinator_proto::Receipt;
+use ledger::IdSigBytes;
 use std::time::Duration;
 
-pub fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(Vec<u8>, Vec<u8>)> {
+pub fn reformat_receipt(receipt: &Option<Receipt>) -> (Vec<u8>, IdSigBytes) {
   assert!(receipt.is_some());
-  let id_sigs = receipt.clone().unwrap().id_sigs;
-  (0..id_sigs.len())
-    .map(|i| (id_sigs[i].id.clone(), id_sigs[i].sig.clone()))
-    .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+  let receipt = receipt.clone().unwrap();
+  let id_sigs = (0..receipt.id_sigs.len())
+    .map(|i| {
+      (
+        receipt.id_sigs[i].id.clone(),
+        receipt.id_sigs[i].sig.clone(),
+      )
+    })
+    .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+  (receipt.view, id_sigs)
 }
 
 pub fn generate_random_bytes(buffer_size: usize) -> Vec<u8> {

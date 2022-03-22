@@ -5,7 +5,7 @@ use crate::errors::CoordinatorError;
 use crate::network::ConnectionStore;
 use ledger::{
   store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore},
-  LedgerView,
+  IdSigBytes, LedgerView,
 };
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
 use std::collections::HashMap;
@@ -111,31 +111,39 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    // Update existing endorsers
-    let receipt2 = {
-      let res = self
-        .connections
-        .append_view_ledger(
-          &existing_endorsers,
-          &view_ledger_genesis_block.hash(),
-          &ledger_view.view_tail_metablock.hash(),
-        )
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to initialize the endorser state ({:?})",
-          res.unwrap_err()
-        );
-        return Err(CoordinatorError::FailedToInitializeEndorser);
-      }
-      res.unwrap()
+    let receipt_bytes = if !existing_endorsers.is_empty() {
+      // Update existing endorsers
+      let receipt2 = {
+        let res = self
+          .connections
+          .append_view_ledger(
+            &existing_endorsers,
+            &view_ledger_genesis_block.hash(),
+            &ledger_view.view_tail_metablock.hash(),
+          )
+          .await;
+        if res.is_err() {
+          eprintln!(
+            "Failed to initialize the endorser state ({:?})",
+            res.unwrap_err()
+          );
+          return Err(CoordinatorError::FailedToInitializeEndorser);
+        }
+        res.unwrap()
+      };
+
+      // Merge receipts
+      let (view1, id_sigs1) = receipt1.to_bytes();
+      let (view2, mut id_sigs2) = receipt2.to_bytes();
+      assert_eq!(view1, view2);
+      let mut id_sigs = id_sigs1;
+      id_sigs.append(&mut id_sigs2);
+      (view1, id_sigs)
+    } else {
+      receipt1.to_bytes()
     };
 
-    // Merge receipts
-    let mut receipt1_bytes = receipt1.to_bytes();
-    let mut receipt2_bytes = receipt2.to_bytes();
-    receipt1_bytes.append(&mut receipt2_bytes);
-    let receipt = ledger::Receipt::from_bytes(&receipt1_bytes);
+    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
 
     // Store the receipt in the view ledger
     let res = self
@@ -178,15 +186,17 @@ impl CoordinatorState {
   }
 }
 
-fn reformat_receipt(receipt: &[(Vec<u8>, Vec<u8>)]) -> Receipt {
+fn reformat_receipt(receipt: &(Vec<u8>, IdSigBytes)) -> Receipt {
+  let view = receipt.0.clone();
   let id_sigs = receipt
+    .1
     .iter()
     .map(|(id, sig)| IdSig {
       id: id.clone(),
       sig: sig.clone(),
     })
     .collect();
-  Receipt { id_sigs }
+  Receipt { view, id_sigs }
 }
 
 #[tonic::async_trait]
@@ -255,7 +265,6 @@ impl Call for CoordinatorState {
     }
 
     let reply = NewLedgerResp {
-      view: ledger_meta_block.get_view().to_bytes(),
       block: genesis_block.to_bytes(),
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
     };
@@ -343,7 +352,6 @@ impl Call for CoordinatorState {
     }
 
     let reply = AppendResp {
-      view: ledger_meta_block.get_view().to_bytes(),
       prev: ledger_meta_block.get_prev().to_bytes(),
       height: ledger_meta_block.get_height() as u64,
       receipt: Some(reformat_receipt(&receipt.to_bytes())),
@@ -407,7 +415,6 @@ impl Call for CoordinatorState {
     // Pack the response structure (m, \sigma) from metadata structure
     //    to m = (T, b, c)
     let reply = ReadLatestResp {
-      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
       prev: ledger_entry.metablock.get_prev().to_bytes(),
       height: ledger_entry.metablock.get_height() as u64,
@@ -448,7 +455,6 @@ impl Call for CoordinatorState {
       res.unwrap()
     };
     let reply = ReadByIndexResp {
-      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
       prev: ledger_entry.metablock.get_prev().to_bytes(),
       receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
@@ -479,7 +485,6 @@ impl Call for CoordinatorState {
       res.unwrap()
     };
     let reply = ReadViewByIndexResp {
-      view: ledger_entry.metablock.get_view().to_bytes(),
       block: ledger_entry.block.to_bytes(),
       prev: ledger_entry.metablock.get_prev().to_bytes(),
       receipt: Some(reformat_receipt(&ledger_entry.receipt.to_bytes())),
@@ -572,7 +577,7 @@ mod tests {
     ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
   };
   use crate::CoordinatorState;
-  use ledger::Nonce;
+  use ledger::{IdSigBytes, Nonce};
   use rand::Rng;
   use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
@@ -582,12 +587,21 @@ mod tests {
     verify_read_latest, VerifierState,
   };
 
-  fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(Vec<u8>, Vec<u8>)> {
+  fn reformat_receipt(receipt: &Option<Receipt>) -> (Vec<u8>, IdSigBytes) {
     assert!(receipt.is_some());
-    let id_sigs = receipt.clone().unwrap().id_sigs;
-    (0..id_sigs.len())
-      .map(|i| (id_sigs[i].id.clone(), id_sigs[i].sig.clone()))
-      .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+    let receipt = receipt.clone().unwrap();
+    let id_sigs = (0..receipt.id_sigs.len())
+      .map(|i| {
+        (
+          receipt.id_sigs[i].id.clone(),
+          receipt.id_sigs[i].sig.clone(),
+        )
+      })
+      .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+
+    let view_bytes = receipt.view;
+
+    (view_bytes, id_sigs)
   }
 
   struct BoxChild {
@@ -603,13 +617,6 @@ mod tests {
   struct BoxCoordinator {
     pub coordinator: CoordinatorState,
   }
-
-  /*
-  impl Drop for BoxCoordinator {
-    fn drop(&mut self) {
-      self.coordinator.reset_ledger_store();
-    }
-  }*/
 
   #[tokio::test]
   #[ignore]
@@ -686,7 +693,6 @@ mod tests {
     let coordinator = &mut box_coordinator.coordinator;
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
-    println!("Add an endorser");
 
     // Initialization: Fetch view ledger to build VerifierState
     let mut vs = VerifierState::new();
@@ -696,7 +702,6 @@ mod tests {
     });
 
     let ReadViewByIndexResp {
-      view,
       block,
       prev,
       receipt,
@@ -706,7 +711,7 @@ mod tests {
       .unwrap()
       .into_inner();
 
-    let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
+    let res = vs.apply_view_change(&block, &prev, 1usize, &reformat_receipt(&receipt));
     println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -719,18 +724,9 @@ mod tests {
       nonce: client_nonce.to_vec(),
       app_bytes: app_bytes.to_vec(),
     });
-    let NewLedgerResp {
-      view,
-      block,
-      receipt,
-    } = coordinator.new_ledger(request).await.unwrap().into_inner();
-    let res = verify_new_ledger(
-      &vs,
-      &view,
-      &block,
-      &reformat_receipt(&receipt),
-      &client_nonce,
-    );
+    let NewLedgerResp { block, receipt } =
+      coordinator.new_ledger(request).await.unwrap().into_inner();
+    let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
     println!("NewLedger (WithAppData) : {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -743,19 +739,10 @@ mod tests {
       nonce: client_nonce.to_vec(),
       app_bytes: vec![],
     });
-    let NewLedgerResp {
-      view,
-      block,
-      receipt,
-    } = coordinator.new_ledger(request).await.unwrap().into_inner();
+    let NewLedgerResp { block, receipt } =
+      coordinator.new_ledger(request).await.unwrap().into_inner();
 
-    let res = verify_new_ledger(
-      &vs,
-      &view,
-      &block,
-      &reformat_receipt(&receipt),
-      &client_nonce,
-    );
+    let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
     println!("NewLedger (NoAppData) : {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -769,20 +756,12 @@ mod tests {
     });
 
     let ReadByIndexResp {
-      view,
       block,
       prev,
       receipt,
     } = coordinator.read_by_index(req).await.unwrap().into_inner();
 
-    let res = verify_read_by_index(
-      &vs,
-      &view,
-      &block,
-      &prev,
-      0usize,
-      &reformat_receipt(&receipt),
-    );
+    let res = verify_read_by_index(&vs, &block, &prev, 0usize, &reformat_receipt(&receipt));
     println!("ReadByIndex: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -794,7 +773,6 @@ mod tests {
     });
 
     let ReadLatestResp {
-      view,
       block,
       prev,
       height,
@@ -803,7 +781,6 @@ mod tests {
 
     let res = verify_read_latest(
       &vs,
-      &view,
       &block,
       &prev,
       height as usize,
@@ -830,7 +807,6 @@ mod tests {
       });
 
       let AppendResp {
-        view,
         prev,
         height,
         receipt,
@@ -842,7 +818,6 @@ mod tests {
 
       let res = verify_append(
         &vs,
-        &view,
         block_to_append.as_ref(),
         &prev,
         height as usize,
@@ -861,7 +836,6 @@ mod tests {
     });
 
     let ReadLatestResp {
-      view,
       block,
       prev,
       height,
@@ -875,7 +849,6 @@ mod tests {
 
     let is_latest_valid = verify_read_latest(
       &vs,
-      &view,
       &block,
       &prev,
       height as usize,
@@ -889,7 +862,7 @@ mod tests {
     assert!(is_latest_valid.is_ok());
     let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
     // Check the tail hash generation from the read_latest response
-    let conditional_tail_hash_expected = get_tail_hash(&view, &block, &prev, height as usize);
+    let conditional_tail_hash_expected = get_tail_hash(&block, &prev, height as usize);
     assert!(conditional_tail_hash_expected.is_ok());
     assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
     assert_ne!(latest_block_verified, Vec::<u8>::new()); // This should not be empty since the block is returned
@@ -901,21 +874,13 @@ mod tests {
     });
 
     let ReadByIndexResp {
-      view,
       block,
       prev,
       receipt,
     } = coordinator.read_by_index(req).await.unwrap().into_inner();
     assert_eq!(block, b2.clone());
 
-    let res = verify_read_by_index(
-      &vs,
-      &view,
-      &block,
-      &prev,
-      2usize,
-      &reformat_receipt(&receipt),
-    );
+    let res = verify_read_by_index(&vs, &block, &prev, 2usize, &reformat_receipt(&receipt));
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -948,7 +913,6 @@ mod tests {
     });
 
     let ReadViewByIndexResp {
-      view,
       block,
       prev,
       receipt,
@@ -958,7 +922,7 @@ mod tests {
       .unwrap()
       .into_inner();
 
-    let res = vs.apply_view_change(&view, &block, &prev, 2usize, &reformat_receipt(&receipt));
+    let res = vs.apply_view_change(&block, &prev, 2usize, &reformat_receipt(&receipt));
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
@@ -971,7 +935,6 @@ mod tests {
     });
 
     let AppendResp {
-      view,
       prev,
       height,
       receipt,
@@ -979,7 +942,6 @@ mod tests {
 
     let res = verify_append(
       &vs,
-      &view,
       message,
       &prev,
       height as usize,
@@ -996,7 +958,6 @@ mod tests {
     });
 
     let ReadLatestResp {
-      view,
       block,
       prev,
       height,
@@ -1010,7 +971,6 @@ mod tests {
 
     let is_latest_valid = verify_read_latest(
       &vs,
-      &view,
       &block,
       &prev,
       height as usize,

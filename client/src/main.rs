@@ -37,12 +37,19 @@ impl CoordinatorConnection {
   }
 }
 
-fn reformat_receipt(receipt: &Option<Receipt>) -> Vec<(Vec<u8>, Vec<u8>)> {
+pub type IdSigBytes = Vec<(Vec<u8>, Vec<u8>)>;
+fn reformat_receipt(receipt: &Option<Receipt>) -> (Vec<u8>, IdSigBytes) {
   assert!(receipt.is_some());
-  let id_sigs = receipt.clone().unwrap().id_sigs;
-  (0..id_sigs.len())
-    .map(|i| (id_sigs[i].id.clone(), id_sigs[i].sig.clone()))
-    .collect::<Vec<(Vec<u8>, Vec<u8>)>>()
+  let receipt = receipt.clone().unwrap();
+  let id_sigs = (0..receipt.id_sigs.len())
+    .map(|i| {
+      (
+        receipt.id_sigs[i].id.clone(),
+        receipt.id_sigs[i].sig.clone(),
+      )
+    })
+    .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
+  (receipt.view, id_sigs)
 }
 
 #[tokio::main]
@@ -73,7 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadViewByIndexResp {
-    view,
     block,
     prev,
     receipt,
@@ -83,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
+  let res = vs.apply_view_change(&block, &prev, 1usize, &reformat_receipt(&receipt));
   println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -96,23 +102,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_nonce.to_vec(),
     app_bytes: app_bytes.to_vec(),
   });
-  let NewLedgerResp {
-    view,
-    block,
-    receipt,
-  } = coordinator_connection
+  let NewLedgerResp { block, receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(
-    &vs,
-    &view,
-    &block,
-    &reformat_receipt(&receipt),
-    &client_nonce,
-  );
+  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -125,23 +121,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_nonce.to_vec(),
     app_bytes: vec![],
   });
-  let NewLedgerResp {
-    view,
-    block,
-    receipt,
-  } = coordinator_connection
+  let NewLedgerResp { block, receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(
-    &vs,
-    &view,
-    &block,
-    &reformat_receipt(&receipt),
-    &client_nonce,
-  );
+  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
   println!("NewLedger (NoAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -155,7 +141,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadByIndexResp {
-    view,
     block,
     prev,
     receipt,
@@ -165,14 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(
-    &vs,
-    &view,
-    &block,
-    &prev,
-    0usize,
-    &reformat_receipt(&receipt),
-  );
+  let res = verify_read_by_index(&vs, &block, &prev, 0usize, &reformat_receipt(&receipt));
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -184,7 +162,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
-    view,
     block,
     prev,
     height,
@@ -197,7 +174,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let res = verify_read_latest(
     &vs,
-    &view,
     &block,
     &prev,
     height as usize,
@@ -224,7 +200,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let AppendResp {
-      view,
       prev,
       height,
       receipt,
@@ -240,7 +215,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let res = verify_append(
       &vs,
-      &view,
       block_to_append.as_ref(),
       &prev,
       height as usize,
@@ -259,7 +233,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
-    view,
     block,
     prev,
     height,
@@ -273,7 +246,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let is_latest_valid = verify_read_latest(
     &vs,
-    &view,
     &block,
     &prev,
     height as usize,
@@ -287,7 +259,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert!(is_latest_valid.is_ok());
   let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
   // Check the tail hash generation from the read_latest response
-  let conditional_tail_hash_expected = get_tail_hash(&view, &block, &prev, height as usize);
+  let conditional_tail_hash_expected = get_tail_hash(&block, &prev, height as usize);
   assert!(conditional_tail_hash_expected.is_ok());
   assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
   assert_ne!(latest_block_verified, Vec::<u8>::new()); // This should not be empty since the block is returned
@@ -299,7 +271,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadByIndexResp {
-    view,
     block,
     prev,
     receipt,
@@ -310,14 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b2.clone());
 
-  let res = verify_read_by_index(
-    &vs,
-    &view,
-    &block,
-    &prev,
-    2usize,
-    &reformat_receipt(&receipt),
-  );
+  let res = verify_read_by_index(&vs, &block, &prev, 2usize, &reformat_receipt(&receipt));
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -330,7 +294,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let AppendResp {
-    view,
     prev,
     height,
     receipt,
@@ -342,7 +305,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let res = verify_append(
     &vs,
-    &view,
     message,
     &prev,
     height as usize,
@@ -359,7 +321,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadLatestResp {
-    view,
     block,
     prev,
     height,
@@ -373,7 +334,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let is_latest_valid = verify_read_latest(
     &vs,
-    &view,
     &block,
     &prev,
     height as usize,

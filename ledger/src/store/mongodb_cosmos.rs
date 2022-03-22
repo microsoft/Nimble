@@ -3,7 +3,6 @@ use crate::store::{LedgerEntry, LedgerStore, LedgerView};
 use crate::{Block, CustomSerde, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use async_trait::async_trait;
 use bincode;
-use itertools::Itertools;
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
 use mongodb::error::{TRANSIENT_TRANSACTION_ERROR, UNKNOWN_TRANSACTION_COMMIT_RESULT};
@@ -71,11 +70,13 @@ impl BsonBinaryData for Handle {
   }
 }
 
+pub type IdSigBytes = Vec<(Vec<u8>, Vec<u8>)>;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
   pub metablock: Vec<u8>,
-  pub receipt: Vec<(Vec<u8>, Vec<u8>)>,
+  pub receipt: (Vec<u8>, IdSigBytes),
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -124,14 +125,9 @@ impl MongoCosmosLedgerStore {
     // Initialized view ledger's entry
     let entry = SerializedLedgerEntry {
       block: Block::new(&[0; 0]).to_bytes(),
-      metablock: MetaBlock::new(
-        &NimbleDigest::default(),
-        &NimbleDigest::default(),
-        &NimbleDigest::default(),
-        0,
-      )
-      .to_bytes(),
+      metablock: MetaBlock::new(&NimbleDigest::default(), &NimbleDigest::default(), 0).to_bytes(),
       receipt: Receipt {
+        view: NimbleDigest::default(),
         id_sigs: Vec::new(),
       }
       .to_bytes(),
@@ -218,25 +214,13 @@ async fn append_ledger_transaction(
   handle: &Handle,
   block: &Block,
   cond: &NimbleDigest,
-  view_handle: &Handle,
   session: &mut ClientSession,
   ledgers: &Collection<DBEntry>,
 ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError> {
-  // 1. Get the view_ledger's latest entry
-
-  // 1b. Find the latest entry in the view ledger
-  let view_entry: DBEntry = find_db_entry(session, ledgers, view_handle.to_bson_binary()).await?;
-
-  // 2. Recover the contents of the view ledger entry
-  let bson_view_entry: &Binary = &view_entry.value; // only entry due to projection and above None check
-  let view_entry: SerializedLedgerEntry =
-    bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialize view entry");
-  let view_metablock = MetaBlock::from_bytes(view_entry.metablock).expect("deserialize error");
-
-  // 3. Check to see if the ledgers contain the handle and get last entry
+  // 1. Check to see if the ledgers contain the handle and get last entry
   let last_data_entry: DBEntry = find_db_entry(session, ledgers, handle.to_bson_binary()).await?;
 
-  // 4. Recover the contents of the ledger entry and check condition
+  // 2. Recover the contents of the ledger entry and check condition
   let bson_last_data_entry: &Binary = &last_data_entry.value;
   let last_data_entry: SerializedLedgerEntry = bincode::deserialize(&bson_last_data_entry.bytes)
     .expect("failed to deserialize last data entry");
@@ -249,9 +233,8 @@ async fn append_ledger_transaction(
     ));
   }
 
-  // 5. Construct the new entry we are going to append to data ledger
+  // 3. Construct the new entry we are going to append to data ledger
   let metablock = MetaBlock::new(
-    &view_metablock.hash(),
     &last_data_metablock.hash(),
     &block.hash(),
     last_data_metablock.get_height() + 1,
@@ -261,6 +244,7 @@ async fn append_ledger_transaction(
     block: block.to_bytes(),
     metablock: metablock.to_bytes(),
     receipt: Receipt {
+      view: NimbleDigest::default(),
       id_sigs: Vec::new(),
     }
     .to_bytes(),
@@ -272,7 +256,7 @@ async fn append_ledger_transaction(
 
   let tail_hash = metablock.hash();
 
-  // 6. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
+  // 4. Pushes the value new_ledger_entry to the end of the ledger (array) named with handle.
   ledgers
     .update_one_with_session(
       doc! {
@@ -286,7 +270,7 @@ async fn append_ledger_transaction(
     )
     .await?;
 
-  // 6b. If we want to keep intermediate state, then insert it under appropriate index
+  // 4b. If we want to keep intermediate state, then insert it under appropriate index
   if cfg!(feature = "full_ledger") {
     // This is the same as above, but this is basically the copy that will be stored
     // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
@@ -304,7 +288,7 @@ async fn append_ledger_transaction(
       .await?;
   }
 
-  // 7. Commit transactions
+  // 5. Commit transactions
   commit_with_retry(session).await?;
   Ok((metablock, tail_hash))
 }
@@ -364,38 +348,21 @@ async fn attach_ledger_receipt_transaction(
 
 async fn create_ledger_transaction(
   block: &Block,
-  view_handle: &Handle,
   session: &mut ClientSession,
   ledgers: &Collection<DBEntry>,
 ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError> {
-  // 1. Get the view_ledger's latest entry (which is located at handle self.view_handle)
-
-  // 1b. Find the latest entry in the view ledger
-  let view_entry: DBEntry = find_db_entry(session, ledgers, view_handle.to_bson_binary()).await?;
-
-  // 2. Recover the contents of the view ledgevaluery
-  let bson_view_entry: &Binary = &view_entry.value;
-  let view_entry: SerializedLedgerEntry =
-    bincode::deserialize(&bson_view_entry.bytes).expect("failed to deserialized view entry");
-
-  let view_metablock = MetaBlock::from_bytes(view_entry.metablock).expect("deserialize error");
-
-  // 3. Use view ledger's entry and input block to get information we need for origin of new ledger
+  // 1. Use view ledger's entry and input block to get information we need for origin of new ledger
   let handle = block.hash();
   let block_hash = block.hash();
-  let metablock = MetaBlock::new(
-    &view_metablock.hash(),
-    &NimbleDigest::default(),
-    &block_hash,
-    0,
-  );
+  let metablock = MetaBlock::new(&NimbleDigest::default(), &block_hash, 0);
 
-  // 4. Create the ledger entry that we will add to the brand new ledger
+  // 2. Create the ledger entry that we will add to the brand new ledger
   let data_ledger_entry = SerializedLedgerEntry {
     block: block.to_bytes(),
     metablock: metablock.to_bytes(),
     receipt: Receipt {
       id_sigs: Vec::new(),
+      view: NimbleDigest::default(),
     }
     .to_bytes(),
   };
@@ -404,14 +371,14 @@ async fn create_ledger_transaction(
     .expect("failed to serialize data ledger entry")
     .to_bson_binary();
 
-  // 5. Add new ledger tail to database under its handle
+  // 3. Add new ledger tail to database under its handle
   let tail_entry = DBEntry {
     key: handle.to_bson_binary(),
     value: bson_data_ledger_entry.clone(),
     tail: true,
   };
 
-  // 6. If we are keeping the full state of the ledger (including intermediaries)
+  // 4. If we are keeping the full state of the ledger (including intermediaries)
   if cfg!(feature = "full_ledger") {
     let mut handle_with_index = handle.to_bytes();
     handle_with_index.extend(0usize.to_le_bytes()); // to_le is little endian
@@ -431,7 +398,7 @@ async fn create_ledger_transaction(
       .await?;
   };
 
-  // 6. Commit transactions
+  // 5. Commit transactions
   commit_with_retry(session).await?;
   let tail_hash = metablock.hash();
   Ok((handle, metablock, tail_hash))
@@ -507,25 +474,10 @@ async fn append_view_ledger_transaction(
     }
   }
 
-  // 3. Compute state hash
-  let state_hash = if ledger_tail_map.is_empty() {
-    NimbleDigest::default()
-  } else {
-    let mut serialized_state = Vec::new();
-    for handle in ledger_tail_map.keys().sorted() {
-      let (tail, height) = ledger_tail_map.get(handle).unwrap();
-      serialized_state.extend_from_slice(&handle.to_bytes());
-      serialized_state.extend_from_slice(&tail.to_bytes());
-      serialized_state.extend_from_slice(&height.to_le_bytes());
-    }
-    NimbleDigest::digest(&serialized_state)
-  };
-
-  // 4. Compute new ledger entry
+  // 3. Compute new ledger entry
   let new_ledger_entry = LedgerEntry {
     block: block.clone(),
     metablock: MetaBlock::new(
-      &state_hash,
       &if view_ledger_tail.1 == 0 {
         NimbleDigest::default()
       } else {
@@ -536,12 +488,13 @@ async fn append_view_ledger_transaction(
     ),
     receipt: Receipt {
       id_sigs: Vec::new(),
+      view: NimbleDigest::default(),
     },
   };
 
   let metablock = new_ledger_entry.metablock.clone();
 
-  // 5. Serialize new ledger entry
+  // 4. Serialize new ledger entry
   let serialized_new_ledger_entry = SerializedLedgerEntry {
     block: new_ledger_entry.block.to_bytes(),
     metablock: new_ledger_entry.metablock.to_bytes(),
@@ -552,7 +505,7 @@ async fn append_view_ledger_transaction(
     .expect("failed to serialized new ledger entry")
     .to_bson_binary();
 
-  // 4. Updates the value new_ledger_entry to the tail named with handle.
+  // 5. Updates the value new_ledger_entry to the tail named with handle.
   ledgers
     .update_one_with_session(
       doc! {
@@ -566,7 +519,7 @@ async fn append_view_ledger_transaction(
     )
     .await?;
 
-  // 5. Also stores new_ledger_entry as an entry at its corresponding index
+  // 6. Also stores new_ledger_entry as an entry at its corresponding index
   let mut view_handle_with_index = view_handle.to_bytes();
   view_handle_with_index.extend(new_ledger_entry.metablock.get_height().to_le_bytes()); // "to_le" converts to little endian
 
@@ -580,7 +533,7 @@ async fn append_view_ledger_transaction(
     .insert_one_with_session(&index_entry, None, session)
     .await?;
 
-  // 6. Commit transactions
+  // 7. Commit transactions
   commit_with_retry(session).await?;
   Ok(LedgerView {
     view_tail_metablock: metablock,
@@ -657,9 +610,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
       session.start_transaction(options).await?;
 
-      with_retry!(
-        create_ledger_transaction(block, &self.view_handle, &mut session, &ledgers).await
-      );
+      with_retry!(create_ledger_transaction(block, &mut session, &ledgers).await);
     }
   }
 
@@ -690,17 +641,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
       session.start_transaction(options).await?;
 
-      with_retry!(
-        append_ledger_transaction(
-          handle,
-          block,
-          cond,
-          &self.view_handle,
-          &mut session,
-          &ledgers
-        )
-        .await
-      );
+      with_retry!(append_ledger_transaction(handle, block, cond, &mut session, &ledgers).await);
     }
   }
 

@@ -16,7 +16,8 @@ message IdSig {
 }
 
 message Receipt {
-  repeated IdSig id_sigs = 1;
+  bytes view = 1;
+  repeated IdSig id_sigs = 2;
 }
 
 message NewLedgerReq {
@@ -25,9 +26,8 @@ message NewLedgerReq {
 }
 
 message NewLedgerResp {
-  bytes view = 1;
-  bytes block = 2;
-  Receipt receipt = 3;
+  bytes block = 1;
+  Receipt receipt = 2;
 }
 
 message AppendReq {
@@ -37,10 +37,9 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes view = 1;
-  bytes prev = 2;
-  uint64 height = 3;
-  Receipt receipt = 4;
+  bytes prev = 1;
+  uint64 height = 2;
+  Receipt receipt = 3;
 }
 
 message ReadLatestReq {
@@ -49,11 +48,10 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes view = 1;
-  bytes block = 2;
-  bytes prev = 3;
-  uint64 height = 4;
-  Receipt receipt = 5;
+  bytes block = 1;
+  bytes prev = 2;
+  uint64 height = 3;
+  Receipt receipt = 4;
 }
 
 message ReadByIndexReq {
@@ -62,10 +60,9 @@ message ReadByIndexReq {
 }
 
 message ReadByIndexResp {
-  bytes view = 1;
-  bytes block = 2;
-  bytes prev = 3;
-  Receipt receipt = 4;
+  bytes block = 1;
+  bytes prev = 2;
+  Receipt receipt = 3;
 }
 
 message ReadViewByIndexReq {
@@ -73,8 +70,7 @@ message ReadViewByIndexReq {
 }
 
 message ReadViewByIndexResp {
-  bytes view = 1;
-  bytes block = 2;
-  bytes prev = 3;
-  Receipt receipt = 4;
+  bytes block = 1;
+  bytes prev = 2;
+  Receipt receipt = 3;
 }

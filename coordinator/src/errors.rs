@@ -28,4 +28,6 @@ pub enum CoordinatorError {
   FailedToAcquireWriteLock,
   /// returned if the call to read latest state fails
   FailedToReadLatestState,
+  /// returned if the cooordinator cannot assemble a receipt with a unique view
+  EndorsersInDifferentViews,
 }

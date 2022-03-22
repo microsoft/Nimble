@@ -200,7 +200,6 @@ async fn benchmark_newledger(
     // NOTE: Every NewLedger response is individually verified and MUST pass.
     let res = verify_new_ledger(
       vs,
-      &newledger_res.view,
       &newledger_res.block,
       &reformat_receipt(&newledger_res.receipt),
       client_nonce,
@@ -318,7 +317,6 @@ async fn benchmark_append(
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
     let _res = verify_append(
       vs,
-      &append_res.view,
       &block.to_vec(),
       &append_res.prev,
       append_res.height as usize,
@@ -440,7 +438,6 @@ async fn benchmark_read_latest(
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
     let _res = verify_read_latest(
       vs,
-      &res.view,
       &res.block,
       &res.prev,
       res.height as usize,
@@ -495,7 +492,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   let ReadViewByIndexResp {
-    view,
     block,
     prev,
     receipt,
@@ -505,7 +501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&view, &block, &prev, 1usize, &reformat_receipt(&receipt));
+  let res = vs.apply_view_change(&block, &prev, 1usize, &reformat_receipt(&receipt));
   Timer::print(&format!(
     "Applying ReadViewByIndexResp Response: {:?}",
     res.is_ok()
@@ -519,23 +515,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: client_nonce.to_vec(),
     app_bytes: app_bytes.to_vec(),
   });
-  let NewLedgerResp {
-    view,
-    block,
-    receipt,
-  } = coordinator_connection
+  let NewLedgerResp { block, receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(
-    &vs,
-    &view,
-    &block,
-    &reformat_receipt(&receipt),
-    &client_nonce,
-  );
+  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
   Timer::print(&format!("NewLedger (WithAppData) : {:?}", res.is_ok()));
   assert!(res.is_ok());
 

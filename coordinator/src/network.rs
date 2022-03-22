@@ -123,13 +123,13 @@ impl ConnectionStore {
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let InitializeStateResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let InitializeStateResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("initialize_state failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToInitializeEndorser);
@@ -139,8 +139,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToInitializeEndorser);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   pub async fn create_ledger(&self, ledger_handle: &Handle) -> Result<Receipt, CoordinatorError> {
@@ -165,13 +168,13 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let NewLedgerResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let NewLedgerResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("create_ledger failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToCreateLedger);
@@ -181,8 +184,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToCreateLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   async fn retry_append_ledger(
@@ -259,13 +265,13 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let AppendResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let AppendResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           let status = res2.unwrap_err();
           if status.code() != Code::FailedPrecondition {
@@ -278,8 +284,8 @@ impl ConnectionStore {
               .retry_append_ledger(&pk, ledger_handle, block_hash, tail_hash, tail_height)
               .await;
             if let Ok(resp) = res3 {
-              let AppendResp { signature } = resp.into_inner();
-              receipt_bytes.push((pk, signature));
+              let AppendResp { view, signature } = resp.into_inner();
+              receipt_bytes.push((pk, view, signature));
               break;
             } else {
               if status.code() == Code::FailedPrecondition {
@@ -295,8 +301,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToAppendLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   pub async fn read_ledger_tail(
@@ -327,13 +336,13 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let ReadLatestResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let ReadLatestResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("read_ledger_tail failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToReadLedger);
@@ -343,8 +352,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToReadLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   pub async fn append_view_ledger(
@@ -380,13 +392,13 @@ impl ConnectionStore {
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let AppendViewLedgerResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let AppendViewLedgerResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("append_view_ledger failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToAppendViewLedger);
@@ -396,8 +408,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToAppendViewLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   #[allow(dead_code)]
@@ -426,13 +441,13 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let ReadLatestViewLedgerResp { signature } = resp.into_inner();
-          receipt_bytes.push((pk, signature));
+          let ReadLatestViewLedgerResp { view, signature } = resp.into_inner();
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToReadViewLedger);
@@ -442,8 +457,11 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToReadViewLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok(receipt)
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok(receipt),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 
   #[allow(dead_code)]
@@ -477,12 +495,13 @@ impl ConnectionStore {
     }
 
     let mut ledger_views = Vec::new();
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
           let ReadLatestStateResp {
+            view,
             ledger_tail_map,
             view_ledger_tail_prev,
             view_ledger_tail_view,
@@ -504,7 +523,6 @@ impl ConnectionStore {
             .collect();
           let ledger_view = LedgerView {
             view_tail_metablock: MetaBlock::new(
-              &NimbleDigest::default(),
               &NimbleDigest::from_bytes(&view_ledger_tail_prev).unwrap(), // TODO: better error handling
               &NimbleDigest::from_bytes(&view_ledger_tail_view).unwrap(),
               view_ledger_tail_height as usize,
@@ -512,7 +530,7 @@ impl ConnectionStore {
             ledger_tail_map: ledger_tail_map_rs,
           };
           ledger_views.push((pk.clone(), ledger_view, is_locked));
-          receipt_bytes.push((pk, signature));
+          receipt_bytes.push((pk, view, signature));
         } else {
           eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToReadViewLedger);
@@ -522,7 +540,10 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToReadViewLedger);
       }
     }
-    let receipt = ledger::Receipt::from_bytes(&receipt_bytes);
-    Ok((ledger_views, receipt))
+    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    match res {
+      Ok(receipt) => Ok((ledger_views, receipt)),
+      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+    }
   }
 }

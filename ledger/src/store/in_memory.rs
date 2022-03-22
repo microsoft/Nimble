@@ -21,14 +21,10 @@ impl InMemoryLedgerStore {
 
     let view_ledger_entry = LedgerEntry {
       block: Block::new(&[0; 0]),
-      metablock: MetaBlock::new(
-        &NimbleDigest::default(),
-        &NimbleDigest::default(),
-        &NimbleDigest::default(),
-        0,
-      ),
+      metablock: MetaBlock::new(&NimbleDigest::default(), &NimbleDigest::default(), 0),
       receipt: Receipt {
         id_sigs: Vec::new(),
+        view: NimbleDigest::default(),
       },
     };
     view_ledger.push(view_ledger_entry);
@@ -46,40 +42,28 @@ impl LedgerStore for InMemoryLedgerStore {
     &self,
     block: &Block,
   ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError> {
-    if let Ok(view_ledger_array) = self.view_ledger.read() {
-      let handle = block.hash();
-      let block_hash = block.hash();
-      let metablock = MetaBlock::new(
-        &view_ledger_array[view_ledger_array.len() - 1]
-          .metablock
-          .hash(),
-        &NimbleDigest::default(),
-        &block_hash,
-        0,
-      );
-      let ledger_entry = LedgerEntry {
-        block: block.clone(),
-        metablock: metablock.clone(),
-        receipt: Receipt {
-          id_sigs: Vec::new(),
-        },
-      };
-      if let Ok(mut ledgers_map) = self.ledgers.write() {
-        if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
-          let tail_hash = ledger_entry.metablock.hash();
-          e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
-          Ok((handle, metablock, tail_hash))
-        } else {
-          Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
-        }
+    let handle = block.hash();
+    let block_hash = block.hash();
+    let metablock = MetaBlock::new(&NimbleDigest::default(), &block_hash, 0);
+    let ledger_entry = LedgerEntry {
+      block: block.clone(),
+      metablock: metablock.clone(),
+      receipt: Receipt {
+        id_sigs: Vec::new(),
+        view: NimbleDigest::default(),
+      },
+    };
+    if let Ok(mut ledgers_map) = self.ledgers.write() {
+      if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
+        let tail_hash = ledger_entry.metablock.hash();
+        e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
+        Ok((handle, metablock, tail_hash))
       } else {
-        Err(LedgerStoreError::LedgerError(
-          StorageError::LedgerMapWriteLockFailed,
-        ))
+        Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
       }
     } else {
       Err(LedgerStoreError::LedgerError(
-        StorageError::ViewLedgerReadLockFailed,
+        StorageError::LedgerMapWriteLockFailed,
       ))
     }
   }
@@ -90,52 +74,44 @@ impl LedgerStore for InMemoryLedgerStore {
     block: &Block,
     cond: &NimbleDigest,
   ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError> {
-    if let Ok(view_ledger_array) = self.view_ledger.read() {
-      if let Ok(ledgers_map) = self.ledgers.read() {
-        if ledgers_map.contains_key(handle) {
-          if let Ok(mut ledgers) = ledgers_map[handle].write() {
-            let last_entry = &ledgers[ledgers.len() - 1].metablock;
-            if *cond == NimbleDigest::default() || *cond == last_entry.hash() {
-              let block_hash = block.hash();
-              let ledger_entry = LedgerEntry {
-                block: block.clone(),
-                metablock: MetaBlock::new(
-                  &view_ledger_array[view_ledger_array.len() - 1]
-                    .metablock
-                    .hash(),
-                  &last_entry.hash(),
-                  &block_hash,
-                  last_entry.get_height() + 1,
-                ),
-                receipt: Receipt {
-                  id_sigs: Vec::new(),
-                },
-              };
-              let tail_hash = ledger_entry.metablock.hash();
-              let metablock = ledger_entry.metablock.clone();
-              ledgers.push(ledger_entry);
-              Ok((metablock, tail_hash))
-            } else {
-              Err(LedgerStoreError::LedgerError(
-                StorageError::IncorrectConditionalData,
-              ))
-            }
+    if let Ok(ledgers_map) = self.ledgers.read() {
+      if ledgers_map.contains_key(handle) {
+        if let Ok(mut ledgers) = ledgers_map[handle].write() {
+          let last_entry = &ledgers[ledgers.len() - 1].metablock;
+          if *cond == NimbleDigest::default() || *cond == last_entry.hash() {
+            let block_hash = block.hash();
+            let ledger_entry = LedgerEntry {
+              block: block.clone(),
+              metablock: MetaBlock::new(
+                &last_entry.hash(),
+                &block_hash,
+                last_entry.get_height() + 1,
+              ),
+              receipt: Receipt {
+                view: NimbleDigest::default(),
+                id_sigs: Vec::new(),
+              },
+            };
+            let tail_hash = ledger_entry.metablock.hash();
+            let metablock = ledger_entry.metablock.clone();
+            ledgers.push(ledger_entry);
+            Ok((metablock, tail_hash))
           } else {
             Err(LedgerStoreError::LedgerError(
-              StorageError::LedgerWriteLockFailed,
+              StorageError::IncorrectConditionalData,
             ))
           }
         } else {
-          Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerWriteLockFailed,
+          ))
         }
       } else {
-        Err(LedgerStoreError::LedgerError(
-          StorageError::LedgerMapReadLockFailed,
-        ))
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
       }
     } else {
       Err(LedgerStoreError::LedgerError(
-        StorageError::ViewLedgerReadLockFailed,
+        StorageError::LedgerMapReadLockFailed,
       ))
     }
   }
@@ -226,29 +202,17 @@ impl LedgerStore for InMemoryLedgerStore {
           &view_ledger_array[view_ledger_array.len() - 1].metablock;
         let block_hash = block.hash();
 
-        let state_hash = {
-          if ledger_map.is_empty() {
-            NimbleDigest::default()
-          } else {
-            let mut serialized_state = Vec::new();
-            for handle in ledger_map.keys().sorted() {
-              let ledger_array = ledger_map[handle].read().expect("failed to read a ledger");
-              let last_ledger_entry_metablock = &ledger_array[ledger_array.len() - 1].metablock;
-              let tail = last_ledger_entry_metablock.hash();
-              let height = last_ledger_entry_metablock.get_height();
-              serialized_state.extend_from_slice(&handle.to_bytes());
-              serialized_state.extend_from_slice(&tail.to_bytes());
-              serialized_state.extend_from_slice(&height.to_le_bytes());
-              ledger_tail_map.insert(*handle, (tail, height));
-            }
-            NimbleDigest::digest(&serialized_state)
-          }
-        };
+        for handle in ledger_map.keys().sorted() {
+          let ledger_array = ledger_map[handle].read().expect("failed to read a ledger");
+          let last_ledger_entry_metablock = &ledger_array[ledger_array.len() - 1].metablock;
+          let tail = last_ledger_entry_metablock.hash();
+          let height = last_ledger_entry_metablock.get_height();
+          ledger_tail_map.insert(*handle, (tail, height));
+        }
 
         let ledger_entry = LedgerEntry {
           block: block.clone(),
           metablock: MetaBlock::new(
-            &state_hash,
             &if view_ledger_array.len() == 1 {
               NimbleDigest::default()
             } else {
@@ -258,6 +222,7 @@ impl LedgerStore for InMemoryLedgerStore {
             last_view_ledger_entry_metablock.get_height() + 1,
           ),
           receipt: Receipt {
+            view: NimbleDigest::default(),
             id_sigs: Vec::new(),
           },
         };

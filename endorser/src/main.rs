@@ -101,11 +101,12 @@ impl EndorserCall for EndorserServiceState {
       .write()
       .expect("Unable to get a write lock on EndorserState");
 
-    let signature = endorser
+    let (view, signature) = endorser
       .new_ledger(&handle)
       .expect("Unable to get the signature on genesis handle");
 
     let reply = NewLedgerResp {
+      view: view.to_bytes().to_vec(),
       signature: signature.to_bytes().to_vec(),
     };
     Ok(Response::new(reply))
@@ -139,8 +140,9 @@ impl EndorserCall for EndorserServiceState {
     );
 
     match res {
-      Ok(signature) => {
+      Ok((view, signature)) => {
         let reply = AppendResp {
+          view: view.to_bytes().to_vec(),
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -175,8 +177,9 @@ impl EndorserCall for EndorserServiceState {
     let res = latest_state.read_latest(&handle, &nonce);
 
     match res {
-      Ok(signature) => {
+      Ok((view, signature)) => {
         let reply = ReadLatestResp {
+          view: view.to_bytes().to_vec(),
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -208,8 +211,9 @@ impl EndorserCall for EndorserServiceState {
     );
 
     match res {
-      Ok(signature) => {
+      Ok((view, signature)) => {
         let reply = AppendViewLedgerResp {
+          view: view.to_bytes().to_vec(),
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -228,8 +232,9 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser.read_latest_view_ledger(&nonce);
 
     match res {
-      Ok(signature) => {
+      Ok((view, signature)) => {
         let reply = ReadLatestViewLedgerResp {
+          view: view.to_bytes().to_vec(),
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -279,8 +284,9 @@ impl EndorserCall for EndorserServiceState {
       );
 
     match res {
-      Ok(signature) => {
+      Ok((view, signature)) => {
         let reply = InitializeStateResp {
+          view: view.to_bytes().to_vec(),
           signature: signature.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
@@ -306,7 +312,7 @@ impl EndorserCall for EndorserServiceState {
       .read_latest_state(&nonce);
 
     match res {
-      Ok((ledger_view, signature)) => {
+      Ok((view, ledger_view, signature)) => {
         if to_lock && view_ledger_height == ledger_view.view_tail_metablock.get_height() as u64 {
           self
             .flags
@@ -324,6 +330,7 @@ impl EndorserCall for EndorserServiceState {
           })
           .collect();
         let reply = ReadLatestStateResp {
+          view: view.to_bytes().to_vec(),
           ledger_tail_map,
           view_ledger_tail_prev: ledger_view
             .view_tail_metablock

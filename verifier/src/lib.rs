@@ -4,7 +4,8 @@ use crate::errors::VerificationError;
 use ledger::{
   produce_hash_of_state,
   signature::{CryptoError, PublicKey, PublicKeyTrait},
-  Block, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt, ViewChangeReceipt,
+  Block, IdSigBytes, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  ViewChangeReceipt,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -37,11 +38,10 @@ impl VerifierState {
 
   pub fn apply_view_change(
     &mut self,
-    view_bytes: &[u8],
     block_bytes: &[u8],
     prev_bytes: &[u8],
     height: usize,
-    receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+    receipt_bytes: &(Vec<u8>, IdSigBytes),
   ) -> Result<(), VerificationError> {
     // parse the block to obtain the full list of the public keys for the proposed latest view
     let pk_vec_for_proposed_latest_view = {
@@ -78,13 +78,6 @@ impl VerifierState {
     }?;
 
     let metablock = {
-      let view = {
-        let res = NimbleDigest::from_bytes(view_bytes);
-        if res.is_err() {
-          return Err(VerificationError::InvalidView);
-        }
-        res.unwrap()
-      };
       let prev = {
         let res = NimbleDigest::from_bytes(prev_bytes);
         if res.is_err() {
@@ -94,20 +87,23 @@ impl VerifierState {
       };
       let block_hash = Block::new(block_bytes).hash();
 
-      MetaBlock::new(&view, &prev, &block_hash, height)
+      MetaBlock::new(&prev, &block_hash, height)
     };
 
     // check if this is the first view change
     if self.latest_view == NimbleDigest::default() {
       // check that the metablock is well formed
-      if metablock.get_prev() != &NimbleDigest::default()
-        || metablock.get_view() != &NimbleDigest::default()
-        || metablock.get_height() != 1
-      {
+      if metablock.get_prev() != &NimbleDigest::default() || metablock.get_height() != 1 {
         return Err(VerificationError::InvalidView);
       }
 
       let receipt = Receipt::from_bytes(receipt_bytes);
+
+      // check if the provided view ledger entry has the correct view
+      if receipt.get_view() != &NimbleDigest::default() {
+        return Err(VerificationError::InvalidView);
+      }
+
       let res = receipt.verify(
         &metablock.hash().to_bytes(),
         &pk_vec_for_proposed_latest_view,
@@ -155,12 +151,11 @@ impl VerifierState {
 /// 3. A nonce
 pub fn verify_new_ledger(
   vs: &VerifierState,
-  view_bytes: &[u8],
   block_bytes: &[u8],
-  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+  receipt_bytes: &(Vec<u8>, IdSigBytes),
   nonce: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
-  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+  if receipt_bytes.1.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
   }
 
@@ -178,16 +173,12 @@ pub fn verify_new_ledger(
 
   let app_bytes = &block_bytes[(2 * NONCE_IN_BYTES)..];
 
-  // produce a view hash using the current configuration
-  let view = {
-    let res = NimbleDigest::from_bytes(view_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidView);
-    }
-    res.unwrap()
-  };
+  // construct a receipt object from the provided bytes
+  let receipt = Receipt::from_bytes(receipt_bytes);
 
-  let pk_vec = vs.get_pk_for_view(&view)?;
+  let view = receipt.get_view();
+
+  let pk_vec = vs.get_pk_for_view(view)?;
 
   // compute a handle as hash of the block
   let handle = {
@@ -196,11 +187,8 @@ pub fn verify_new_ledger(
   };
 
   // verify the signature on the genesis metablock with `handle` as the genesis block's hash
-  let genesis_metablock = MetaBlock::genesis(&view, &handle);
+  let genesis_metablock = MetaBlock::genesis(&handle);
   let hash = genesis_metablock.hash().to_bytes();
-
-  // construct a receipt object from the provided bytes
-  let receipt = Receipt::from_bytes(receipt_bytes);
 
   let res = receipt.verify(&hash, pk_vec);
 
@@ -212,18 +200,10 @@ pub fn verify_new_ledger(
 }
 
 pub fn get_tail_hash(
-  view_bytes: &[u8],
   block_bytes: &[u8],
   prev_bytes: &[u8],
   height: usize,
 ) -> Result<Vec<u8>, VerificationError> {
-  let view = {
-    let res = NimbleDigest::from_bytes(view_bytes);
-    if res.is_err() {
-      return Err(VerificationError::IncorrectLength);
-    }
-    res.unwrap()
-  };
   let block = Block::new(block_bytes);
   let prev = {
     let res = NimbleDigest::from_bytes(prev_bytes);
@@ -232,20 +212,19 @@ pub fn get_tail_hash(
     }
     res.unwrap()
   };
-  let metablock = MetaBlock::new(&view, &prev, &block.hash(), height);
+  let metablock = MetaBlock::new(&prev, &block.hash(), height);
   Ok(metablock.hash().to_bytes())
 }
 
 pub fn verify_read_latest(
   vs: &VerifierState,
-  view_bytes: &[u8],
   block_bytes: &[u8],
   prev_bytes: &[u8],
   height: usize,
   nonce_bytes: &[u8],
-  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+  receipt_bytes: &(Vec<u8>, IdSigBytes),
 ) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
-  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+  if receipt_bytes.1.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
   }
 
@@ -260,23 +239,15 @@ pub fn verify_read_latest(
     res.unwrap()
   };
 
-  let view = {
-    let res = NimbleDigest::from_bytes(view_bytes);
-    if res.is_err() {
-      return Err(VerificationError::IncorrectLength);
-    }
-    res.unwrap()
-  };
+  // parse the receipt to construct a Receipt object
+  let receipt = Receipt::from_bytes(receipt_bytes);
 
-  let pk_vec = vs.get_pk_for_view(&view)?;
+  let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
 
-  let metablock = MetaBlock::new(&view, &prev, &block.hash(), height);
+  let metablock = MetaBlock::new(&prev, &block.hash(), height);
   let tail_hash_prime = metablock.hash();
   let hash_nonced_tail_hash_prime =
     NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
-
-  // parse the receipt to construct a Receipt object
-  let receipt = Receipt::from_bytes(receipt_bytes);
 
   // verify the receipt against the nonced tail hash
   let res = receipt.verify(&hash_nonced_tail_hash_prime, pk_vec);
@@ -295,13 +266,12 @@ pub fn verify_read_latest(
 
 pub fn verify_read_by_index(
   vs: &VerifierState,
-  view_bytes: &[u8],
   block_bytes: &[u8],
   prev_bytes: &[u8],
   idx: usize,
-  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+  receipt_bytes: &(Vec<u8>, IdSigBytes),
 ) -> Result<(), VerificationError> {
-  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+  if receipt_bytes.1.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
   }
 
@@ -313,21 +283,14 @@ pub fn verify_read_by_index(
     }
     res.unwrap()
   };
-  let view = {
-    let res = NimbleDigest::from_bytes(view_bytes);
-    if res.is_err() {
-      return Err(VerificationError::IncorrectLength);
-    }
-    res.unwrap()
-  };
-
-  let pk_vec = vs.get_pk_for_view(&view)?;
-
-  let metablock = MetaBlock::new(&view, &prev, &block_hash, idx);
-  let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object
   let receipt = Receipt::from_bytes(receipt_bytes);
+
+  let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
+
+  let metablock = MetaBlock::new(&prev, &block_hash, idx);
+  let tail_hash_prime = metablock.hash();
 
   // verify the receipt against the nonced tail hash
   let res = receipt.verify(&tail_hash_prime.to_bytes(), pk_vec);
@@ -341,13 +304,12 @@ pub fn verify_read_by_index(
 
 pub fn verify_append(
   vs: &VerifierState,
-  view_bytes: &[u8],
   block_bytes: &[u8],
   prev: &[u8],
   height: usize,
-  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+  receipt_bytes: &(Vec<u8>, IdSigBytes),
 ) -> Result<Vec<u8>, VerificationError> {
-  if receipt_bytes.len() < MIN_NUM_ENDORSERS {
+  if receipt_bytes.1.len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
   }
 
@@ -359,21 +321,14 @@ pub fn verify_append(
     }
     res.unwrap()
   };
-  let view = {
-    let res = NimbleDigest::from_bytes(view_bytes);
-    if res.is_err() {
-      return Err(VerificationError::IncorrectLength);
-    }
-    res.unwrap()
-  };
-
-  let pk_vec = vs.get_pk_for_view(&view)?;
-
-  let metablock = MetaBlock::new(&view, &prev, &block_hash, height);
-  let tail_hash_prime = metablock.hash();
 
   // parse the receipt to construct a Receipt object
   let receipt = Receipt::from_bytes(receipt_bytes);
+
+  let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
+
+  let metablock = MetaBlock::new(&prev, &block_hash, height);
+  let tail_hash_prime = metablock.hash();
 
   // verify the receipt against the nonced tail hash
   let res = receipt.verify(&tail_hash_prime.to_bytes(), pk_vec);
@@ -388,13 +343,14 @@ pub fn verify_append(
 pub fn verify_query_endorsers(
   nonce_bytes: &[u8],
   ledger_views: &[(Vec<u8>, LedgerView, bool)],
-  receipt_bytes: &[(Vec<u8>, Vec<u8>)],
+  receipt_bytes: &(Vec<u8>, IdSigBytes),
 ) -> Result<(), VerificationError> {
   let mut receipt_map = HashMap::<Vec<u8>, Receipt>::new();
-  for (pk, signature) in receipt_bytes {
+  let view = &receipt_bytes.0;
+  for (pk, signature) in &receipt_bytes.1 {
     receipt_map.insert(
       pk.clone(),
-      Receipt::from_bytes(&[(pk.clone(), signature.clone())]),
+      Receipt::from_bytes(&(view.clone(), vec![(pk.clone(), signature.clone())])),
     );
   }
   for (pk, ledger_view, _is_locked) in ledger_views {

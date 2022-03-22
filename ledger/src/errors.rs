@@ -77,10 +77,14 @@ pub enum VerificationError {
   IndexOutofBounds,
   /// returned if the identities are not unique
   DuplicateIds,
+  /// returned if the supplied views are not unique
+  InvalidView,
   /// returned when the nonce is of an incorrect length
   InvalidNonceSize,
   /// returned when the purported public key is not in the view ledger
   InvalidPublicKey,
   /// returned when the provided receipt does not contain signatures from a valid quorum
   InsufficientQuorum,
+  /// returned when the supplied list of views does not have a unique view
+  NonUniqueViews,
 }

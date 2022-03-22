@@ -26,7 +26,8 @@ message NewLedgerReq {
 }
 
 message NewLedgerResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2;
 }
 
 message ReadLatestReq {
@@ -35,7 +36,8 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2;
 }
 
 message AppendReq {
@@ -46,7 +48,8 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2;
 }
 
 message ReadLatestViewLedgerReq {
@@ -54,7 +57,8 @@ message ReadLatestViewLedgerReq {
 }
 
 message ReadLatestViewLedgerResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2;
 }
 
 message AppendViewLedgerReq {
@@ -63,7 +67,8 @@ message AppendViewLedgerReq {
 }
 
 message AppendViewLedgerResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2; 
 }
 
 message LedgerTailMapEntry {
@@ -85,7 +90,8 @@ message InitializeStateReq {
 }
 
 message InitializeStateResp {
-  bytes signature = 1;
+  bytes view = 1;
+  bytes signature = 2;
 }
 
 message ReadLatestStateReq {
@@ -95,10 +101,11 @@ message ReadLatestStateReq {
 }
 
 message ReadLatestStateResp {
-  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
-  bytes view_ledger_tail_prev = 2; // the view ledger tail's prev
-  bytes view_ledger_tail_view = 3; // the view ledger tail's view
-  uint64 view_ledger_tail_height = 4; // the view ledger tail's height
-  bool is_locked = 5; // the endorser is locked or not
-  bytes signature = 6; // signature of the nonced ledger tail map hash
+  bytes view = 1;
+  repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
+  bytes view_ledger_tail_prev = 3; // the view ledger tail's prev
+  bytes view_ledger_tail_view = 4; // the view ledger tail's view
+  uint64 view_ledger_tail_height = 5; // the view ledger tail's height
+  bool is_locked = 6; // the endorser is locked or not
+  bytes signature = 7; // signature of the nonced ledger tail map hash
 }
