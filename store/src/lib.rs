@@ -1,8 +1,10 @@
-use super::{Block, Handle, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
-use crate::errors::{LedgerStoreError, StorageError};
 use itertools::Itertools;
+use ledger::{Block, Handle, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
+
+mod errors;
+use crate::errors::{LedgerStoreError, StorageError};
 
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
@@ -27,10 +29,7 @@ impl LedgerStore {
     let view_ledger_entry = LedgerEntry {
       block: Block::new(&[0; 0]),
       metablock: MetaBlock::new(&NimbleDigest::default(), &NimbleDigest::default(), 0),
-      receipt: Receipt {
-        id_sigs: Vec::new(),
-        view: NimbleDigest::default(),
-      },
+      receipt: Receipt::default(),
     };
     view_ledger.push(view_ledger_entry);
 
@@ -52,10 +51,7 @@ impl LedgerStore {
     let ledger_entry = LedgerEntry {
       block: block.clone(),
       metablock: metablock.clone(),
-      receipt: Receipt {
-        id_sigs: Vec::new(),
-        view: NimbleDigest::default(),
-      },
+      receipt: Receipt::default(),
     };
     if let Ok(mut ledgers_map) = self.ledgers.write() {
       if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
@@ -91,10 +87,7 @@ impl LedgerStore {
                 &block_hash,
                 last_entry.get_height() + 1,
               ),
-              receipt: Receipt {
-                view: NimbleDigest::default(),
-                id_sigs: Vec::new(),
-              },
+              receipt: Receipt::default(),
             };
             let tail_hash = ledger_entry.metablock.hash();
             let metablock = ledger_entry.metablock.clone();
@@ -225,10 +218,7 @@ impl LedgerStore {
             &block_hash,
             last_view_ledger_entry_metablock.get_height() + 1,
           ),
-          receipt: Receipt {
-            view: NimbleDigest::default(),
-            id_sigs: Vec::new(),
-          },
+          receipt: Receipt::default(),
         };
         let metablock = ledger_entry.metablock.clone();
         view_ledger_array.push(ledger_entry);
@@ -304,9 +294,10 @@ impl LedgerStore {
 
 #[cfg(test)]
 mod tests {
-  use crate::store::LedgerStore;
   use crate::Block;
+  use crate::LedgerStore;
   use crate::NimbleDigest;
+  use ledger::CustomSerde;
 
   #[tokio::test]
   pub async fn check_store_creation_and_operations() {
@@ -327,7 +318,7 @@ mod tests {
     assert!(res.is_ok());
 
     let current_data = res.unwrap();
-    assert_eq!(current_data.block.block, initial_value);
+    assert_eq!(current_data.block.to_bytes(), initial_value);
 
     let new_value_appended: Vec<u8> = vec![
       2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
@@ -345,13 +336,13 @@ mod tests {
     assert!(res.is_ok());
 
     let current_tail = res.unwrap();
-    assert_eq!(current_tail.block.block, new_value_appended);
+    assert_eq!(current_tail.block.to_bytes(), new_value_appended);
 
     let res = state.read_ledger_by_index(&handle, 0).await;
     assert!(res.is_ok());
 
     let data_at_index = res.unwrap();
-    assert_eq!(data_at_index.block.block, initial_value);
+    assert_eq!(data_at_index.block.to_bytes(), initial_value);
 
     let res = state.reset_store().await;
     assert!(res.is_ok());

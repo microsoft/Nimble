@@ -3,8 +3,8 @@ mod network;
 
 use crate::errors::CoordinatorError;
 use crate::network::ConnectionStore;
-use ledger::{store::LedgerStore, IdSigBytes, LedgerView};
-use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
+use ledger::{Block, CustomSerde, IdSigBytes, LedgerView, NimbleDigest, NimbleHashTrait, Nonce};
+use store::LedgerStore;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
