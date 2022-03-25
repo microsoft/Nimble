@@ -1,5 +1,6 @@
 mod errors;
 pub mod signature;
+pub mod store;
 use crate::errors::VerificationError;
 use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;

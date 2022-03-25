@@ -4,7 +4,6 @@ members = [
     "coordinator",
     "endorser",
     "ledger",
-    "store",
     "verifier",
     "bench",
 ]

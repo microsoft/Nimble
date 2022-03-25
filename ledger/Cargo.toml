@@ -17,7 +17,12 @@ bincode = "1.3.3"
 serde = { version = "1.0", features = ["derive"] }
 bson = "*"
 mongodb = "2.1.0"
+async-trait = "*"
 tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 hex = "0.4.3"
+
+[features]
+default = ["full_ledger"]
+full_ledger = []
