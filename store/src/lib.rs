@@ -16,32 +16,34 @@ pub struct LedgerEntry {
 
 /// A trait that defines the interface for a backing storage service.
 #[async_trait]
-pub trait PersistentLedgerStore {
-  async fn new(params: HashMap<String, String>) -> Result<Self, StorageError>
+pub trait PersistentLedgerStoreTrait {
+  async fn new(params: HashMap<String, String>) -> Result<Self, LedgerStoreError>
   where
     Self: Sized;
   async fn create_ledger(
     &self,
     handle: &Handle,
     ledger_entry: &LedgerEntry,
-  ) -> Result<(), StorageError>;
+  ) -> Result<(), LedgerStoreError>;
   async fn append_ledger(
     &self,
     handle: &Handle,
+    index: usize,
     ledger_entry: &LedgerEntry,
-  ) -> Result<(), StorageError>;
-  async fn read_by_index(&self, handle: &Handle, index: usize)
-    -> Result<LedgerEntry, StorageError>;
-  async fn read_latest(&self, handle: &Handle) -> Result<LedgerEntry, StorageError>;
+  ) -> Result<(), LedgerStoreError>;
+  async fn read_by_index(
+    &self,
+    handle: &Handle,
+    index: usize,
+  ) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn read_latest(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError>;
   async fn attach_receipt(
     &self,
     handle: &Handle,
     index: usize,
     receipt: &Receipt,
-  ) -> Result<(), StorageError>;
+  ) -> Result<(), LedgerStoreError>;
 }
-
-mod in_memory;
 
 type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
 #[derive(Debug, Default)]
