@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use itertools::Itertools;
 use ledger::{Block, Handle, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
 use std::collections::{hash_map, HashMap};
@@ -14,38 +13,8 @@ pub struct LedgerEntry {
   pub receipt: Receipt,
 }
 
-/// A trait that defines the interface for a backing storage service.
-#[async_trait]
-pub trait PersistentLedgerStoreTrait {
-  async fn new(params: HashMap<String, String>) -> Result<Self, LedgerStoreError>
-  where
-    Self: Sized;
-  async fn create_ledger(
-    &self,
-    handle: &Handle,
-    ledger_entry: &LedgerEntry,
-  ) -> Result<(), LedgerStoreError>;
-  async fn append_ledger(
-    &self,
-    handle: &Handle,
-    index: usize,
-    ledger_entry: &LedgerEntry,
-  ) -> Result<(), LedgerStoreError>;
-  async fn read_by_index(
-    &self,
-    handle: &Handle,
-    index: usize,
-  ) -> Result<LedgerEntry, LedgerStoreError>;
-  async fn read_latest(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError>;
-  async fn attach_receipt(
-    &self,
-    handle: &Handle,
-    index: usize,
-    receipt: &Receipt,
-  ) -> Result<(), LedgerStoreError>;
-}
-
 type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
+
 #[derive(Debug, Default)]
 pub struct LedgerStore {
   ledgers: Arc<RwLock<HashMap<Handle, LedgerArray>>>,
