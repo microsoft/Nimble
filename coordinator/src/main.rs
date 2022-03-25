@@ -3,8 +3,12 @@ mod network;
 
 use crate::errors::CoordinatorError;
 use crate::network::ConnectionStore;
-use ledger::{store::LedgerStore, IdSigBytes, LedgerView};
+use ledger::{
+  store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore},
+  IdSigBytes, LedgerView,
+};
 use ledger::{Block, CustomSerde, NimbleDigest, NimbleHashTrait, Nonce};
+use std::collections::HashMap;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -21,7 +25,7 @@ use coordinator_proto::{
 };
 
 pub struct CoordinatorState {
-  ledger_store: LedgerStore,
+  ledger_store: Box<dyn LedgerStore + Send + Sync>,
   connections: ConnectionStore, // a map from a public key to a connection object
 }
 
@@ -29,10 +33,16 @@ pub struct CoordinatorState {
 pub struct CallServiceStub {}
 
 impl CoordinatorState {
-  pub async fn new() -> Self {
-    CoordinatorState {
-      connections: ConnectionStore::new(),
-      ledger_store: LedgerStore::new(),
+  pub async fn new(ledger_store_type: &str, args: &HashMap<String, String>) -> Self {
+    match ledger_store_type {
+      "mongodb_cosmos" => CoordinatorState {
+        connections: ConnectionStore::new(),
+        ledger_store: Box::new(MongoCosmosLedgerStore::new(args).await.unwrap()),
+      },
+      _ => CoordinatorState {
+        connections: ConnectionStore::new(),
+        ledger_store: Box::new(InMemoryLedgerStore::new()),
+      },
     }
   }
 
@@ -534,11 +544,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
   let port_number = cli_matches.value_of("port").unwrap();
+  let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
   println!("Endorser_hostnames: {:?}", endorser_hostnames);
 
-  let mut server = CoordinatorState::new().await;
+  let mut ledger_store_args = HashMap::<String, String>::new();
+  if let Some(x) = cli_matches.value_of("cosmosurl") {
+    ledger_store_args.insert(String::from("COSMOS_URL"), x.to_string());
+  }
+  if let Some(x) = cli_matches.value_of("nimbledb") {
+    ledger_store_args.insert(String::from("NIMBLE_DB"), x.to_string());
+  }
+  let mut server = CoordinatorState::new(store, &ledger_store_args).await;
   let res = server.add_endorsers(endorser_hostnames).await;
   assert!(res.is_ok());
   println!("Running gRPC Coordinator Service at {:?}", addr);
@@ -561,6 +579,7 @@ mod tests {
   use crate::CoordinatorState;
   use ledger::{IdSigBytes, Nonce};
   use rand::Rng;
+  use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
   use std::process::{Child, Command, Stdio};
   use verifier::{
@@ -595,6 +614,10 @@ mod tests {
     }
   }
 
+  struct BoxCoordinator {
+    pub coordinator: CoordinatorState,
+  }
+
   #[tokio::test]
   #[ignore]
   async fn test_coordinator() {
@@ -614,6 +637,33 @@ mod tests {
         Some(x) => x.into_string().unwrap(),
       }
     };
+
+    let store = {
+      match std::env::var_os("LEDGER_STORE") {
+        None => String::from("memory"),
+        Some(x) => x.into_string().unwrap(),
+      }
+    };
+
+    let mut ledger_store_args = HashMap::<String, String>::new();
+    if std::env::var_os("COSMOS_URL").is_some() {
+      ledger_store_args.insert(
+        String::from("COSMOS_URL"),
+        std::env::var_os("COSMOS_URL")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+    if std::env::var_os("NIMBLE_DB").is_some() {
+      ledger_store_args.insert(
+        String::from("NIMBLE_DB"),
+        std::env::var_os("NIMBLE_DB")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
 
     // Launch the endorser
     let mut endorser = BoxChild {
@@ -637,7 +687,10 @@ mod tests {
     }
 
     // Create the coordinator
-    let coordinator = &mut CoordinatorState::new().await;
+    let mut box_coordinator = BoxCoordinator {
+      coordinator: CoordinatorState::new(&store, &ledger_store_args).await,
+    };
+    let coordinator = &mut box_coordinator.coordinator;
     let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
     assert!(res.is_ok());
 
