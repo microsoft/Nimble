@@ -26,8 +26,7 @@ message NewLedgerReq {
 }
 
 message NewLedgerResp {
-  bytes view = 1;
-  bytes signature = 2;
+  bytes receipt = 1;
 }
 
 message ReadLatestReq {
@@ -36,20 +35,17 @@ message ReadLatestReq {
 }
 
 message ReadLatestResp {
-  bytes view = 1;
-  bytes signature = 2;
+  bytes receipt = 1;
 }
 
 message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
-  bytes cond_updated_tail_hash = 3;
-  uint64 cond_updated_tail_height = 4;
+  uint64 expected_height = 3;
 }
 
 message AppendResp {
-  bytes view = 1;
-  bytes signature = 2;
+  bytes receipt = 1;
 }
 
 message ReadLatestViewLedgerReq {
@@ -57,24 +53,21 @@ message ReadLatestViewLedgerReq {
 }
 
 message ReadLatestViewLedgerResp {
-  bytes view = 1;
-  bytes signature = 2;
+  bytes receipt = 1;
 }
 
 message AppendViewLedgerReq {
   bytes block_hash = 1;
-  bytes cond_updated_tail_hash = 2;
+  uint64 expected_height = 2;
 }
 
 message AppendViewLedgerResp {
-  bytes view = 1;
-  bytes signature = 2; 
+  bytes receipt = 1; 
 }
 
 message LedgerTailMapEntry {
   bytes handle = 1;
-  bytes tail = 2;
-  uint64 height = 3;
+  bytes metablock = 2;
 }
 
 // protobuf supports maps (https://developers.google.com/protocol-buffers/docs/proto#maps), 
@@ -83,29 +76,20 @@ message LedgerTailMapEntry {
 // In the future, we can either increase the limit on gRPC messages or switch to gRPC streaming 
 message InitializeStateReq {
   repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
-  bytes view_ledger_tail = 2; // the view ledger tail
-  uint64 view_ledger_height = 3; // the view ledger height
-  bytes block_hash = 4; // the block hash of the latest block on the view ledger
-  bytes cond_updated_tail_hash = 5; // the conditional updated tail hash of the latest block on the view ledger
+  bytes view_tail_metablock = 2; // the view ledger tail's metablock
+  bytes block_hash = 3; // the block hash of the latest block on the view ledger
+  uint64 expected_height = 4; // the conditional updated height of the latest block on the view ledger
 }
 
 message InitializeStateResp {
-  bytes view = 1;
-  bytes signature = 2;
+  bytes receipt = 1;
 }
 
 message ReadLatestStateReq {
-  bytes nonce = 1;
-  uint64 view_ledger_height = 2;
-  bool to_lock = 3;
+  bool to_lock = 1;
 }
 
 message ReadLatestStateResp {
-  bytes view = 1;
-  repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
-  bytes view_ledger_tail_prev = 3; // the view ledger tail's prev
-  bytes view_ledger_tail_view = 4; // the view ledger tail's view
-  uint64 view_ledger_tail_height = 5; // the view ledger tail's height
-  bool is_locked = 6; // the endorser is locked or not
-  bytes signature = 7; // signature of the nonced ledger tail map hash
+  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
+  bytes view_tail_metablock = 2; // the view ledger tail's metablock
 }

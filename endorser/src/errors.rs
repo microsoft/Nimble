@@ -10,8 +10,6 @@ pub enum EndorserError {
   NotInitialized,
   /// returned if the state of the endorser is already initialized
   AlreadyInitialized,
-  /// returned if the requested condition_tail_hash does not match the current condition_tail_hash
-  InvalidConditionalTail,
   /// returned if the requested tail height is less than the expected height
   InvalidTailHeight,
   /// returned if the requested tail height is more than the expected height

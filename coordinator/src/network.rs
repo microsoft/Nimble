@@ -1,7 +1,7 @@
 use crate::errors::CoordinatorError;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  Handle, LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, Nonce, Receipt,
+  CustomSerde, Handle, LedgerView, MetaBlock, NimbleDigest, Nonce, Receipt,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -76,17 +76,16 @@ impl ConnectionStore {
   pub async fn initialize_state(
     &mut self,
     endorsers: &[Vec<u8>],
-    ledger_tail_map: &LedgerTailMap,
-    view_ledger_tail_height: &(NimbleDigest, usize),
+    ledger_view: &LedgerView,
     block_hash: &NimbleDigest,
-    cond_updated_tail_hash: &NimbleDigest,
+    expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
-    let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
+    let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_view
+      .ledger_tail_map
       .iter()
-      .map(|(handle, (tail, height))| LedgerTailMapEntry {
+      .map(|(handle, metablock)| LedgerTailMapEntry {
         handle: handle.to_bytes(),
-        tail: tail.to_bytes(),
-        height: *height as u64,
+        metablock: metablock.to_bytes(),
       })
       .collect();
 
@@ -99,19 +98,16 @@ impl ConnectionStore {
         }
         let mut endorser_client = conn_map[pk].clone();
         let ledger_tail_map = ledger_tail_map_proto.clone();
-        let view_ledger_tail = view_ledger_tail_height.0.to_bytes();
-        let view_ledger_height = view_ledger_tail_height.1 as u64;
+        let view_tail_metablock = ledger_view.view_tail_metablock.to_bytes().to_vec();
         let block_hash = block_hash.to_bytes();
-        let cond_updated_tail_hash = cond_updated_tail_hash.to_bytes();
         let pk_bytes = pk.clone();
         let job = tokio::spawn(async move {
           let response = endorser_client
             .initialize_state(tonic::Request::new(InitializeStateReq {
               ledger_tail_map,
-              view_ledger_tail,
-              view_ledger_height,
+              view_tail_metablock,
               block_hash,
-              cond_updated_tail_hash,
+              expected_height: expected_height as u64,
             }))
             .await;
           (pk_bytes, response)
@@ -123,13 +119,18 @@ impl ConnectionStore {
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, res2)) = res {
+      if let Ok((_pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let InitializeStateResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let InitializeStateResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           eprintln!("initialize_state failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToInitializeEndorser);
@@ -139,7 +140,7 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToInitializeEndorser);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
@@ -168,13 +169,18 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, res2)) = res {
+      if let Ok((_pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let NewLedgerResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let NewLedgerResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           eprintln!("create_ledger failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToCreateLedger);
@@ -184,7 +190,7 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToCreateLedger);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
@@ -196,8 +202,7 @@ impl ConnectionStore {
     pk: &[u8],
     ledger_handle: &Handle,
     block_hash: &NimbleDigest,
-    tail_hash: &NimbleDigest,
-    tail_height: usize,
+    expected_height: usize,
   ) -> Result<tonic::Response<AppendResp>, tonic::Status> {
     let job = {
       if let Ok(conn_map) = self.store.read() {
@@ -207,14 +212,12 @@ impl ConnectionStore {
           let mut endorser_client = conn_map[pk].clone();
           let handle = *ledger_handle;
           let block = *block_hash;
-          let tail = *tail_hash;
           tokio::spawn(async move {
             let response = endorser_client
               .append(tonic::Request::new(AppendReq {
                 handle: handle.to_bytes(),
                 block_hash: block.to_bytes(),
-                cond_updated_tail_hash: tail.to_bytes(),
-                cond_updated_tail_height: tail_height as u64,
+                expected_height: expected_height as u64,
               }))
               .await;
             response
@@ -236,8 +239,7 @@ impl ConnectionStore {
     &self,
     ledger_handle: &Handle,
     block_hash: &NimbleDigest,
-    tail_hash: &NimbleDigest,
-    tail_height: usize,
+    expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
     for (pk, ec) in self
@@ -249,15 +251,13 @@ impl ConnectionStore {
       let mut endorser_client = ec.clone();
       let handle = *ledger_handle;
       let block = *block_hash;
-      let tail = *tail_hash;
       let pk_bytes = pk.clone();
       let job = tokio::spawn(async move {
         let response = endorser_client
           .append(tonic::Request::new(AppendReq {
             handle: handle.to_bytes(),
             block_hash: block.to_bytes(),
-            cond_updated_tail_hash: tail.to_bytes(),
-            cond_updated_tail_height: tail_height as u64,
+            expected_height: expected_height as u64,
           }))
           .await;
         (pk_bytes, response)
@@ -265,13 +265,18 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let AppendResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let AppendResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           let status = res2.unwrap_err();
           if status.code() != Code::FailedPrecondition {
@@ -281,11 +286,16 @@ impl ConnectionStore {
           loop {
             // This means an out-of-order append; let's retry.
             let res3 = self
-              .retry_append_ledger(&pk, ledger_handle, block_hash, tail_hash, tail_height)
+              .retry_append_ledger(&pk, ledger_handle, block_hash, expected_height)
               .await;
             if let Ok(resp) = res3 {
-              let AppendResp { view, signature } = resp.into_inner();
-              receipt_bytes.push((pk, view, signature));
+              let AppendResp { receipt } = resp.into_inner();
+              if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+                receipts.push(receipt_rs);
+              } else {
+                eprintln!("initialize_state failed: invalid receipt");
+                return Err(CoordinatorError::InvalidReceipt);
+              }
               break;
             } else {
               if status.code() == Code::FailedPrecondition {
@@ -301,7 +311,7 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToAppendLedger);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
@@ -336,13 +346,18 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, res2)) = res {
+      if let Ok((_pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let ReadLatestResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let ReadLatestResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           eprintln!("read_ledger_tail failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToReadLedger);
@@ -352,7 +367,7 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToReadLedger);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
@@ -363,7 +378,7 @@ impl ConnectionStore {
     &self,
     endorsers: &[Vec<u8>],
     block_hash: &NimbleDigest,
-    tail_hash: &NimbleDigest,
+    expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
     if let Ok(conn_map) = self.store.read() {
@@ -374,13 +389,12 @@ impl ConnectionStore {
         }
         let mut endorser_client = conn_map[pk].clone();
         let block = *block_hash;
-        let tail = *tail_hash;
         let pk_bytes = pk.clone();
         let job = tokio::spawn(async move {
           let response = endorser_client
             .append_view_ledger(tonic::Request::new(AppendViewLedgerReq {
               block_hash: block.to_bytes(),
-              cond_updated_tail_hash: tail.to_bytes(),
+              expected_height: expected_height as u64,
             }))
             .await;
           (pk_bytes, response)
@@ -392,13 +406,18 @@ impl ConnectionStore {
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, res2)) = res {
+      if let Ok((_pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let AppendViewLedgerResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let AppendViewLedgerResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           eprintln!("append_view_ledger failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToAppendViewLedger);
@@ -408,7 +427,7 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToAppendViewLedger);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
@@ -441,13 +460,18 @@ impl ConnectionStore {
       jobs.push(job);
     }
 
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut receipts: Vec<Receipt> = Vec::new();
     for job in jobs {
       let res = job.await;
-      if let Ok((pk, res2)) = res {
+      if let Ok((_pk, res2)) = res {
         if let Ok(resp) = res2 {
-          let ReadLatestViewLedgerResp { view, signature } = resp.into_inner();
-          receipt_bytes.push((pk, view, signature));
+          let ReadLatestViewLedgerResp { receipt } = resp.into_inner();
+          if let Ok(receipt_rs) = Receipt::from_bytes(&receipt) {
+            receipts.push(receipt_rs);
+          } else {
+            eprintln!("initialize_state failed: invalid receipt");
+            return Err(CoordinatorError::InvalidReceipt);
+          }
         } else {
           eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
           return Err(CoordinatorError::FailedToReadViewLedger);
@@ -457,93 +481,72 @@ impl ConnectionStore {
         return Err(CoordinatorError::FailedToReadViewLedger);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
+    let res = Receipt::merge_receipts(&receipts);
     match res {
       Ok(receipt) => Ok(receipt),
       Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
     }
   }
 
-  #[allow(dead_code)]
   pub async fn read_latest_state(
     &self,
-    view_ledger_height: usize,
+    endorsers: &[Vec<u8>],
     to_lock: bool,
-    client_nonce: &Nonce,
-  ) -> Result<(Vec<(Vec<u8>, LedgerView, bool)>, Receipt), CoordinatorError> {
+  ) -> Result<Vec<(PublicKey, LedgerView)>, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (pk, ec) in self
-      .store
-      .read()
-      .expect("Failed to get the read lock")
-      .iter()
-    {
-      let mut endorser_client = ec.clone();
-      let nonce = *client_nonce;
-      let pk_bytes = pk.clone();
-      let job = tokio::spawn(async move {
-        let response = endorser_client
-          .read_latest_state(tonic::Request::new(ReadLatestStateReq {
-            nonce: nonce.get(),
-            view_ledger_height: view_ledger_height as u64,
-            to_lock,
-          }))
-          .await;
-        (pk_bytes, response)
-      });
-      jobs.push(job);
+    if let Ok(conn_map) = self.store.read() {
+      for pk in endorsers {
+        if !conn_map.contains_key(pk) {
+          eprintln!("No endorser has this public key {:?}", pk);
+          return Err(CoordinatorError::InvalidEndorserPublicKey);
+        }
+        let mut endorser_client = conn_map[pk].clone();
+        let pk_bytes = pk.clone();
+        let job = tokio::spawn(async move {
+          let response = endorser_client
+            .read_latest_state(tonic::Request::new(ReadLatestStateReq { to_lock }))
+            .await;
+          (pk_bytes, response)
+        });
+        jobs.push(job);
+      }
+    } else {
+      eprintln!("Failed to acquire the read lock");
+      return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
     let mut ledger_views = Vec::new();
-    let mut receipt_bytes: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
     for job in jobs {
       let res = job.await;
       if let Ok((pk, res2)) = res {
         if let Ok(resp) = res2 {
           let ReadLatestStateResp {
-            view,
             ledger_tail_map,
-            view_ledger_tail_prev,
-            view_ledger_tail_view,
-            view_ledger_tail_height,
-            is_locked,
-            signature,
+            view_tail_metablock,
           } = resp.into_inner();
-          let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
+          let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
             .into_iter()
             .map(|e| {
               (
                 NimbleDigest::from_bytes(&e.handle).unwrap(),
-                (
-                  NimbleDigest::from_bytes(&e.tail).unwrap(),
-                  e.height as usize,
-                ),
+                MetaBlock::from_bytes(&e.metablock).unwrap(),
               )
             })
             .collect();
           let ledger_view = LedgerView {
-            view_tail_metablock: MetaBlock::new(
-              &NimbleDigest::from_bytes(&view_ledger_tail_prev).unwrap(), // TODO: better error handling
-              &NimbleDigest::from_bytes(&view_ledger_tail_view).unwrap(),
-              view_ledger_tail_height as usize,
-            ),
+            view_tail_metablock: MetaBlock::from_bytes(&view_tail_metablock).unwrap(),
             ledger_tail_map: ledger_tail_map_rs,
           };
-          ledger_views.push((pk.clone(), ledger_view, is_locked));
-          receipt_bytes.push((pk, view, signature));
+          ledger_views.push((PublicKey::from_bytes(&pk).unwrap(), ledger_view));
         } else {
-          eprintln!("read_view_ledger_tail failed: {:?}", res2.unwrap_err());
-          return Err(CoordinatorError::FailedToReadViewLedger);
+          eprintln!("read_latest_state failed: res2={:?}", res2.unwrap_err());
+          return Err(CoordinatorError::FailedToReadLatestState);
         }
       } else {
-        eprintln!("read_view_ledger_tail failed: {:?}", res.unwrap_err());
-        return Err(CoordinatorError::FailedToReadViewLedger);
+        eprintln!("read_latest_state failed: res={:?}", res.unwrap_err());
+        return Err(CoordinatorError::FailedToReadLatestState);
       }
     }
-    let res = Receipt::from_bytes_with_uniqueness_check(&receipt_bytes);
-    match res {
-      Ok(receipt) => Ok((ledger_views, receipt)),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
-    }
+    Ok(ledger_views)
   }
 }

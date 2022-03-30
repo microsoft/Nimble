@@ -30,4 +30,6 @@ pub enum CoordinatorError {
   FailedToReadLatestState,
   /// returned if the cooordinator cannot assemble a receipt with a unique view
   EndorsersInDifferentViews,
+  /// returned if the returned receipt is invalid
+  InvalidReceipt,
 }

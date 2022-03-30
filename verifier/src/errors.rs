@@ -26,4 +26,8 @@ pub enum VerificationError {
   ViewInMetaBlockNotLatest,
   /// returned if a public key is not found in a receipt
   InvalidePublicKey,
+  /// returned if the block hash does not match the block
+  InvalidBlockHash,
+  /// returned if the height does not match the expected height
+  InvalidHeight,
 }

@@ -1,4 +1,4 @@
-use super::{Block, Handle, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
+use super::{Block, Handle, NimbleHashTrait, Receipt};
 use crate::errors::LedgerStoreError;
 use async_trait::async_trait;
 
@@ -8,27 +8,22 @@ pub mod mongodb_cosmos;
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
   pub block: Block,
-  pub metablock: MetaBlock,
   pub receipt: Receipt,
 }
 
 #[async_trait]
 pub trait LedgerStore {
-  async fn create_ledger(
-    &self,
-    block: &Block,
-  ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError>;
+  async fn create_ledger(&self, block: &Block) -> Result<Handle, LedgerStoreError>;
   async fn append_ledger(
     // TODO: should self be mutable?
     &self,
     handle: &Handle,
     block: &Block,
-    cond: &NimbleDigest,
-  ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError>;
+    expected_height: usize,
+  ) -> Result<(), LedgerStoreError>;
   async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
-    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError>;
   async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError>;
@@ -37,12 +32,12 @@ pub trait LedgerStore {
     handle: &Handle,
     idx: usize,
   ) -> Result<LedgerEntry, LedgerStoreError>;
-  async fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, LedgerStoreError>;
-  async fn attach_view_ledger_receipt(
+  async fn append_view_ledger(
     &self,
-    metablock: &MetaBlock,
-    receipt: &Receipt,
+    block: &Block,
+    expected_height: usize,
   ) -> Result<(), LedgerStoreError>;
+  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
   async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError>;
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
 
@@ -55,7 +50,6 @@ mod tests {
   use crate::store::mongodb_cosmos::MongoCosmosLedgerStore;
   use crate::store::LedgerStore;
   use crate::Block;
-  use crate::NimbleDigest;
   use std::collections::HashMap;
 
   pub async fn check_store_creation_and_operations(state: &dyn LedgerStore) {
@@ -66,7 +60,7 @@ mod tests {
 
     let block = Block::new(&initial_value);
 
-    let (handle, _, _) = state
+    let handle = state
       .create_ledger(&block)
       .await
       .expect("failed create ledger");
@@ -84,9 +78,7 @@ mod tests {
 
     let new_block = Block::new(&new_value_appended);
 
-    let res = state
-      .append_ledger(&handle, &new_block, &NimbleDigest::default())
-      .await;
+    let res = state.append_ledger(&handle, &new_block, 0).await;
     assert!(res.is_ok());
 
     let res = state.read_ledger_tail(&handle).await;

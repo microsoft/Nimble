@@ -11,16 +11,13 @@ use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadViewByIndexReq, ReadViewByIndexResp,
 };
-use ledger::NimbleDigest;
 use verifier::{verify_append, verify_new_ledger, verify_read_latest, VerifierState};
 
 use crate::cli::Args;
 use crate::errors::ClientError;
 use crate::log::{check_file_path_and_setup_dirs_necessary, BenchmarkLog};
 use crate::timer::Timer;
-use crate::utils::{
-  compute_average, compute_throughput_per_second, generate_random_bytes, reformat_receipt,
-};
+use crate::utils::{compute_average, compute_throughput_per_second, generate_random_bytes};
 
 mod cli;
 mod errors;
@@ -201,7 +198,7 @@ async fn benchmark_newledger(
     let res = verify_new_ledger(
       vs,
       &newledger_res.block,
-      &reformat_receipt(&newledger_res.receipt),
+      &newledger_res.receipt,
       client_nonce,
     );
     assert!(res.is_ok());
@@ -255,7 +252,7 @@ async fn benchmark_append(
       let q = tonic::Request::new(AppendReq {
         handle: handle.to_owned(),
         block: block.clone(),
-        cond_tail_hash: NimbleDigest::default().to_bytes().to_vec(),
+        expected_height: 0_u64,
       });
       i += 1;
 
@@ -315,13 +312,7 @@ async fn benchmark_append(
 
   for append_res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_append(
-      vs,
-      &block.to_vec(),
-      &append_res.prev,
-      append_res.height as usize,
-      &reformat_receipt(&append_res.receipt),
-    );
+    let _res = verify_append(vs, &block.to_vec(), 0, &append_res.receipt);
   }
 
   let time_taken = seq_verification_start.stop();
@@ -436,14 +427,7 @@ async fn benchmark_read_latest(
 
   for res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_read_latest(
-      vs,
-      &res.block,
-      &res.prev,
-      res.height as usize,
-      &nonce,
-      &reformat_receipt(&res.receipt),
-    );
+    let _res = verify_read_latest(vs, &res.block, &nonce, &res.receipt);
   }
 
   let time_taken = seq_verification_start.stop();
@@ -491,17 +475,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 1, // the first entry on the view ledger starts at 1
   });
 
-  let ReadViewByIndexResp {
-    block,
-    prev,
-    receipt,
-  } = coordinator_connection
+  let ReadViewByIndexResp { block, receipt } = coordinator_connection
     .client
     .read_view_by_index(req)
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&block, &prev, 1usize, &reformat_receipt(&receipt));
+  let res = vs.apply_view_change(&block, &receipt);
   Timer::print(&format!(
     "Applying ReadViewByIndexResp Response: {:?}",
     res.is_ok()
@@ -521,7 +501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
   Timer::print(&format!("NewLedger (WithAppData) : {:?}", res.is_ok()));
   assert!(res.is_ok());
 

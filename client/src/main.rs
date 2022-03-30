@@ -11,12 +11,11 @@ use clap::{App, Arg};
 use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, Receipt,
+  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use rand::Rng;
 use verifier::{
-  get_tail_hash, verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest,
-  VerifierState,
+  verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest, VerifierState,
 };
 
 #[derive(Debug, Clone)]
@@ -35,21 +34,6 @@ impl CoordinatorConnection {
     let client = CallClient::new(channel);
     Ok(CoordinatorConnection { client })
   }
-}
-
-pub type IdSigBytes = Vec<(Vec<u8>, Vec<u8>)>;
-fn reformat_receipt(receipt: &Option<Receipt>) -> (Vec<u8>, IdSigBytes) {
-  assert!(receipt.is_some());
-  let receipt = receipt.clone().unwrap();
-  let id_sigs = (0..receipt.id_sigs.len())
-    .map(|i| {
-      (
-        receipt.id_sigs[i].id.clone(),
-        receipt.id_sigs[i].sig.clone(),
-      )
-    })
-    .collect::<Vec<(Vec<u8>, Vec<u8>)>>();
-  (receipt.view, id_sigs)
 }
 
 #[tokio::main]
@@ -79,17 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 1, // the first entry on the view ledger starts at 1
   });
 
-  let ReadViewByIndexResp {
-    block,
-    prev,
-    receipt,
-  } = coordinator_connection
+  let ReadViewByIndexResp { block, receipt } = coordinator_connection
     .client
     .read_view_by_index(req)
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&block, &prev, 1usize, &reformat_receipt(&receipt));
+  let res = vs.apply_view_change(&block, &receipt);
   println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -108,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -127,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, &block, &reformat_receipt(&receipt), &client_nonce);
+  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
   println!("NewLedger (NoAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -140,17 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 0,
   });
 
-  let ReadByIndexResp {
-    block,
-    prev,
-    receipt,
-  } = coordinator_connection
+  let ReadByIndexResp { block, receipt } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(&vs, &block, &prev, 0usize, &reformat_receipt(&receipt));
+  let res = verify_read_by_index(&vs, &block, 0, &receipt);
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -161,30 +137,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp {
-    block,
-    prev,
-    height,
-    receipt,
-  } = coordinator_connection
+  let ReadLatestResp { block, receipt } = coordinator_connection
     .client
     .read_latest(req)
     .await?
     .into_inner();
 
-  let res = verify_read_latest(
-    &vs,
-    &block,
-    &prev,
-    height as usize,
-    nonce.as_ref(),
-    &reformat_receipt(&receipt),
-  );
+  let res = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
   println!("Read Latest : {:?}", res.is_ok());
   assert!(res.is_ok());
-
-  let (mut last_known_tail, block_data_verified): (Vec<u8>, Vec<u8>) = res.unwrap();
-  assert_eq!(block_data_verified, Vec::<u8>::new()); // This is empty since the block is genesis.
 
   // Step 4: Append
   let b1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
@@ -192,37 +153,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let blocks = vec![&b1, &b2, &b3].to_vec();
 
+  let mut expected_height: usize = 0;
   for block_to_append in blocks {
+    expected_height += 1;
     let req = tonic::Request::new(AppendReq {
       handle: handle.clone(),
       block: block_to_append.to_vec(),
-      cond_tail_hash: last_known_tail.to_vec(),
+      expected_height: expected_height as u64,
     });
 
-    let AppendResp {
-      prev,
-      height,
-      receipt,
-    } = coordinator_connection
+    let AppendResp { receipt } = coordinator_connection
       .client
       .append(req)
       .await?
       .into_inner();
 
-    if last_known_tail != [0u8; 32] {
-      assert_eq!(prev, last_known_tail);
-    }
-
-    let res = verify_append(
-      &vs,
-      block_to_append.as_ref(),
-      &prev,
-      height as usize,
-      &reformat_receipt(&receipt),
-    );
+    let res = verify_append(&vs, block_to_append.as_ref(), expected_height, &receipt);
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
-    last_known_tail = res.unwrap();
   }
 
   // Step 4: Read Latest with the Nonce generated and check for new data
@@ -232,37 +180,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp {
-    block,
-    prev,
-    height,
-    receipt,
-  } = coordinator_connection
+  let ReadLatestResp { block, receipt } = coordinator_connection
     .client
     .read_latest(latest_state_query)
     .await?
     .into_inner();
   assert_eq!(block, b3.clone());
 
-  let is_latest_valid = verify_read_latest(
-    &vs,
-    &block,
-    &prev,
-    height as usize,
-    nonce.as_ref(),
-    &reformat_receipt(&receipt),
-  );
+  let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()
   );
   assert!(is_latest_valid.is_ok());
-  let (latest_tail_hash, latest_block_verified) = is_latest_valid.unwrap();
-  // Check the tail hash generation from the read_latest response
-  let conditional_tail_hash_expected = get_tail_hash(&block, &prev, height as usize);
-  assert!(conditional_tail_hash_expected.is_ok());
-  assert_eq!(conditional_tail_hash_expected.unwrap(), latest_tail_hash);
-  assert_ne!(latest_block_verified, Vec::<u8>::new()); // This should not be empty since the block is returned
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
@@ -270,18 +200,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 2,
   });
 
-  let ReadByIndexResp {
-    block,
-    prev,
-    receipt,
-  } = coordinator_connection
+  let ReadByIndexResp { block, receipt } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
   assert_eq!(block, b2.clone());
 
-  let res = verify_read_by_index(&vs, &block, &prev, 2usize, &reformat_receipt(&receipt));
+  let res = verify_read_by_index(&vs, &block, 2, &receipt);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -290,26 +216,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let req = tonic::Request::new(AppendReq {
     handle: handle.clone(),
     block: message.to_vec(),
-    cond_tail_hash: [0u8; 32].to_vec(),
+    expected_height: 0_u64,
   });
 
-  let AppendResp {
-    prev,
-    height,
-    receipt,
-  } = coordinator_connection
+  let AppendResp { receipt } = coordinator_connection
     .client
     .append(req)
     .await?
     .into_inner();
 
-  let res = verify_append(
-    &vs,
-    message,
-    &prev,
-    height as usize,
-    &reformat_receipt(&receipt),
-  );
+  let res = verify_append(&vs, message, 0, &receipt);
   println!("Append verification no condition: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -320,26 +236,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp {
-    block,
-    prev,
-    height,
-    receipt,
-  } = coordinator_connection
+  let ReadLatestResp { block, receipt } = coordinator_connection
     .client
     .read_latest(latest_state_query)
     .await?
     .into_inner();
   assert_eq!(block, message);
 
-  let is_latest_valid = verify_read_latest(
-    &vs,
-    &block,
-    &prev,
-    height as usize,
-    nonce.as_ref(),
-    &reformat_receipt(&receipt),
-  );
+  let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()

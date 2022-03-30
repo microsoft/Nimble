@@ -30,6 +30,8 @@ pub enum StorageError {
   InvalidDBUri,
   /// return if failed to initialize the view ledger
   FailedToInitializeViewLedger,
+  /// return if the ledger height overflows
+  LedgerHeightOverflow,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +87,6 @@ pub enum VerificationError {
   InvalidPublicKey,
   /// returned when the provided receipt does not contain signatures from a valid quorum
   InsufficientQuorum,
-  /// returned when the supplied list of views does not have a unique view
-  NonUniqueViews,
+  /// returned when the supplied list of metablocks does not have a unique metablock
+  NonUniqueMetablocks,
 }

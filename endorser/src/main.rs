@@ -1,10 +1,7 @@
 use crate::endorser_state::EndorserState;
 use crate::errors::EndorserError;
 use clap::{App, Arg};
-use ledger::{
-  signature::{PublicKeyTrait, SignatureTrait},
-  NimbleDigest,
-};
+use ledger::{signature::PublicKeyTrait, CustomSerde, MetaBlock, NimbleDigest};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
@@ -25,35 +22,14 @@ use endorser_proto::{
   ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
 };
 
-#[derive(Default, Copy, Debug, Clone)]
-pub struct EndorserFlags {
-  is_locked: bool,
-}
-
-impl EndorserFlags {
-  pub fn new() -> Self {
-    EndorserFlags { is_locked: false }
-  }
-
-  pub fn set_lock(&mut self, to_lock: bool) {
-    self.is_locked = to_lock;
-  }
-
-  pub fn get_lock(&self) -> bool {
-    self.is_locked
-  }
-}
-
 pub struct EndorserServiceState {
   state: Arc<RwLock<EndorserState>>,
-  flags: Arc<RwLock<EndorserFlags>>,
 }
 
 impl EndorserServiceState {
   pub fn new() -> Self {
     EndorserServiceState {
       state: Arc::new(RwLock::new(EndorserState::new())),
-      flags: Arc::new(RwLock::new(EndorserFlags::new())),
     }
   }
 }
@@ -101,13 +77,12 @@ impl EndorserCall for EndorserServiceState {
       .write()
       .expect("Unable to get a write lock on EndorserState");
 
-    let (view, signature) = endorser
+    let receipt = endorser
       .new_ledger(&handle)
       .expect("Unable to get the signature on genesis handle");
 
     let reply = NewLedgerResp {
-      view: view.to_bytes().to_vec(),
-      signature: signature.to_bytes().to_vec(),
+      receipt: receipt.to_bytes().to_vec(),
     };
     Ok(Response::new(reply))
   }
@@ -116,18 +91,13 @@ impl EndorserCall for EndorserServiceState {
     let AppendReq {
       handle,
       block_hash,
-      cond_updated_tail_hash,
-      cond_updated_tail_height,
+      expected_height,
     } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
-    let cond_updated_tail_hash_instance = NimbleDigest::from_bytes(&cond_updated_tail_hash);
 
-    if handle_instance.is_err()
-      || block_hash_instance.is_err()
-      || cond_updated_tail_hash_instance.is_err()
-    {
+    if handle_instance.is_err() || block_hash_instance.is_err() {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
@@ -135,24 +105,19 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser_state.append(
       &handle_instance.unwrap(),
       &block_hash_instance.unwrap(),
-      &cond_updated_tail_hash_instance.unwrap(),
-      cond_updated_tail_height as usize,
+      expected_height as usize,
     );
 
     match res {
-      Ok((view, signature)) => {
+      Ok(receipt) => {
         let reply = AppendResp {
-          view: view.to_bytes().to_vec(),
-          signature: signature.to_bytes().to_vec(),
+          receipt: receipt.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
 
       Err(error) => match error {
         EndorserError::OutOfOrderAppend => Err(Status::failed_precondition("Out of order append")),
-        EndorserError::InvalidConditionalTail => {
-          Err(Status::aborted("Invalid conditional tail hash"))
-        },
         EndorserError::InvalidLedgerName => Err(Status::not_found("Ledger handle not found")),
         EndorserError::LedgerHeightOverflow => Err(Status::out_of_range("Ledger height overflow")),
         EndorserError::InvalidTailHeight => Err(Status::already_exists("Invalid ledgher height")),
@@ -177,10 +142,9 @@ impl EndorserCall for EndorserServiceState {
     let res = latest_state.read_latest(&handle, &nonce);
 
     match res {
-      Ok((view, signature)) => {
+      Ok(receipt) => {
         let reply = ReadLatestResp {
-          view: view.to_bytes().to_vec(),
-          signature: signature.to_bytes().to_vec(),
+          receipt: receipt.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
@@ -194,27 +158,23 @@ impl EndorserCall for EndorserServiceState {
   ) -> Result<Response<AppendViewLedgerResp>, Status> {
     let AppendViewLedgerReq {
       block_hash,
-      cond_updated_tail_hash,
+      expected_height,
     } = req.into_inner();
 
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
-    let cond_updated_tail_hash_instance = NimbleDigest::from_bytes(&cond_updated_tail_hash);
 
-    if block_hash_instance.is_err() || cond_updated_tail_hash_instance.is_err() {
+    if block_hash_instance.is_err() {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append_view_ledger(
-      &block_hash_instance.unwrap(),
-      &cond_updated_tail_hash_instance.unwrap(),
-    );
+    let res =
+      endorser_state.append_view_ledger(&block_hash_instance.unwrap(), expected_height as usize);
 
     match res {
-      Ok((view, signature)) => {
+      Ok(receipt) => {
         let reply = AppendViewLedgerResp {
-          view: view.to_bytes().to_vec(),
-          signature: signature.to_bytes().to_vec(),
+          receipt: receipt.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
@@ -232,10 +192,9 @@ impl EndorserCall for EndorserServiceState {
     let res = endorser.read_latest_view_ledger(&nonce);
 
     match res {
-      Ok((view, signature)) => {
+      Ok(receipt) => {
         let reply = ReadLatestViewLedgerResp {
-          view: view.to_bytes().to_vec(),
-          signature: signature.to_bytes().to_vec(),
+          receipt: receipt.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
@@ -249,45 +208,36 @@ impl EndorserCall for EndorserServiceState {
   ) -> Result<Response<InitializeStateResp>, Status> {
     let InitializeStateReq {
       ledger_tail_map,
-      view_ledger_tail,
-      view_ledger_height,
+      view_tail_metablock,
       block_hash,
-      cond_updated_tail_hash,
+      expected_height,
     } = req.into_inner();
-    let ledger_tail_map_rs: HashMap<NimbleDigest, (NimbleDigest, usize)> = ledger_tail_map
+    let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
       .into_iter()
       .map(|e| {
         (
           NimbleDigest::from_bytes(&e.handle).unwrap(),
-          (
-            NimbleDigest::from_bytes(&e.tail).unwrap(),
-            e.height as usize,
-          ),
+          MetaBlock::from_bytes(&e.metablock).unwrap(),
         )
       })
       .collect();
-    let view_ledger_tail_rs = (
-      NimbleDigest::from_bytes(&view_ledger_tail).unwrap(),
-      view_ledger_height as usize,
-    );
+    let view_tail_metablock_rs = MetaBlock::from_bytes(&view_tail_metablock).unwrap();
     let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
-    let cond_updated_tail_hash_rs = NimbleDigest::from_bytes(&cond_updated_tail_hash).unwrap();
     let res = self
       .state
       .write()
       .expect("Failed to acquire write lock")
       .initialize_state(
         &ledger_tail_map_rs,
-        &view_ledger_tail_rs,
+        &view_tail_metablock_rs,
         &block_hash_rs,
-        &cond_updated_tail_hash_rs,
+        expected_height as usize,
       );
 
     match res {
-      Ok((view, signature)) => {
+      Ok(receipt) => {
         let reply = InitializeStateResp {
-          view: view.to_bytes().to_vec(),
-          signature: signature.to_bytes().to_vec(),
+          receipt: receipt.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
@@ -299,61 +249,32 @@ impl EndorserCall for EndorserServiceState {
     &self,
     request: Request<ReadLatestStateReq>,
   ) -> Result<Response<ReadLatestStateResp>, Status> {
-    let ReadLatestStateReq {
-      nonce,
-      view_ledger_height,
-      to_lock,
-    } = request.into_inner();
+    let ReadLatestStateReq { to_lock: _ } = request.into_inner();
 
     let res = self
       .state
       .read()
       .expect("Failed to acquire read lock")
-      .read_latest_state(&nonce);
+      .read_latest_state();
 
-    match res {
-      Ok((view, ledger_view, signature)) => {
-        if to_lock && view_ledger_height == ledger_view.view_tail_metablock.get_height() as u64 {
-          self
-            .flags
-            .write()
-            .expect("Failed to acquire write lock")
-            .set_lock(to_lock);
-        }
-        let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
-          .ledger_tail_map
-          .iter()
-          .map(|(handle, (tail, height))| LedgerTailMapEntry {
-            handle: handle.to_bytes(),
-            tail: tail.to_bytes(),
-            height: *height as u64,
-          })
-          .collect();
-        let reply = ReadLatestStateResp {
-          view: view.to_bytes().to_vec(),
-          ledger_tail_map,
-          view_ledger_tail_prev: ledger_view
-            .view_tail_metablock
-            .get_prev()
-            .to_bytes()
-            .to_vec(),
-          view_ledger_tail_view: ledger_view
-            .view_tail_metablock
-            .get_block_hash()
-            .to_bytes()
-            .to_vec(),
-          view_ledger_tail_height: ledger_view.view_tail_metablock.get_height() as u64,
-          is_locked: self
-            .flags
-            .read()
-            .expect("Failed to acquire read lock")
-            .get_lock(),
-          signature: signature.to_bytes().to_vec(),
-        };
-        Ok(Response::new(reply))
-      },
-      Err(_) => Err(Status::aborted("Failed to read latest state")),
+    if res.is_err() {
+      return Err(Status::aborted("Failed to read latest state"));
     }
+
+    let ledger_view = res.unwrap();
+    let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
+      .ledger_tail_map
+      .iter()
+      .map(|(handle, metablock)| LedgerTailMapEntry {
+        handle: handle.to_bytes(),
+        metablock: metablock.to_bytes(),
+      })
+      .collect();
+    let reply = ReadLatestStateResp {
+      ledger_tail_map,
+      view_tail_metablock: ledger_view.view_tail_metablock.to_bytes().to_vec(),
+    };
+    Ok(Response::new(reply))
   }
 }
 

@@ -10,16 +10,6 @@ service Call {
   rpc ReadViewByIndex(ReadViewByIndexReq) returns (ReadViewByIndexResp);
 }
 
-message IdSig {
-  bytes id = 1;
-  bytes sig = 2;
-}
-
-message Receipt {
-  bytes view = 1;
-  repeated IdSig id_sigs = 2;
-}
-
 message NewLedgerReq {
   bytes nonce = 1;  // This is a client chosen nonce.
   bytes app_bytes = 2;
@@ -27,19 +17,17 @@ message NewLedgerReq {
 
 message NewLedgerResp {
   bytes block = 1;
-  Receipt receipt = 2;
+  bytes receipt = 2;
 }
 
 message AppendReq {
   bytes handle = 1;
   bytes block = 2;
-  bytes cond_tail_hash = 3;  // Ideally optional
+  uint64 expected_height = 3; // 0 means unconditional
 }
 
 message AppendResp {
-  bytes prev = 1;
-  uint64 height = 2;
-  Receipt receipt = 3;
+  bytes receipt = 1;
 }
 
 message ReadLatestReq {
@@ -49,9 +37,7 @@ message ReadLatestReq {
 
 message ReadLatestResp {
   bytes block = 1;
-  bytes prev = 2;
-  uint64 height = 3;
-  Receipt receipt = 4;
+  bytes receipt = 2;
 }
 
 message ReadByIndexReq {
@@ -61,8 +47,7 @@ message ReadByIndexReq {
 
 message ReadByIndexResp {
   bytes block = 1;
-  bytes prev = 2;
-  Receipt receipt = 3;
+  bytes receipt = 2;
 }
 
 message ReadViewByIndexReq {
@@ -71,6 +56,5 @@ message ReadViewByIndexReq {
 
 message ReadViewByIndexResp {
   bytes block = 1;
-  bytes prev = 2;
-  Receipt receipt = 3;
+  bytes receipt = 2;
 }

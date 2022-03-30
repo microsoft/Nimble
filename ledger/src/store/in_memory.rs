@@ -1,8 +1,7 @@
-use super::{Block, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt};
+use super::{Block, Handle, NimbleHashTrait, Receipt};
 use crate::errors::{LedgerStoreError, StorageError};
-use crate::store::{LedgerEntry, LedgerStore, LedgerView};
+use crate::store::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
-use itertools::Itertools;
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
 
@@ -21,11 +20,7 @@ impl InMemoryLedgerStore {
 
     let view_ledger_entry = LedgerEntry {
       block: Block::new(&[0; 0]),
-      metablock: MetaBlock::new(&NimbleDigest::default(), &NimbleDigest::default(), 0),
-      receipt: Receipt {
-        id_sigs: Vec::new(),
-        view: NimbleDigest::default(),
-      },
+      receipt: Receipt::default(),
     };
     view_ledger.push(view_ledger_entry);
 
@@ -38,26 +33,16 @@ impl InMemoryLedgerStore {
 
 #[async_trait]
 impl LedgerStore for InMemoryLedgerStore {
-  async fn create_ledger(
-    &self,
-    block: &Block,
-  ) -> Result<(Handle, MetaBlock, NimbleDigest), LedgerStoreError> {
+  async fn create_ledger(&self, block: &Block) -> Result<Handle, LedgerStoreError> {
     let handle = block.hash();
-    let block_hash = block.hash();
-    let metablock = MetaBlock::new(&NimbleDigest::default(), &block_hash, 0);
     let ledger_entry = LedgerEntry {
       block: block.clone(),
-      metablock: metablock.clone(),
-      receipt: Receipt {
-        id_sigs: Vec::new(),
-        view: NimbleDigest::default(),
-      },
+      receipt: Receipt::default(),
     };
     if let Ok(mut ledgers_map) = self.ledgers.write() {
       if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
-        let tail_hash = ledger_entry.metablock.hash();
         e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
-        Ok((handle, metablock, tail_hash))
+        Ok(handle)
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
       }
@@ -72,30 +57,18 @@ impl LedgerStore for InMemoryLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    cond: &NimbleDigest,
-  ) -> Result<(MetaBlock, NimbleDigest), LedgerStoreError> {
+    expected_height: usize,
+  ) -> Result<(), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          let last_entry = &ledgers[ledgers.len() - 1].metablock;
-          if *cond == NimbleDigest::default() || *cond == last_entry.hash() {
-            let block_hash = block.hash();
+          if expected_height == 0 || expected_height == ledgers.len() {
             let ledger_entry = LedgerEntry {
               block: block.clone(),
-              metablock: MetaBlock::new(
-                &last_entry.hash(),
-                &block_hash,
-                last_entry.get_height() + 1,
-              ),
-              receipt: Receipt {
-                view: NimbleDigest::default(),
-                id_sigs: Vec::new(),
-              },
+              receipt: Receipt::default(),
             };
-            let tail_hash = ledger_entry.metablock.hash();
-            let metablock = ledger_entry.metablock.clone();
             ledgers.push(ledger_entry);
-            Ok((metablock, tail_hash))
+            Ok(())
           } else {
             Err(LedgerStoreError::LedgerError(
               StorageError::IncorrectConditionalData,
@@ -119,14 +92,14 @@ impl LedgerStore for InMemoryLedgerStore {
   async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
-    metablock: &MetaBlock,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          if metablock.get_height() < ledgers.len() {
-            ledgers[metablock.get_height()].receipt = receipt.clone();
+          let height = receipt.metablock.get_height();
+          if height < ledgers.len() {
+            ledgers[height].receipt = receipt.clone();
             Ok(())
           } else {
             Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
@@ -194,47 +167,22 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn append_view_ledger(&self, block: &Block) -> Result<LedgerView, LedgerStoreError> {
-    let mut ledger_tail_map = HashMap::new();
+  async fn append_view_ledger(
+    &self,
+    block: &Block,
+    expected_height: usize,
+  ) -> Result<(), LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      if let Ok(ledger_map) = self.ledgers.read() {
-        let last_view_ledger_entry_metablock =
-          &view_ledger_array[view_ledger_array.len() - 1].metablock;
-        let block_hash = block.hash();
-
-        for handle in ledger_map.keys().sorted() {
-          let ledger_array = ledger_map[handle].read().expect("failed to read a ledger");
-          let last_ledger_entry_metablock = &ledger_array[ledger_array.len() - 1].metablock;
-          let tail = last_ledger_entry_metablock.hash();
-          let height = last_ledger_entry_metablock.get_height();
-          ledger_tail_map.insert(*handle, (tail, height));
-        }
-
+      if expected_height == 0 || expected_height == view_ledger_array.len() {
         let ledger_entry = LedgerEntry {
           block: block.clone(),
-          metablock: MetaBlock::new(
-            &if view_ledger_array.len() == 1 {
-              NimbleDigest::default()
-            } else {
-              last_view_ledger_entry_metablock.hash()
-            },
-            &block_hash,
-            last_view_ledger_entry_metablock.get_height() + 1,
-          ),
-          receipt: Receipt {
-            view: NimbleDigest::default(),
-            id_sigs: Vec::new(),
-          },
+          receipt: Receipt::default(),
         };
-        let metablock = ledger_entry.metablock.clone();
         view_ledger_array.push(ledger_entry);
-        Ok(LedgerView {
-          view_tail_metablock: metablock,
-          ledger_tail_map,
-        })
+        Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(
-          StorageError::LedgerMapReadLockFailed,
+          StorageError::IncorrectConditionalData,
         ))
       }
     } else {
@@ -244,14 +192,11 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn attach_view_ledger_receipt(
-    &self,
-    metablock: &MetaBlock,
-    receipt: &Receipt,
-  ) -> Result<(), LedgerStoreError> {
+  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      if metablock.get_height() < view_ledger_array.len() {
-        view_ledger_array[metablock.get_height()].receipt = receipt.clone();
+      let height = receipt.metablock.get_height();
+      if height < view_ledger_array.len() {
+        view_ledger_array[height].receipt = receipt.clone();
         Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
