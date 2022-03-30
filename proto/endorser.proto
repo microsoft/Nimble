@@ -12,6 +12,7 @@ service EndorserCall {
   rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
   rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
   rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
+  rpc Unlock(UnlockReq) returns (UnlockResp);
 }
 
 message GetPublicKeyReq {
@@ -92,4 +93,10 @@ message ReadLatestStateReq {
 message ReadLatestStateResp {
   repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
   bytes view_tail_metablock = 2; // the view ledger tail's metablock
+}
+
+message UnlockReq {
+}
+
+message UnlockResp {
 }

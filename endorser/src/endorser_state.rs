@@ -22,6 +22,9 @@ pub struct EndorserState {
 
   /// whether the endorser is initialized
   is_initialized: bool,
+
+  /// whether the endorser is locked for append operations
+  is_locked: bool,
 }
 
 impl EndorserState {
@@ -35,6 +38,7 @@ impl EndorserState {
       view_tail_metablock: MetaBlock::default(),
       view_ledger_tail: MetaBlock::default().hash(),
       is_initialized: false,
+      is_locked: false,
     }
   }
 
@@ -59,6 +63,10 @@ impl EndorserState {
   pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Receipt, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
+    }
+
+    if self.is_locked {
+      return Err(EndorserError::IsLocked);
     }
 
     // check if the handle already exists, if so, return an error
@@ -109,6 +117,10 @@ impl EndorserState {
   ) -> Result<Receipt, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
+    }
+
+    if self.is_locked {
+      return Err(EndorserError::IsLocked);
     }
 
     // check if the requested ledger exists in the state, if not return an error
@@ -179,6 +191,10 @@ impl EndorserState {
       return Err(EndorserError::NotInitialized);
     }
 
+    if self.is_locked {
+      return Err(EndorserError::IsLocked);
+    }
+
     let metablock = &self.view_tail_metablock;
 
     // perform a checked addition of height with 1
@@ -232,6 +248,14 @@ impl EndorserState {
     };
 
     Ok(ledger_view)
+  }
+
+  pub fn lock(&mut self) {
+    self.is_locked = true;
+  }
+
+  pub fn unlock(&mut self) {
+    self.is_locked = false;
   }
 }
 

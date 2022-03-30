@@ -14,4 +14,6 @@ pub enum EndorserError {
   InvalidTailHeight,
   /// returned if the requested tail height is more than the expected height
   OutOfOrderAppend,
+  /// returned if the endorser is locked
+  IsLocked,
 }

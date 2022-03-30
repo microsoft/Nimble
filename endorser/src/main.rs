@@ -19,7 +19,7 @@ use endorser_proto::{
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
   GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
   NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
-  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp, UnlockReq, UnlockResp,
 };
 
 pub struct EndorserServiceState {
@@ -249,7 +249,15 @@ impl EndorserCall for EndorserServiceState {
     &self,
     request: Request<ReadLatestStateReq>,
   ) -> Result<Response<ReadLatestStateResp>, Status> {
-    let ReadLatestStateReq { to_lock: _ } = request.into_inner();
+    let ReadLatestStateReq { to_lock } = request.into_inner();
+
+    if to_lock {
+      self
+        .state
+        .write()
+        .expect("Failed to acquire write lock")
+        .lock();
+    }
 
     let res = self
       .state
@@ -274,6 +282,17 @@ impl EndorserCall for EndorserServiceState {
       ledger_tail_map,
       view_tail_metablock: ledger_view.view_tail_metablock.to_bytes().to_vec(),
     };
+    Ok(Response::new(reply))
+  }
+
+  async fn unlock(&self, _req: Request<UnlockReq>) -> Result<Response<UnlockResp>, Status> {
+    self
+      .state
+      .write()
+      .expect("Failed to acquire write lock")
+      .unlock();
+
+    let reply = UnlockResp {};
     Ok(Response::new(reply))
   }
 }
