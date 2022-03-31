@@ -24,6 +24,7 @@ message GetPublicKeyResp {
 
 message NewLedgerReq {
   bytes handle = 1;
+  bool ignore_lock = 2;
 }
 
 message NewLedgerResp {
@@ -43,6 +44,7 @@ message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
   uint64 expected_height = 3;
+  bool ignore_lock = 4;
 }
 
 message AppendResp {

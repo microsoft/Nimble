@@ -265,29 +265,30 @@ impl Receipt {
     &self.metablock
   }
 
-  pub fn merge_receipts(receipts: &[Receipt]) -> Result<Receipt, VerificationError> {
-    if receipts.is_empty() {
+  pub fn append(&mut self, receipt: &Receipt) -> Result<(), VerificationError> {
+    if self.get_metablock_hash() == MetaBlock::default().hash() {
+      assert!(self.id_sigs.is_empty());
+      self.metablock = receipt.get_metablock().clone();
+      self.id_sigs = receipt.get_id_sigs().clone();
+    } else if self.get_metablock_hash() == receipt.get_metablock_hash() {
+      self.id_sigs.extend(receipt.get_id_sigs().clone());
+    } else {
       return Err(VerificationError::InvalidReceipt);
     }
+    Ok(())
+  }
 
-    // check if all metablocks are unique; if not, return an error
-    let metablocks = (0..receipts.len())
-      .map(|i| receipts[i].get_metablock_hash())
-      .collect::<HashSet<NimbleDigest>>();
+  pub fn merge_receipts(receipts: &[Receipt]) -> Result<Receipt, VerificationError> {
+    let mut new_receipt = Receipt::new(MetaBlock::default(), Vec::new());
 
-    if metablocks.len() != 1 {
-      return Err(VerificationError::NonUniqueMetablocks);
+    for receipt in receipts.iter() {
+      let res = new_receipt.append(receipt);
+      if let Err(error) = res {
+        return Err(error);
+      }
     }
 
-    let mut id_sigs = Vec::new();
-    for receipt in receipts {
-      id_sigs.extend(receipt.get_id_sigs().clone());
-    }
-
-    Ok(Receipt {
-      metablock: receipts.iter().next().unwrap().get_metablock().clone(),
-      id_sigs,
-    })
+    Ok(new_receipt)
   }
 
   pub fn verify(&self, msg: &[u8], pk_vec: &[PublicKey]) -> Result<(), VerificationError> {
@@ -308,34 +309,28 @@ impl Receipt {
       return Err(VerificationError::DuplicateIds);
     }
 
-    // check if we have the simple majority
-    if id_sigs.len() < pk_vec.len() / 2 + 1 {
-      return Err(VerificationError::InsufficientQuorum);
-    }
-
-    // verify the signatures in the receipt and ensure that the provided public keys are in pk_vec
-    let res = (0..id_sigs.len()).try_for_each(|i| {
-      let id = id_sigs[i].get_id();
-      let sig = id_sigs[i].get_sig();
-
-      // check the inclusion of purported public key in the provided list and then verify signature
-      if !pk_vec.iter().any(|pk| pk.to_bytes() == id.to_bytes()) {
-        Err(VerificationError::InvalidPublicKey)
-      } else {
-        let res = sig.verify(id, msg);
-        if res.is_err() {
+    let num_accepted_sigs = (0..id_sigs.len())
+      .map(|i| {
+        let id = id_sigs[i].get_id();
+        let sig = id_sigs[i].get_sig();
+        let pk = pk_vec.iter().find(|pk| pk.to_bytes() == id.to_bytes());
+        if pk.is_none() {
+          Err(VerificationError::InvalidPublicKey)
+        } else if sig.verify(pk.unwrap(), msg).is_err() {
           Err(VerificationError::InvalidSignature)
         } else {
           Ok(())
         }
-      }
-    });
+      })
+      .filter(|x| x.is_ok())
+      .count();
 
-    if res.is_err() {
-      Err(VerificationError::InvalidReceipt)
-    } else {
-      Ok(())
+    // check if we have the simple majority
+    if num_accepted_sigs < pk_vec.len() / 2 + 1 {
+      return Err(VerificationError::InsufficientQuorum);
     }
+
+    Ok(())
   }
 
   pub fn verify_view_change(

@@ -99,7 +99,12 @@ impl LedgerStore for InMemoryLedgerStore {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
           let height = receipt.metablock.get_height();
           if height < ledgers.len() {
-            ledgers[height].receipt = receipt.clone();
+            let res = ledgers[height].receipt.append(receipt);
+            if res.is_err() {
+              return Err(LedgerStoreError::LedgerError(
+                StorageError::MismatchedReceipts,
+              ));
+            }
             Ok(())
           } else {
             Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
@@ -196,7 +201,12 @@ impl LedgerStore for InMemoryLedgerStore {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       let height = receipt.metablock.get_height();
       if height < view_ledger_array.len() {
-        view_ledger_array[height].receipt = receipt.clone();
+        let res = view_ledger_array[height].receipt.append(receipt);
+        if res.is_err() {
+          return Err(LedgerStoreError::LedgerError(
+            StorageError::MismatchedReceipts,
+          ));
+        }
         Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))

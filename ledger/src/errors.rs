@@ -32,6 +32,8 @@ pub enum StorageError {
   FailedToInitializeViewLedger,
   /// return if the ledger height overflows
   LedgerHeightOverflow,
+  /// return if receipts are mismatch
+  MismatchedReceipts,
 }
 
 #[derive(Clone, Debug)]

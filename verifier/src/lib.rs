@@ -226,6 +226,7 @@ pub fn verify_read_latest(
   let res = receipt.verify(&hash_nonced_tail_hash_prime, pk_vec);
 
   if res.is_err() {
+    eprintln!("receipt verify: {:?}", res);
     return Err(VerificationError::InvalidReceipt);
   }
 

@@ -306,7 +306,15 @@ async fn attach_ledger_receipt_transaction(
   assert_eq!(ledger_entry.index, receipt.get_height() as u64);
 
   // 4. Update receipt
-  ledger_entry.receipt = receipt.to_bytes();
+  let mut new_receipt =
+    Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
+  let res = new_receipt.append(receipt);
+  if res.is_err() {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::MismatchedReceipts,
+    ));
+  }
+  ledger_entry.receipt = new_receipt.to_bytes();
 
   // 5. Re-serialize into bson binary
   let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)

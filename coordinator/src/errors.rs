@@ -32,4 +32,16 @@ pub enum CoordinatorError {
   EndorsersInDifferentViews,
   /// returned if the returned receipt is invalid
   InvalidReceipt,
+  /// returned if the call to unlock fails
+  FailedToUnlock,
+  /// returned if the views of endorsers are different
+  NonUniqueViews,
+  /// returned if the ledger views are empty
+  EmptyLedgerViews,
+  /// returned if failed to attach receipt
+  FailedToAttachReceipt,
+  /// returned if genesis op fails
+  FailedToCreateGenesis,
+  /// returned if the provided handle is invalid
+  InvalidHandle,
 }

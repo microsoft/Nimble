@@ -60,12 +60,16 @@ impl EndorserState {
     self.append_view_ledger(block_hash, expected_height)
   }
 
-  pub fn new_ledger(&mut self, handle: &NimbleDigest) -> Result<Receipt, EndorserError> {
+  pub fn new_ledger(
+    &mut self,
+    handle: &NimbleDigest,
+    ignore_lock: bool,
+  ) -> Result<Receipt, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
     }
 
-    if self.is_locked {
+    if !ignore_lock && self.is_locked {
       return Err(EndorserError::IsLocked);
     }
 
@@ -114,12 +118,13 @@ impl EndorserState {
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
     expected_height: usize,
+    ignore_lock: bool,
   ) -> Result<Receipt, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
     }
 
-    if self.is_locked {
+    if !ignore_lock && self.is_locked {
       return Err(EndorserError::IsLocked);
     }
 
@@ -189,10 +194,6 @@ impl EndorserState {
   ) -> Result<Receipt, EndorserError> {
     if !self.is_initialized {
       return Err(EndorserError::NotInitialized);
-    }
-
-    if self.is_locked {
-      return Err(EndorserError::IsLocked);
     }
 
     let metablock = &self.view_tail_metablock;
@@ -303,7 +304,7 @@ mod tests {
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
-    let res = endorser_state.new_ledger(&handle);
+    let res = endorser_state.new_ledger(&handle, false);
     assert!(res.is_ok());
 
     let receipt = res.unwrap();
@@ -360,7 +361,7 @@ mod tests {
     // The coordinator sends the hashed contents of the block to the endorsers
     let block = rand::thread_rng().gen::<[u8; 32]>();
     let handle = NimbleDigest::from_bytes(&block).unwrap();
-    let res = endorser_state.new_ledger(&handle);
+    let res = endorser_state.new_ledger(&handle, false);
     assert!(res.is_ok());
 
     // Fetch the value currently in the tail.
@@ -382,7 +383,7 @@ mod tests {
     };
 
     let receipt = endorser_state
-      .append(&handle, &block_hash_to_append, height_plus_one)
+      .append(&handle, &block_hash_to_append, height_plus_one, false)
       .unwrap();
     let new_ledger_height = endorser_state
       .ledger_tail_map

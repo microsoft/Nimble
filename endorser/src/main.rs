@@ -63,7 +63,10 @@ impl EndorserCall for EndorserServiceState {
     &self,
     req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
-    let NewLedgerReq { handle } = req.into_inner();
+    let NewLedgerReq {
+      handle,
+      ignore_lock,
+    } = req.into_inner();
     let handle = {
       let handle_instance = NimbleDigest::from_bytes(&handle);
       if handle_instance.is_err() {
@@ -78,7 +81,7 @@ impl EndorserCall for EndorserServiceState {
       .expect("Unable to get a write lock on EndorserState");
 
     let receipt = endorser
-      .new_ledger(&handle)
+      .new_ledger(&handle, ignore_lock)
       .expect("Unable to get the signature on genesis handle");
 
     let reply = NewLedgerResp {
@@ -92,6 +95,7 @@ impl EndorserCall for EndorserServiceState {
       handle,
       block_hash,
       expected_height,
+      ignore_lock,
     } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
@@ -106,6 +110,7 @@ impl EndorserCall for EndorserServiceState {
       &handle_instance.unwrap(),
       &block_hash_instance.unwrap(),
       expected_height as usize,
+      ignore_lock,
     );
 
     match res {
