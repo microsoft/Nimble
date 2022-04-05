@@ -1,8 +1,8 @@
 use crate::errors::{LedgerStoreError, StorageError};
-use crate::store::{LedgerEntry, LedgerStore};
-use crate::{Block, CustomSerde, Handle, NimbleDigest, NimbleHashTrait, Receipt};
+use crate::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
 use bincode;
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, NimbleHashTrait, Receipt};
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
 use mongodb::error::{TRANSIENT_TRANSACTION_ERROR, UNKNOWN_TRANSACTION_COMMIT_RESULT};
@@ -533,7 +533,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError> {
     let mut handle_with_index = handle.to_bytes();
-    handle_with_index.extend(receipt.metablock.get_height().to_le_bytes()); // "to_le" converts to little endian
+    handle_with_index.extend(receipt.get_height().to_le_bytes()); // "to_le" converts to little endian
 
     let client = self.client.clone();
     let ledgers = client

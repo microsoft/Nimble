@@ -6,13 +6,11 @@ use crate::network::ConnectionStore;
 use core::cmp::max;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore},
-};
-use ledger::{
   Block, CustomSerde, EndorserHostnames, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait,
   Nonce, Receipt,
 };
 use std::collections::{HashMap, HashSet};
+use store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;

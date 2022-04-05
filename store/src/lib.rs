@@ -1,9 +1,11 @@
-use super::{Block, Handle, NimbleHashTrait, Receipt};
-use crate::errors::LedgerStoreError;
 use async_trait::async_trait;
+use ledger::{Block, Handle, NimbleHashTrait, Receipt};
 
+mod errors;
 pub mod in_memory;
 pub mod mongodb_cosmos;
+
+use crate::errors::LedgerStoreError;
 
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
@@ -46,10 +48,10 @@ pub trait LedgerStore {
 
 #[cfg(test)]
 mod tests {
-  use crate::store::in_memory::InMemoryLedgerStore;
-  use crate::store::mongodb_cosmos::MongoCosmosLedgerStore;
-  use crate::store::LedgerStore;
-  use crate::Block;
+  use crate::{
+    in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+  };
+  use ledger::{Block, CustomSerde};
   use std::collections::HashMap;
 
   pub async fn check_store_creation_and_operations(state: &dyn LedgerStore) {
@@ -69,7 +71,7 @@ mod tests {
     assert!(res.is_ok());
 
     let current_data = res.unwrap();
-    assert_eq!(current_data.block.block, initial_value);
+    assert_eq!(current_data.block.to_bytes(), initial_value);
 
     let new_value_appended: Vec<u8> = vec![
       2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
@@ -85,13 +87,13 @@ mod tests {
     assert!(res.is_ok());
 
     let current_tail = res.unwrap();
-    assert_eq!(current_tail.block.block, new_value_appended);
+    assert_eq!(current_tail.block.to_bytes(), new_value_appended);
 
     let res = state.read_ledger_by_index(&handle, 0).await;
     assert!(res.is_ok());
 
     let data_at_index = res.unwrap();
-    assert_eq!(data_at_index.block.block, initial_value);
+    assert_eq!(data_at_index.block.to_bytes(), initial_value);
 
     let res = state.reset_store().await;
     assert!(res.is_ok());

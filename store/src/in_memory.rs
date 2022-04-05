@@ -1,6 +1,6 @@
 use super::{Block, Handle, NimbleHashTrait, Receipt};
 use crate::errors::{LedgerStoreError, StorageError};
-use crate::store::{LedgerEntry, LedgerStore};
+use crate::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
 use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, RwLock};
@@ -97,7 +97,7 @@ impl LedgerStore for InMemoryLedgerStore {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          let height = receipt.metablock.get_height();
+          let height = receipt.get_height();
           if height < ledgers.len() {
             let res = ledgers[height].receipt.append(receipt);
             if res.is_err() {
@@ -199,7 +199,7 @@ impl LedgerStore for InMemoryLedgerStore {
 
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      let height = receipt.metablock.get_height();
+      let height = receipt.get_height();
       if height < view_ledger_array.len() {
         let res = view_ledger_array[height].receipt.append(receipt);
         if res.is_err() {
