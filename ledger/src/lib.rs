@@ -7,6 +7,7 @@ use digest::Output;
 use generic_array::typenum::U32;
 use generic_array::GenericArray;
 use itertools::{concat, Itertools};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -420,6 +421,11 @@ impl Receipt {
 pub struct LedgerView {
   pub view_tail_metablock: MetaBlock,
   pub ledger_tail_map: LedgerTailMap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndorserHostnames {
+  pub pk_hostnames: Vec<(Vec<u8>, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

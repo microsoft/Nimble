@@ -108,7 +108,6 @@ impl MongoCosmosLedgerStore {
     if args.contains_key("NIMBLE_DB") {
       nimble_db_name = args["NIMBLE_DB"].clone();
     }
-    let ledger_collection = "ledgers";
 
     let res = Client::with_uri_str(&conn_string).await;
     if res.is_err() {
@@ -116,53 +115,66 @@ impl MongoCosmosLedgerStore {
       return Err(LedgerStoreError::LedgerError(StorageError::InvalidDBUri));
     }
     let cosmos_client = res.unwrap();
-    let ledgers = cosmos_client
-      .database(&nimble_db_name)
-      .collection::<DBEntry>(ledger_collection);
-
-    // Initialized view ledger's entry
-    let entry = SerializedLedgerEntry {
-      block: Block::new(&[0; 0]).to_bytes(),
-      index: 0_u64,
-      receipt: Receipt::default().to_bytes(),
-    };
-
-    let bson_entry: Binary = bincode::serialize(&entry)
-      .expect("failed to serialize entry")
-      .to_bson_binary();
 
     let view_handle: Handle = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()])
       .expect(
         "unable
-            to deserialize view ledger handle",
+          to deserialize view ledger handle",
       );
 
-    let tail_entry = DBEntry {
-      key: view_handle.to_bson_binary(),
-      value: bson_entry.clone(),
-      tail: true,
-    };
-
-    // This is the same as above, but this is basically the copy that will be stored
-    // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
-    let mut view_handle_with_index = view_handle.to_bytes();
-    view_handle_with_index.extend(0usize.to_le_bytes()); // "to_le" converts to little endian
-
-    let first_entry = DBEntry {
-      key: view_handle_with_index.to_bson_binary(),
-      value: bson_entry,
-      tail: false,
-    };
-
-    ledgers
-      .insert_many(vec![first_entry, tail_entry], None)
-      .await?;
-
-    Ok(MongoCosmosLedgerStore {
+    let ledger_store = MongoCosmosLedgerStore {
       view_handle,
       client: cosmos_client,
-      dbname: nimble_db_name,
-    })
+      dbname: nimble_db_name.clone(),
+    };
+
+    // Check if the view ledger exists
+    let res = ledger_store.read_view_ledger_tail().await;
+    if let Err(error) = res {
+      match error {
+        LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
+          // Initialized view ledger's entry
+          let entry = SerializedLedgerEntry {
+            block: Block::new(&[0; 0]).to_bytes(),
+            index: 0_u64,
+            receipt: Receipt::default().to_bytes(),
+          };
+
+          let bson_entry: Binary = bincode::serialize(&entry)
+            .expect("failed to serialize entry")
+            .to_bson_binary();
+
+          let tail_entry = DBEntry {
+            key: view_handle.to_bson_binary(),
+            value: bson_entry.clone(),
+            tail: true,
+          };
+
+          // This is the same as above, but this is basically the copy that will be stored
+          // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
+          let mut view_handle_with_index = view_handle.to_bytes();
+          view_handle_with_index.extend(0usize.to_le_bytes()); // "to_le" converts to little endian
+
+          let first_entry = DBEntry {
+            key: view_handle_with_index.to_bson_binary(),
+            value: bson_entry,
+            tail: false,
+          };
+
+          ledger_store
+            .client
+            .database(&nimble_db_name)
+            .collection::<DBEntry>("ledgers")
+            .insert_many(vec![first_entry, tail_entry], None)
+            .await?;
+        },
+        _ => {
+          return Err(error);
+        },
+      }
+    }
+
+    Ok(ledger_store)
   }
 }
 
@@ -420,6 +432,36 @@ async fn read_ledger_op(
   Ok(res)
 }
 
+async fn find_ledger_height(
+  id: Binary,
+  ledgers: &Collection<DBEntry>,
+) -> Result<usize, LedgerStoreError> {
+  let res = ledgers
+    .find_one(
+      doc! {
+          "_id": id,
+      },
+      None,
+    )
+    .await;
+  if let Err(error) = res {
+    return Err(LedgerStoreError::MongoDBError(error));
+  }
+  let ledger_entry = match res.unwrap() {
+    None => {
+      return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
+    },
+    Some(s) => s,
+  };
+
+  // 2. Recover the contents of the ledger entry
+  let bson_entry: &Binary = &ledger_entry.value;
+  let entry: SerializedLedgerEntry =
+    bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
+
+  Ok(entry.index as usize)
+}
+
 const RETRY_SLEEP: u64 = 10; // ms
 const WRITE_CONFLICT_CODE: i32 = 112;
 const REQUEST_RATE_TOO_HIGH_CODE: i32 = 16500;
@@ -556,7 +598,17 @@ impl LedgerStore for MongoCosmosLedgerStore {
   }
 
   async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
-    self.read_ledger_tail(&self.view_handle).await
+    let client = self.client.clone();
+    let ledgers = client
+      .database(&self.dbname)
+      .collection::<DBEntry>("ledgers");
+
+    let res = find_ledger_height(self.view_handle.to_bson_binary(), &ledgers).await;
+    if let Err(error) = res {
+      return Err(error);
+    }
+    let index = res.unwrap();
+    self.read_ledger_by_index(&self.view_handle, index).await
   }
 
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {

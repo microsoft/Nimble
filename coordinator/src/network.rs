@@ -1,7 +1,7 @@
 use crate::errors::CoordinatorError;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  CustomSerde, Handle, LedgerView, MetaBlock, NimbleDigest, Nonce, Receipt,
+  CustomSerde, EndorserHostnames, Handle, LedgerView, MetaBlock, NimbleDigest, Nonce, Receipt,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -20,9 +20,11 @@ use endorser_proto::{
   ReadLatestViewLedgerReq, ReadLatestViewLedgerResp, UnlockReq,
 };
 
+type EndorserConnMap = HashMap<Vec<u8>, (EndorserCallClient<Channel>, String)>;
+
 #[derive(Debug, Default)]
 pub struct ConnectionStore {
-  store: Arc<RwLock<HashMap<Vec<u8>, EndorserCallClient<Channel>>>>,
+  store: Arc<RwLock<EndorserConnMap>>,
 }
 
 impl ConnectionStore {
@@ -38,39 +40,58 @@ impl ConnectionStore {
       .read()
       .expect("Failed to get the read lock")
       .iter()
-      .map(|(pk, _ec)| pk.clone())
+      .map(|(pk, (_ec, _hostname))| pk.clone())
       .collect::<Vec<Vec<u8>>>()
   }
 
-  pub async fn connect_endorser(&mut self, hostname: String) -> Result<Vec<u8>, CoordinatorError> {
-    let res = Endpoint::from_shared(hostname.to_string());
-    if res.is_err() {
-      return Err(CoordinatorError::CannotResolveHostName);
+  pub fn get_endorser_hostnames(&self) -> EndorserHostnames {
+    EndorserHostnames {
+      pk_hostnames: self
+        .store
+        .read()
+        .expect("Failed to get the read lock")
+        .iter()
+        .map(|(pk, (_ec, hostname))| (pk.clone(), hostname.clone()))
+        .collect::<Vec<(Vec<u8>, String)>>(),
     }
-    let endorser_endpoint = res.unwrap();
-    let channel = endorser_endpoint.connect_lazy();
-    let mut client = EndorserCallClient::new(channel);
+  }
 
-    let req = tonic::Request::new(GetPublicKeyReq {});
-    let res = client.get_public_key(req).await;
-    if res.is_err() {
-      return Err(CoordinatorError::FailedToConnectToEndorser);
-    }
-    let GetPublicKeyResp { pk } = res.unwrap().into_inner();
-    println!("Connected Successfully to {:?}", &hostname);
+  pub async fn connect_endorsers(
+    &mut self,
+    hostnames: &[String],
+  ) -> Result<Vec<Vec<u8>>, CoordinatorError> {
+    let mut pks = Vec::new();
+    for hostname in hostnames {
+      let res = Endpoint::from_shared(hostname.to_string());
+      if res.is_err() {
+        return Err(CoordinatorError::CannotResolveHostName);
+      }
+      let endorser_endpoint = res.unwrap();
+      let channel = endorser_endpoint.connect_lazy();
+      let mut client = EndorserCallClient::new(channel);
 
-    let res = PublicKey::from_bytes(&pk);
-    if res.is_err() {
-      return Err(CoordinatorError::UnableToRetrievePublicKey);
-    }
+      let req = tonic::Request::new(GetPublicKeyReq {});
+      let res = client.get_public_key(req).await;
+      if res.is_err() {
+        return Err(CoordinatorError::FailedToConnectToEndorser);
+      }
+      let GetPublicKeyResp { pk } = res.unwrap().into_inner();
+      println!("Connected Successfully to {:?}", &hostname);
 
-    if let Ok(mut conn_map) = self.store.write() {
-      conn_map.insert(pk.clone(), client);
-    } else {
-      eprintln!("Failed to acquire the write lock");
-      return Err(CoordinatorError::FailedToAcquireWriteLock);
+      let res = PublicKey::from_bytes(&pk);
+      if res.is_err() {
+        return Err(CoordinatorError::UnableToRetrievePublicKey);
+      }
+
+      if let Ok(mut conn_map) = self.store.write() {
+        conn_map.insert(pk.clone(), (client, hostname.to_string()));
+      } else {
+        eprintln!("Failed to acquire the write lock");
+        return Err(CoordinatorError::FailedToAcquireWriteLock);
+      }
+      pks.push(pk);
     }
-    Ok(pk)
+    Ok(pks)
   }
 
   pub async fn initialize_state(
@@ -96,7 +117,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let ledger_tail_map = ledger_tail_map_proto.clone();
         let view_tail_metablock = ledger_view.view_tail_metablock.to_bytes().to_vec();
         let block_hash = block_hash.to_bytes();
@@ -160,7 +181,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let handle = *ledger_handle;
         let pk_bytes = pk.clone();
         let job = tokio::spawn(async move {
@@ -220,7 +241,7 @@ impl ConnectionStore {
         if !conn_map.contains_key(pk) {
           return Err(Status::aborted("No endorser has this public key"));
         } else {
-          let mut endorser_client = conn_map[pk].clone();
+          let mut endorser_client = conn_map[pk].0.clone();
           let handle = *ledger_handle;
           let block = *block_hash;
           tokio::spawn(async move {
@@ -262,7 +283,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let handle = *ledger_handle;
         let block = *block_hash;
         let pk_bytes = pk.clone();
@@ -343,7 +364,7 @@ impl ConnectionStore {
     client_nonce: &Nonce,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (pk, ec) in self
+    for (pk, (ec, _hostname)) in self
       .store
       .read()
       .expect("Failed to get the read lock")
@@ -406,7 +427,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let block = *block_hash;
         let pk_bytes = pk.clone();
         let job = tokio::spawn(async move {
@@ -459,7 +480,7 @@ impl ConnectionStore {
     client_nonce: &Nonce,
   ) -> Result<Receipt, CoordinatorError> {
     let mut jobs = Vec::new();
-    for (pk, ec) in self
+    for (pk, (ec, _hostname)) in self
       .store
       .read()
       .expect("Failed to get the read lock")
@@ -519,7 +540,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let pk_bytes = pk.clone();
         let job = tokio::spawn(async move {
           let response = endorser_client
@@ -577,7 +598,7 @@ impl ConnectionStore {
           eprintln!("No endorser has this public key {:?}", pk);
           return Err(CoordinatorError::InvalidEndorserPublicKey);
         }
-        let mut endorser_client = conn_map[pk].clone();
+        let mut endorser_client = conn_map[pk].0.clone();
         let job = tokio::spawn(async move {
           let response = endorser_client
             .unlock(tonic::Request::new(UnlockReq {}))

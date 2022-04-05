@@ -2,8 +2,8 @@ mod errors;
 
 use crate::errors::VerificationError;
 use ledger::{
-  signature::{CryptoError, PublicKey, PublicKeyTrait},
-  Block, CustomSerde, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  signature::{PublicKey, PublicKeyTrait},
+  Block, CustomSerde, EndorserHostnames, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -40,38 +40,29 @@ impl VerifierState {
     receipt_bytes: &[u8],
   ) -> Result<(), VerificationError> {
     // parse the block to obtain the full list of the public keys for the proposed latest view
-    let pk_vec_for_proposed_latest_view = {
-      let pk_in_bytes = PublicKey::num_bytes();
-      let pk_vec_bytes = block_bytes;
+    let res = bincode::deserialize(block_bytes);
+    if res.is_err() {
+      eprintln!("Failed to deserialize the view genesis block {:?}", res);
+      return Err(VerificationError::InvalidGenesisBlock);
+    }
+    let endorsers: EndorserHostnames = res.unwrap();
+    let mut pk_vec_for_proposed_latest_view = Vec::new();
+    for idx in 0..endorsers.pk_hostnames.len() {
+      pk_vec_for_proposed_latest_view
+        .push(PublicKey::from_bytes(&endorsers.pk_hostnames[idx].0).unwrap());
+    }
 
-      // check that there is at least one public key
-      if pk_vec_bytes.len() < pk_in_bytes || pk_vec_bytes.len() % pk_in_bytes != 0 {
-        Err(VerificationError::IncorrectLength)
-      } else {
-        // parse the public keys into a vector collecting an error if parsing fails
-        let res = (0..pk_vec_bytes.len() / pk_in_bytes)
-          .map(|i| PublicKey::from_bytes(&pk_vec_bytes[i * pk_in_bytes..(i + 1) * pk_in_bytes]))
-          .collect::<Result<Vec<PublicKey>, CryptoError>>();
-
-        if let Ok(pk_vec) = res {
-          // check that the public keys are unique and there are at least `MIN_NUM_ENDORSERS`
-          if pk_vec.len()
-            != pk_vec
-              .iter()
-              .map(|pk| pk.to_bytes())
-              .collect::<HashSet<_>>()
-              .len()
-            || pk_vec.len() < MIN_NUM_ENDORSERS
-          {
-            Err(VerificationError::DuplicateIds)
-          } else {
-            Ok(pk_vec)
-          }
-        } else {
-          Err(VerificationError::InvalidGenesisBlock)
-        }
-      }
-    }?;
+    // check that the public keys are unique and there are at least `MIN_NUM_ENDORSERS`
+    if pk_vec_for_proposed_latest_view.len()
+      != pk_vec_for_proposed_latest_view
+        .iter()
+        .map(|pk| pk.to_bytes())
+        .collect::<HashSet<_>>()
+        .len()
+      || pk_vec_for_proposed_latest_view.len() < MIN_NUM_ENDORSERS
+    {
+      return Err(VerificationError::DuplicateIds);
+    }
 
     let res = Receipt::from_bytes(receipt_bytes);
     if res.is_err() {

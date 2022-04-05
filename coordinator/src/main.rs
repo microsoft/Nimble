@@ -9,7 +9,8 @@ use ledger::{
   store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore},
 };
 use ledger::{
-  Block, CustomSerde, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce, Receipt,
+  Block, CustomSerde, EndorserHostnames, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait,
+  Nonce, Receipt,
 };
 use std::collections::{HashMap, HashSet};
 use tonic::transport::Server;
@@ -36,8 +37,11 @@ pub struct CoordinatorState {
 pub struct CallServiceStub {}
 
 impl CoordinatorState {
-  pub async fn new(ledger_store_type: &str, args: &HashMap<String, String>) -> Self {
-    match ledger_store_type {
+  pub async fn new(
+    ledger_store_type: &str,
+    args: &HashMap<String, String>,
+  ) -> Result<CoordinatorState, CoordinatorError> {
+    let mut coordinator = match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
         connections: ConnectionStore::new(),
         ledger_store: Box::new(MongoCosmosLedgerStore::new(args).await.unwrap()),
@@ -46,7 +50,37 @@ impl CoordinatorState {
         connections: ConnectionStore::new(),
         ledger_store: Box::new(InMemoryLedgerStore::new()),
       },
+    };
+
+    let res = coordinator.ledger_store.read_view_ledger_tail().await;
+    if res.is_err() {
+      eprintln!("Failed to read the view ledger tail {:?}", res);
+      return Err(CoordinatorError::FailedToReadViewLedger);
     }
+
+    let view_ledger_tail = res.unwrap();
+    if view_ledger_tail.receipt.get_height() > 0 {
+      let res = bincode::deserialize(&view_ledger_tail.block.to_bytes());
+      if res.is_err() {
+        eprintln!(
+          "Failed to deserialize the view ledger tail's genesis block {:?}",
+          res
+        );
+        return Err(CoordinatorError::FailedToSerde);
+      }
+      let endorser_hostnames: EndorserHostnames = res.unwrap();
+
+      let hostnames = (0..endorser_hostnames.pk_hostnames.len())
+        .map(|i| endorser_hostnames.pk_hostnames[i].1.clone())
+        .collect::<Vec<String>>();
+      let res = coordinator.connections.connect_endorsers(&hostnames).await;
+      if res.is_err() {
+        eprintln!("Failed to connect to endorsers {:?}", res);
+        return Err(CoordinatorError::FailedToConnectToEndorser);
+      }
+      // TODO: what if endorser's state is not in sync with ledger store?
+    }
+    Ok(coordinator)
   }
 
   async fn update_endorser(
@@ -183,7 +217,7 @@ impl CoordinatorState {
     Ok(max_cut)
   }
 
-  pub async fn add_endorsers(&mut self, hostnames: Vec<&str>) -> Result<(), CoordinatorError> {
+  pub async fn add_endorsers(&mut self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     let existing_endorsers = self.connections.get_all();
     let ledger_view = {
       if existing_endorsers.is_empty() {
@@ -214,24 +248,23 @@ impl CoordinatorState {
       }
     };
 
-    let mut new_endorsers = Vec::new();
-    // Connect to endorsers in series. TODO: Make these requests async and concurrent
-    for hostname in hostnames {
-      let res = self
-        .connections
-        .connect_endorser(hostname.to_string())
-        .await;
-      if res.is_err() {
-        eprintln!("Failed to connect to {} ({:?})", hostname, res.unwrap_err());
-        return Err(CoordinatorError::FailedToConnectToEndorser);
-      }
-      new_endorsers.push(res.unwrap());
+    // Connect to endorsers
+    let res = self.connections.connect_endorsers(hostnames).await;
+    if res.is_err() {
+      eprintln!("Failed to connect to endorsers {:?}", res);
+      return Err(CoordinatorError::FailedToConnectToEndorser);
     }
+    let new_endorsers = res.unwrap();
 
-    let endorser_pk_vec = self.connections.get_all();
+    let endorser_pk_hostnames = self.connections.get_endorser_hostnames();
     // Package the list of endorsers into a genesis block of the view ledger
     let view_ledger_genesis_block = {
-      let block_vec = endorser_pk_vec.into_iter().flatten().collect::<Vec<u8>>();
+      let res = bincode::serialize(&endorser_pk_hostnames);
+      if res.is_err() {
+        eprintln!("Failed to serialize endorser hostnames {:?}", res);
+        return Err(CoordinatorError::FailedToSerde);
+      }
+      let block_vec = res.unwrap();
       Block::new(&block_vec)
     };
 
@@ -678,7 +711,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let port_number = cli_matches.value_of("port").unwrap();
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
-  let endorser_hostnames: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+  let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+  let endorser_hostnames = (0..str_vec.len())
+    .map(|i| str_vec[i].to_string())
+    .collect::<Vec<String>>();
   println!("Endorser_hostnames: {:?}", endorser_hostnames);
 
   let mut ledger_store_args = HashMap::<String, String>::new();
@@ -688,8 +724,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Some(x) = cli_matches.value_of("nimbledb") {
     ledger_store_args.insert(String::from("NIMBLE_DB"), x.to_string());
   }
-  let mut server = CoordinatorState::new(store, &ledger_store_args).await;
-  let res = server.add_endorsers(endorser_hostnames).await;
+  let res = CoordinatorState::new(store, &ledger_store_args).await;
+  assert!(res.is_ok());
+  let mut server = res.unwrap();
+  let res = server.add_endorsers(&endorser_hostnames).await;
   assert!(res.is_ok());
   println!("Running gRPC Coordinator Service at {:?}", addr);
 
@@ -726,10 +764,6 @@ mod tests {
     fn drop(&mut self) {
       self.child.kill().expect("failed to kill a child process");
     }
-  }
-
-  struct BoxCoordinator {
-    pub coordinator: CoordinatorState,
   }
 
   #[tokio::test]
@@ -801,29 +835,36 @@ mod tests {
     }
 
     // Create the coordinator
-    let mut box_coordinator = BoxCoordinator {
-      coordinator: CoordinatorState::new(&store, &ledger_store_args).await,
-    };
-    let coordinator = &mut box_coordinator.coordinator;
-    let res = coordinator.add_endorsers(vec!["http://[::1]:9090"]).await;
+    let mut coordinator = CoordinatorState::new(&store, &ledger_store_args)
+      .await
+      .unwrap();
+
+    let res = coordinator
+      .add_endorsers(&["http://[::1]:9090".to_string()])
+      .await;
     assert!(res.is_ok());
 
     // Initialization: Fetch view ledger to build VerifierState
     let mut vs = VerifierState::new();
 
-    let req = tonic::Request::new(ReadViewByIndexReq {
-      index: 1, // the first entry on the view ledger starts at 1
-    });
+    let mut view_height: usize = 0;
+    loop {
+      let req = tonic::Request::new(ReadViewByIndexReq {
+        index: (view_height + 1) as u64,
+      });
 
-    let ReadViewByIndexResp { block, receipt } = coordinator
-      .read_view_by_index(req)
-      .await
-      .unwrap()
-      .into_inner();
+      let res = coordinator.read_view_by_index(req).await;
+      if res.is_err() {
+        break;
+      }
 
-    let res = vs.apply_view_change(&block, &receipt);
-    println!("Applying ReadViewByIndexResp Response: {:?}", res);
-    assert!(res.is_ok());
+      let ReadViewByIndexResp { block, receipt } = res.unwrap().into_inner();
+      let res = vs.apply_view_change(&block, &receipt);
+      println!("Applying ReadViewByIndexResp Response: {:?}", res);
+      assert!(res.is_ok());
+
+      view_height += 1;
+    }
 
     // Step 0: Create some app data
     let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -964,12 +1005,15 @@ mod tests {
       }
     }
 
-    let res = coordinator.add_endorsers(vec!["http://[::1]:9091"]).await;
+    let res = coordinator
+      .add_endorsers(&["http://[::1]:9091".to_string()])
+      .await;
     println!("Added a new endorser: {:?}", res);
     assert!(res.is_ok());
 
+    view_height += 1;
     let req = tonic::Request::new(ReadViewByIndexReq {
-      index: 2, // the first entry on the view ledger starts at 1
+      index: view_height as u64, // the first entry on the view ledger starts at 1
     });
 
     let ReadViewByIndexResp { block, receipt } = coordinator
@@ -1059,12 +1103,15 @@ mod tests {
       }
     }
 
-    let res = coordinator.add_endorsers(vec!["http://[::1]:9092"]).await;
+    let res = coordinator
+      .add_endorsers(&["http://[::1]:9092".to_string()])
+      .await;
     println!("Added a new endorser: {:?}", res);
     assert!(res.is_ok());
 
+    view_height += 1;
     let req = tonic::Request::new(ReadViewByIndexReq {
-      index: 3, // the first entry on the view ledger starts at 1
+      index: view_height as u64, // the first entry on the view ledger starts at 1
     });
 
     let ReadViewByIndexResp { block, receipt } = coordinator
@@ -1109,7 +1156,28 @@ mod tests {
     println!("Append verification no condition: {:?}", res.is_ok());
     assert!(res.is_ok());
 
-    // Step 13: query the state of endorsers
+    if store != "memory" {
+      // Step 13: start a new coordinator
+      let coordinator2 = CoordinatorState::new(&store, &ledger_store_args)
+        .await
+        .unwrap();
+
+      // Step 14: Append without a condition via the new coordinator
+      let message = "no_condition_data_block_append 4".as_bytes();
+      let req = tonic::Request::new(AppendReq {
+        handle: new_handle.clone(),
+        block: message.to_vec(),
+        expected_height: 0_u64,
+      });
+
+      let AppendResp { receipt } = coordinator2.append(req).await.unwrap().into_inner();
+
+      let res = verify_append(&vs, message, 0, &receipt);
+      println!("Append verification no condition: {:?}", res.is_ok());
+      assert!(res.is_ok());
+    }
+
+    // Step 15: query the state of endorsers
     let _pk_ledger_views = coordinator.query_endorsers().await.unwrap();
 
     // We access endorser and endorser2 below
