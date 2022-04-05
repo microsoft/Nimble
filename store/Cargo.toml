@@ -19,6 +19,7 @@ bson = "*"
 mongodb = "2.1.0"
 async-trait = "*"
 tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
+hex = "0.4.3"
 
 [features]
 default = ["full_ledger"]

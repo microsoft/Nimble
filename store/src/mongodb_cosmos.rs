@@ -10,6 +10,7 @@ use mongodb::{Client, Collection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use hex;
 
 macro_rules! with_retry {
   ($x:expr, $write_retry:expr) => {
@@ -168,7 +169,7 @@ impl MongoCosmosLedgerStore {
           ledger_store
             .client
             .database(&nimble_db_name)
-            .collection::<DBEntry>("ledgers")
+            .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()))
             .insert_many(vec![first_entry, tail_entry], None)
             .await?;
         },
@@ -206,7 +207,7 @@ async fn find_db_entry(
   Ok(db_entry)
 }
 
-async fn append_ledger_transaction(
+async fn append_ledger_op(
   handle: &Handle,
   block: &Block,
   expected_height: usize,
@@ -279,7 +280,7 @@ async fn append_ledger_transaction(
   Ok(())
 }
 
-async fn attach_ledger_receipt_transaction(
+async fn attach_ledger_receipt_op(
   handle_with_index: &[u8],
   receipt: &Receipt,
   ledgers: &Collection<DBEntry>,
@@ -332,8 +333,8 @@ async fn attach_ledger_receipt_transaction(
   Ok(())
 }
 
-async fn create_ledger_transaction(
-  handle: &NimbleDigest,
+async fn create_ledger_op(
+  handle: &Handle,
   genesis_block: &Block,
   first_block: &Block,
   ledgers: &Collection<DBEntry>,
@@ -376,7 +377,7 @@ async fn create_ledger_transaction(
     tail: false,
   };
 
-  // 3. If we are keeping the full state of the ledger (including intermediaries)
+  // 4. If we are keeping the full state of the ledger (including intermediaries)
   let mut handle_with_index_1 = handle.to_bytes();
   handle_with_index_1.extend(1_u64.to_le_bytes()); // to_le is little endian
 
@@ -467,17 +468,17 @@ const REQUEST_RATE_TOO_HIGH_CODE: i32 = 16500;
 impl LedgerStore for MongoCosmosLedgerStore {
   async fn create_ledger(
     &self,
-    handle: &NimbleDigest,
-    genesis_block: Block,
-    first_block: Block,
+    handle: &Handle,
+    genesis_block: &Block,
+    first_block: &Block,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(create_ledger_transaction(block, &genesis_block, &first_block, &ledgers).await, false);
+      with_retry!(create_ledger_op(handle, &genesis_block, &first_block, &ledgers).await, false);
     }
   }
 
@@ -490,11 +491,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     loop {
       with_retry!(
-        append_ledger_transaction(handle, block, expected_height, &ledgers).await,
+        append_ledger_op(handle, block, expected_height, &ledgers).await,
         true
       );
     }
@@ -511,11 +512,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
       with_retry!(
-        attach_ledger_receipt_transaction(&handle_with_index, receipt, &ledgers,)
+        attach_ledger_receipt_op(&handle_with_index, receipt, &ledgers,)
           .await,
         false
       );
@@ -526,7 +527,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
       with_retry!(read_ledger_op(handle.to_bson_binary(), &ledgers).await, false);
@@ -545,7 +546,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     let mut handle_with_index = handle.to_bytes();
     let idx_u64 = idx as u64;
@@ -560,7 +561,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
 
     let res = find_ledger_height(self.view_handle.to_bson_binary(), &ledgers).await;
     if let Err(error) = res {
@@ -586,11 +587,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
+      .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
 
     loop {
       with_retry!(
-        append_ledger_transaction(
+        append_ledger_op(
           &self.view_handle,
           block,
           expected_height,
@@ -604,11 +605,9 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    client
       .database(&self.dbname)
-      .collection::<DBEntry>("ledgers");
-    ledgers
-      .delete_many(doc! {}, None)
+      .drop(None)
       .await
       .expect("failed to delete ledgers");
 
