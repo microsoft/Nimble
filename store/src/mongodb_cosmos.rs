@@ -5,13 +5,14 @@ use bincode;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
+use mongodb::error::WriteFailure::WriteError;
 use mongodb::{Client, Collection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
 macro_rules! with_retry {
-  ($x:expr) => {
+  ($x:expr, $write_retry:expr) => {
     match $x {
       Err(error) => match error {
         LedgerStoreError::MongoDBError(mongodb_error) => {
@@ -26,6 +27,15 @@ macro_rules! with_retry {
                   return Err(LedgerStoreError::MongoDBError(mongodb_error));
                 }
               },
+              mongodb::error::ErrorKind::Write(WriteError(write_error)) => {
+                  if write_error.code == DUPLICATE_KEY_CODE {
+                     if $write_retry {
+                        continue;
+                     } else {
+                        return Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey));
+                     }
+                  }
+              }
               _ => {
                 return Err(LedgerStoreError::MongoDBError(mongodb_error));
               },
@@ -450,6 +460,7 @@ async fn find_ledger_height(
 
 const RETRY_SLEEP: u64 = 50; // ms
 const WRITE_CONFLICT_CODE: i32 = 112;
+const DUPLICATE_KEY_CODE: i32 = 11000;
 const REQUEST_RATE_TOO_HIGH_CODE: i32 = 16500;
 
 #[async_trait]
@@ -466,7 +477,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>("ledgers");
 
     loop {
-     with_retry!(create_ledger_transaction(handle, &genesis_block, &first_block, &ledgers).await);
+      with_retry!(create_ledger_transaction(block, &genesis_block, &first_block, &ledgers).await, false);
     }
   }
 
@@ -483,7 +494,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        append_ledger_transaction(handle, block, expected_height, &ledgers).await
+        append_ledger_transaction(handle, block, expected_height, &ledgers).await,
+        true
       );
     }
   }
@@ -504,7 +516,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
     loop {
       with_retry!(
         attach_ledger_receipt_transaction(&handle_with_index, receipt, &ledgers,)
-          .await
+          .await,
+        false
       );
     }
   }
@@ -516,7 +529,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>("ledgers");
 
     loop {
-      with_retry!(read_ledger_op(handle.to_bson_binary(), &ledgers).await);
+      with_retry!(read_ledger_op(handle.to_bson_binary(), &ledgers).await, false);
     }
   }
 
@@ -539,7 +552,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle_with_index.extend(idx_u64.to_le_bytes()); // "to_le" converts to little endian
 
     loop {
-      with_retry!(read_ledger_op(handle_with_index.to_bson_binary(), &ledgers).await);
+      with_retry!(read_ledger_op(handle_with_index.to_bson_binary(), &ledgers).await, false);
     }
   }
 
@@ -583,7 +596,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
           expected_height,
           &ledgers,
         )
-        .await
+        .await,
+        true
       );
     }
   }
