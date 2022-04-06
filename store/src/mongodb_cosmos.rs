@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use hex;
+use std::convert::TryFrom;
 
 macro_rules! with_retry {
   ($x:expr, $write_retry:expr) => {
@@ -78,22 +79,20 @@ impl BsonBinaryData for Handle {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
-  pub index: u64,
   pub receipt: Vec<u8>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct DBEntry {
   #[serde(rename = "_id")]
-  key: Binary,
+  index: i64,
   value: Binary, // SerializedLedgerEntry
-  tail: bool,
 }
 
 #[derive(Debug)]
 pub struct MongoCosmosLedgerStore {
-  view_handle: Handle,
   client: Client,
+  view_handle: Handle,
   dbname: String,
 }
 
@@ -128,20 +127,22 @@ impl MongoCosmosLedgerStore {
       );
 
     let ledger_store = MongoCosmosLedgerStore {
-      view_handle,
       client: cosmos_client,
       dbname: nimble_db_name.clone(),
+      view_handle
     };
+
+
 
     // Check if the view ledger exists
     let res = ledger_store.read_view_ledger_tail().await;
     if let Err(error) = res {
       match error {
         LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
+
           // Initialized view ledger's entry
           let entry = SerializedLedgerEntry {
             block: Block::new(&[0; 0]).to_bytes(),
-            index: 0_u64,
             receipt: Receipt::default().to_bytes(),
           };
 
@@ -150,27 +151,15 @@ impl MongoCosmosLedgerStore {
             .to_bson_binary();
 
           let tail_entry = DBEntry {
-            key: view_handle.to_bson_binary(),
+            index: 0_i64, 
             value: bson_entry.clone(),
-            tail: true,
-          };
-
-          // This is the same as above, but this is basically the copy that will be stored
-          // at index 0, whereas the above is stored at the tail (referenced by the view_handle)
-          let mut view_handle_with_index = view_handle.to_bytes();
-          view_handle_with_index.extend(0usize.to_le_bytes()); // "to_le" converts to little endian
-
-          let first_entry = DBEntry {
-            key: view_handle_with_index.to_bson_binary(),
-            value: bson_entry,
-            tail: false,
           };
 
           ledger_store
             .client
             .database(&nimble_db_name)
             .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()))
-            .insert_many(vec![first_entry, tail_entry], None)
+            .insert_one(tail_entry, None)
             .await?;
         },
         _ => {
@@ -184,13 +173,13 @@ impl MongoCosmosLedgerStore {
 }
 
 async fn find_db_entry(
-  ledgers: &Collection<DBEntry>,
-  id: Binary,
+  ledger: &Collection<DBEntry>,
+  index: i64,
 ) -> Result<DBEntry, LedgerStoreError> {
-  let res = ledgers
+  let res = ledger
     .find_one(
       doc! {
-          "_id": id,
+          "_id": index,
       },
       None,
     )
@@ -208,22 +197,15 @@ async fn find_db_entry(
 }
 
 async fn append_ledger_op(
-  handle: &Handle,
   block: &Block,
-  expected_height: usize,
-  ledgers: &Collection<DBEntry>,
+  expected_height: Option<usize>,
+  ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
 
-  // 1. Check to see if the ledgers contain the handle and get last entry
-  let last_data_entry: DBEntry = find_db_entry(ledgers, handle.to_bson_binary()).await?;
-
-  // 2. Recover the contents of the ledger entry and check condition
-  let bson_last_data_entry: &Binary = &last_data_entry.value;
-  let last_data_entry: SerializedLedgerEntry = bincode::deserialize(&bson_last_data_entry.bytes)
-    .expect("failed to deserialize last data entry");
+  let height = find_ledger_height(ledger).await?;
 
   let height_plus_one = {
-    let res = last_data_entry.index.checked_add(1);
+    let res = height.checked_add(1);
     if res.is_none() {
       return Err(LedgerStoreError::LedgerError(
         StorageError::LedgerHeightOverflow,
@@ -232,16 +214,18 @@ async fn append_ledger_op(
     res.unwrap()
   };
 
-  if expected_height != 0 && expected_height as u64 != height_plus_one {
-    return Err(LedgerStoreError::LedgerError(
-      StorageError::IncorrectConditionalData,
-    ));
+  // 2. If it is a conditional update, check if condition still holds
+  if expected_height.is_some() && 
+      i64::try_from(expected_height.unwrap()).expect("potential integer overflow") 
+      != height_plus_one {
+        return Err(LedgerStoreError::LedgerError(
+            StorageError::IncorrectConditionalData,
+        ));
   }
 
-  // 3. Construct the new entry we are going to append to data ledger
+  // 3. Construct the new entry we are going to append to the ledger
   let new_ledger_entry = SerializedLedgerEntry {
     block: block.to_bytes(),
-    index: height_plus_one,
     receipt: Receipt::default().to_bytes(),
   };
 
@@ -249,48 +233,31 @@ async fn append_ledger_op(
     .expect("failed to serialized new ledger entry")
     .to_bson_binary();
 
-  // 4. Keep intermediate state by inserting it under appropriate index
-  let mut handle_with_index = handle.to_bytes();
-  handle_with_index.extend(height_plus_one.to_le_bytes());
-
   let new_entry = DBEntry {
-    key: handle_with_index.to_bson_binary(), // handle = handle || idx
+    index: height_plus_one,
     value: bson_new_ledger_entry.clone(),
-    tail: false,
   };
 
-  ledgers
+  // 4. Try to insert the new entry into the ledger.
+  // If it fails, caller must retry.
+  ledger
     .insert_one(new_entry, None)
-    .await?;
-
-
-  // 5. Set the value new_ledger_entry as the tail.
-  ledgers
-    .update_one(
-      doc! {
-         "_id": handle.to_bson_binary(),
-      },
-      doc! {
-          "$set": {"value": bson_new_ledger_entry},
-      },
-      None,
-    )
     .await?;
 
   Ok(())
 }
 
 async fn attach_ledger_receipt_op(
-  handle_with_index: &[u8],
+  index: i64,
   receipt: &Receipt,
-  ledgers: &Collection<DBEntry>,
+  ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
   // 1. Get the ledger's latest entry
 
-  // 1a. Find the appropriate entry in the ledger if the ledger is full
+  // 1a. Find the appropriate entry in the ledger
   let ledger_entry: DBEntry = find_db_entry(
-    ledgers,
-    handle_with_index.to_vec().to_bson_binary(),
+    ledger,
+    index
   )
   .await?;
 
@@ -300,7 +267,8 @@ async fn attach_ledger_receipt_op(
     .expect("failed to deserialize ledger entry");
 
   // 3. Assert the fetched block is the right one
-  assert_eq!(ledger_entry.index, receipt.get_height() as u64);
+  let entry_height = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
+  assert_eq!(index, entry_height); 
 
   // 4. Update receipt
   let mut new_receipt =
@@ -318,10 +286,10 @@ async fn attach_ledger_receipt_op(
     .expect("failed to serialized ledger entry")
     .to_bson_binary();
 
-  ledgers
+  ledger
     .update_one(
       doc! {
-          "_id": handle_with_index.to_vec().to_bson_binary(),
+          "_id": index,
       },
       doc! {
           "$set": {"value": write_bson_ledger_entry},
@@ -334,21 +302,19 @@ async fn attach_ledger_receipt_op(
 }
 
 async fn create_ledger_op(
-  handle: &Handle,
   genesis_block: &Block,
   first_block: &Block,
-  ledgers: &Collection<DBEntry>,
+  ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
+
   // 1. Create the ledger entry that we will add to the brand new ledger
   let init_data_ledger_entry = SerializedLedgerEntry {
     block: genesis_block.to_bytes(),
-    index: 0_u64,
     receipt: Receipt::default().to_bytes(),
   };
 
   let first_data_ledger_entry = SerializedLedgerEntry {
     block: first_block.to_bytes(),
-    index: 1_u64,
     receipt: Receipt::default().to_bytes(),
   };
 
@@ -360,55 +326,42 @@ async fn create_ledger_op(
     .expect("failed to serialize data ledger entry")
     .to_bson_binary();
 
-  // 2. Add new ledger tail to database under its handle
-  let tail_entry = DBEntry {
-    key: handle.to_bson_binary(),
-    value: bson_first_data_ledger_entry.clone(),
-    tail: true,
-  };
-
-  // 3. If we are keeping the full state of the ledger (including intermediaries)
-  let mut handle_with_index_0 = handle.to_bytes();
-  handle_with_index_0.extend(0_u64.to_le_bytes()); // to_le is little endian
-
+  // 2. init data entry
   let init_entry = DBEntry {
-    key: handle_with_index_0.to_bson_binary(), // handle = handle || idx (which is 0)
+    index: 0, 
     value: bson_init_data_ledger_entry,
-    tail: false,
   };
 
-  // 4. If we are keeping the full state of the ledger (including intermediaries)
-  let mut handle_with_index_1 = handle.to_bytes();
-  handle_with_index_1.extend(1_u64.to_le_bytes()); // to_le is little endian
-
+  // 3. first data entry
   let first_entry = DBEntry {
-    key: handle_with_index_1.to_bson_binary(), // handle = handle || idx (which is 0)
+    index: 1,
     value: bson_first_data_ledger_entry,
-    tail: false,
   };
 
-  ledgers
-    .insert_many(&vec![tail_entry, init_entry, first_entry], None)
+  ledger
+    .insert_many(&vec![first_entry, init_entry], None)
     .await?;
   Ok(())
 }
 
 async fn read_ledger_op(
-  id: Binary,
-  ledgers: &Collection<DBEntry>,
+  index: i64,
+  ledger: &Collection<DBEntry>,
 ) -> Result<LedgerEntry, LedgerStoreError> {
-  // Find the latest value of view associated with the provided key.
-  let res = ledgers
+  // Find the latest value of view associated with the provided index.
+  let res = ledger
     .find_one(
       doc! {
-          "_id": id,
+          "_id": index,
       },
       None,
     )
     .await;
+
   if let Err(error) = res {
     return Err(LedgerStoreError::MongoDBError(error));
   }
+
   let ledger_entry = match res.unwrap() {
     None => {
       return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
@@ -430,33 +383,20 @@ async fn read_ledger_op(
 }
 
 async fn find_ledger_height(
-  id: Binary,
-  ledgers: &Collection<DBEntry>,
-) -> Result<usize, LedgerStoreError> {
-  let res = ledgers
-    .find_one(
-      doc! {
-          "_id": id,
-      },
-      None,
-    )
-    .await;
+  ledger: &Collection<DBEntry>,
+) -> Result<i64, LedgerStoreError> {
+
+  // There are two methods for computing height estimated_document_count returns 
+  // height from metadata stored in mongodb. This is an estimate in the sense 
+  // that it might return a stale count the if the database shutdown in an unclean way and restarted.
+  // In contrast, count_documents returns an accurate count but requires scanning all docs.
+  let res = ledger.estimated_document_count(None).await;
+
   if let Err(error) = res {
     return Err(LedgerStoreError::MongoDBError(error));
   }
-  let ledger_entry = match res.unwrap() {
-    None => {
-      return Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist));
-    },
-    Some(s) => s,
-  };
-
-  // 2. Recover the contents of the ledger entry
-  let bson_entry: &Binary = &ledger_entry.value;
-  let entry: SerializedLedgerEntry =
-    bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
-
-  Ok(entry.index as usize)
+  
+  Ok(i64::try_from(res.unwrap()).expect("potential integer overflow"))
 }
 
 const RETRY_SLEEP: u64 = 50; // ms
@@ -473,12 +413,12 @@ impl LedgerStore for MongoCosmosLedgerStore {
     first_block: Block,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(create_ledger_op(handle, &genesis_block, &first_block, &ledgers).await, false);
+      with_retry!(create_ledger_op(&genesis_block, &first_block, &ledger).await, false);
     }
   }
 
@@ -489,13 +429,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
     expected_height: usize,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     loop {
       with_retry!(
-        append_ledger_op(handle, block, expected_height, &ledgers).await,
+        append_ledger_op(block, Some(expected_height), &ledger).await,
         true
       );
     }
@@ -506,17 +446,17 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError> {
-    let mut handle_with_index = handle.to_bytes();
-    handle_with_index.extend(receipt.get_height().to_le_bytes()); // "to_le" converts to little endian
+
+    let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow"); 
 
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
       with_retry!(
-        attach_ledger_receipt_op(&handle_with_index, receipt, &ledgers,)
+        attach_ledger_receipt_op(index, receipt, &ledger)
           .await,
         false
       );
@@ -525,50 +465,41 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
   async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(read_ledger_op(handle.to_bson_binary(), &ledgers).await, false);
+      let index = find_ledger_height(&ledger).await?; 
+      with_retry!(read_ledger_op(index, &ledger).await, false);
     }
   }
 
   async fn read_ledger_by_index(
     &self,
     handle: &Handle,
-    idx: usize,
+    index: usize,
   ) -> Result<LedgerEntry, LedgerStoreError> {
-    if !cfg!(feature = "full_ledger") && handle != &self.view_handle {
-      panic!("Calling read_ledger_by_index without support for full ledger");
-    }
-
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    let mut handle_with_index = handle.to_bytes();
-    let idx_u64 = idx as u64;
-    handle_with_index.extend(idx_u64.to_le_bytes()); // "to_le" converts to little endian
+    let index_i64 = i64::try_from(index).expect("potential integer overflow");
 
     loop {
-      with_retry!(read_ledger_op(handle_with_index.to_bson_binary(), &ledgers).await, false);
+      with_retry!(read_ledger_op(index_i64, &ledger).await, false);
     }
   }
 
   async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
 
-    let res = find_ledger_height(self.view_handle.to_bson_binary(), &ledgers).await;
-    if let Err(error) = res {
-      return Err(error);
-    }
-    let index = res.unwrap();
-    self.read_ledger_by_index(&self.view_handle, index).await
+    let index = find_ledger_height(&ledger).await?;
+    self.read_ledger_by_index(&self.view_handle, usize::try_from(index).expect("integer overflow")).await
   }
 
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {
@@ -585,17 +516,16 @@ impl LedgerStore for MongoCosmosLedgerStore {
     expected_height: usize,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
-    let ledgers = client
+    let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
 
     loop {
       with_retry!(
         append_ledger_op(
-          &self.view_handle,
           block,
-          expected_height,
-          &ledgers,
+          Some(expected_height),
+          &ledger,
         )
         .await,
         true
