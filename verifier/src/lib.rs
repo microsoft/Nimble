@@ -7,7 +7,6 @@ use ledger::{
 };
 use std::collections::{HashMap, HashSet};
 
-const NONCE_IN_BYTES: usize = 16;
 const MIN_NUM_ENDORSERS: usize = 1;
 
 /// VerifierState keeps track of public keys of any valid view
@@ -135,10 +134,10 @@ impl VerifierState {
 /// 3. A nonce
 pub fn verify_new_ledger(
   vs: &VerifierState,
+  handle_bytes: &[u8],
   block_bytes: &[u8],
   receipt_bytes: &[u8],
-  nonce: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
+) -> Result<(), VerificationError> {
   let res = Receipt::from_bytes(receipt_bytes);
   if res.is_err() {
     return Err(VerificationError::InvalidReceipt);
@@ -149,40 +148,25 @@ pub fn verify_new_ledger(
     return Err(VerificationError::InsufficientReceipts);
   }
 
-  if block_bytes.len() < 2 * NONCE_IN_BYTES {
-    return Err(VerificationError::InvalidGenesisBlock);
-  } else {
-    // parse the genesis block and extract the endorser's public key to form a verification key
-    // the first `NONCE_IN_BYTES` bytes are the service chosen nonce, followed by the client nonce,
-    // so the rest is application-provided data
-    let client_nonce = &block_bytes[NONCE_IN_BYTES..(NONCE_IN_BYTES + NONCE_IN_BYTES)];
-    if client_nonce != nonce {
-      return Err(VerificationError::InvalidGenesisBlock);
-    }
-  }
-
-  let app_bytes = &block_bytes[(2 * NONCE_IN_BYTES)..];
-
   let view = receipt.get_view();
 
   let pk_vec = vs.get_pk_for_view(view)?;
 
-  // compute a handle as hash of the block
-  let handle = {
-    let block = Block::new(block_bytes);
-    block.hash()
-  };
+  let genesis_block_hash = NimbleDigest::digest(handle_bytes);
+  let first_block_hash = NimbleDigest::digest(block_bytes);
 
-  // verify the signature on the genesis metablock with `handle` as the genesis block's hash
-  let genesis_metablock = MetaBlock::genesis(view, &handle);
-  let hash = genesis_metablock.hash().to_bytes();
+  let genesis_metablock = MetaBlock::genesis(view, &genesis_block_hash);
+  let prev = genesis_metablock.hash();
+  let first_metablock = MetaBlock::new(view, &prev, &first_block_hash, 1usize);
+  let hash = first_metablock.hash().to_bytes();
 
   let res = receipt.verify(&hash, pk_vec);
 
   if res.is_err() {
+    eprintln!("receipt verification failed: {:?}", res);
     Err(VerificationError::InvalidGenesisBlock)
   } else {
-    Ok((handle.to_bytes(), app_bytes.to_vec()))
+    Ok(())
   }
 }
 

@@ -2,7 +2,7 @@ use crate::errors::{LedgerStoreError, StorageError};
 use crate::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
 use bincode;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, NimbleHashTrait, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
 use mongodb::error::{TRANSIENT_TRANSACTION_ERROR, UNKNOWN_TRANSACTION_COMMIT_RESULT};
@@ -352,48 +352,67 @@ async fn attach_ledger_receipt_transaction(
 }
 
 async fn create_ledger_transaction(
-  block: &Block,
+  handle: &NimbleDigest,
+  genesis_block: Block,
+  first_block: Block,
   session: &mut ClientSession,
   ledgers: &Collection<DBEntry>,
-) -> Result<Handle, LedgerStoreError> {
-  // 1. Use view ledger's entry and input block to get information we need for origin of new ledger
-  let handle = block.hash();
-
-  // 2. Create the ledger entry that we will add to the brand new ledger
-  let data_ledger_entry = SerializedLedgerEntry {
-    block: block.to_bytes(),
+) -> Result<(), LedgerStoreError> {
+  // 1. Create the ledger entry that we will add to the brand new ledger
+  let init_data_ledger_entry = SerializedLedgerEntry {
+    block: genesis_block.to_bytes(),
     index: 0_u64,
     receipt: Receipt::default().to_bytes(),
   };
 
-  let bson_data_ledger_entry: Binary = bincode::serialize(&data_ledger_entry)
+  let first_data_ledger_entry = SerializedLedgerEntry {
+    block: first_block.to_bytes(),
+    index: 1_u64,
+    receipt: Receipt::default().to_bytes(),
+  };
+
+  let bson_init_data_ledger_entry: Binary = bincode::serialize(&init_data_ledger_entry)
     .expect("failed to serialize data ledger entry")
     .to_bson_binary();
 
-  // 3. Add new ledger tail to database under its handle
+  let bson_first_data_ledger_entry: Binary = bincode::serialize(&first_data_ledger_entry)
+    .expect("failed to serialize data ledger entry")
+    .to_bson_binary();
+
+  // 2. Add new ledger tail to database under its handle
   let tail_entry = DBEntry {
     key: handle.to_bson_binary(),
-    value: bson_data_ledger_entry.clone(),
+    value: bson_first_data_ledger_entry.clone(),
     tail: true,
   };
 
-  // 4. If we are keeping the full state of the ledger (including intermediaries)
-  let mut handle_with_index = handle.to_bytes();
-  handle_with_index.extend(0_u64.to_le_bytes()); // to_le is little endian
+  // 3. If we are keeping the full state of the ledger (including intermediaries)
+  let mut handle_with_index_0 = handle.to_bytes();
+  handle_with_index_0.extend(0_u64.to_le_bytes()); // to_le is little endian
 
-  let new_entry = DBEntry {
-    key: handle_with_index.to_bson_binary(), // handle = handle || idx (which is 0)
-    value: bson_data_ledger_entry,
+  let init_entry = DBEntry {
+    key: handle_with_index_0.to_bson_binary(), // handle = handle || idx (which is 0)
+    value: bson_init_data_ledger_entry,
+    tail: false,
+  };
+
+  // 3. If we are keeping the full state of the ledger (including intermediaries)
+  let mut handle_with_index_1 = handle.to_bytes();
+  handle_with_index_1.extend(1_u64.to_le_bytes()); // to_le is little endian
+
+  let first_entry = DBEntry {
+    key: handle_with_index_1.to_bson_binary(), // handle = handle || idx (which is 0)
+    value: bson_first_data_ledger_entry,
     tail: false,
   };
 
   ledgers
-    .insert_many_with_session(&vec![tail_entry, new_entry], None, session)
+    .insert_many_with_session(&vec![tail_entry, init_entry, first_entry], None, session)
     .await?;
 
-  // 5. Commit transactions
+  // 4. Commit transactions
   commit_with_retry(session).await?;
-  Ok(handle)
+  Ok(())
 }
 
 async fn read_ledger_op(
@@ -468,7 +487,12 @@ const REQUEST_RATE_TOO_HIGH_CODE: i32 = 16500;
 
 #[async_trait]
 impl LedgerStore for MongoCosmosLedgerStore {
-  async fn create_ledger(&self, block: &Block) -> Result<Handle, LedgerStoreError> {
+  async fn create_ledger(
+    &self,
+    handle: &NimbleDigest,
+    genesis_block: Block,
+    first_block: Block,
+  ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
     let ledgers = client
       .database(&self.dbname)
@@ -490,7 +514,16 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
       session.start_transaction(options).await?;
 
-      with_retry!(create_ledger_transaction(block, &mut session, &ledgers).await);
+      with_retry!(
+        create_ledger_transaction(
+          handle,
+          genesis_block.clone(),
+          first_block.clone(),
+          &mut session,
+          &ledgers
+        )
+        .await
+      );
     }
   }
 

@@ -1,4 +1,4 @@
-use super::{Block, Handle, NimbleHashTrait, Receipt};
+use super::{Block, Handle, NimbleDigest, Receipt};
 use crate::errors::{LedgerStoreError, StorageError};
 use crate::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
@@ -33,16 +33,27 @@ impl InMemoryLedgerStore {
 
 #[async_trait]
 impl LedgerStore for InMemoryLedgerStore {
-  async fn create_ledger(&self, block: &Block) -> Result<Handle, LedgerStoreError> {
-    let handle = block.hash();
-    let ledger_entry = LedgerEntry {
-      block: block.clone(),
+  async fn create_ledger(
+    &self,
+    handle: &NimbleDigest,
+    genesis_block: Block,
+    first_block: Block,
+  ) -> Result<(), LedgerStoreError> {
+    let init_ledger_entry = LedgerEntry {
+      block: genesis_block,
+      receipt: Receipt::default(),
+    };
+    let first_ledger_entry = LedgerEntry {
+      block: first_block,
       receipt: Receipt::default(),
     };
     if let Ok(mut ledgers_map) = self.ledgers.write() {
-      if let hash_map::Entry::Vacant(e) = ledgers_map.entry(handle) {
-        e.insert(Arc::new(RwLock::new(vec![ledger_entry])));
-        Ok(handle)
+      if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
+        e.insert(Arc::new(RwLock::new(vec![
+          init_ledger_entry,
+          first_ledger_entry,
+        ])));
+        Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
       }

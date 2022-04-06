@@ -99,7 +99,7 @@ async fn benchmark_newledger(
   conn_pool: &[CoordinatorConnection],
   num_concurrent_clients: usize,
   num_reqs_per_client: usize,
-  app_bytes_size: usize,
+  block_bytes_size: usize,
 ) -> Result<BenchmarkLog, Box<dyn std::error::Error>> {
   Timer::print(&format!(
     "Starting the NewLedger benchmark with {} clients each sending {} requests...",
@@ -112,19 +112,18 @@ async fn benchmark_newledger(
   let clients_initialize_start =
     Timer::new(&format!("NewLedger_CreateClients C={}", num_total_reqs));
 
-  let mut nonce_app_bytes = Vec::with_capacity(num_total_reqs);
-  for _gen_nonce_id in 0..num_total_reqs {
-    let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
-    // TODO: Make this variable and configurable.
-    let random_app_bytes = generate_random_bytes(app_bytes_size);
-    nonce_app_bytes.push((client_nonce, random_app_bytes));
+  let mut handle_block_bytes = Vec::with_capacity(num_total_reqs);
+  for _id in 0..num_total_reqs {
+    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let block_bytes = generate_random_bytes(block_bytes_size);
+    handle_block_bytes.push((handle_bytes, block_bytes));
   }
 
   clients_initialize_start.stop();
 
   let mut req_counter = 0;
   let mut responses = Vec::new();
-  let mut client_nonce_to_request_map = HashMap::new();
+  let mut handle_block_to_request_map = HashMap::new();
 
   let mut timer_map = HashMap::new();
 
@@ -132,13 +131,14 @@ async fn benchmark_newledger(
   for conn_state in conn_pool {
     for _ in 0..num_reqs_per_client {
       let mut conn = conn_state.clone();
-      let (nonce, app_bytes) = &nonce_app_bytes[req_counter];
+      let (handle_bytes, block_bytes) = &handle_block_bytes[req_counter];
       let q = tonic::Request::new(NewLedgerReq {
-        nonce: nonce.to_vec(),
-        app_bytes: app_bytes.to_vec(),
+        handle: handle_bytes.to_vec(),
+        block: block_bytes.to_vec(),
       });
       req_counter += 1;
-      client_nonce_to_request_map.insert(req_counter, nonce.to_vec());
+      handle_block_to_request_map
+        .insert(req_counter, (handle_bytes.to_vec(), block_bytes.to_vec()));
 
       timer_map.insert(req_counter, Instant::now());
 
@@ -166,7 +166,7 @@ async fn benchmark_newledger(
     if r.is_ok() {
       let (index, res) = r.unwrap();
       let returned_resp = res.unwrap().into_inner();
-      responses.push((returned_resp, &client_nonce_to_request_map[&index]));
+      responses.push((returned_resp, &handle_block_to_request_map[&index]));
 
       // Insert latencies for responses to the client latencies map, Number of keys = number of clients, size of value = len(requests per client)
       let req_elapsed_t = recv_time.duration_since(timer_map[&index]);
@@ -193,14 +193,9 @@ async fn benchmark_newledger(
 
   let seq_verification_start = Timer::new("Verification of responses");
 
-  for (newledger_res, client_nonce) in &responses {
+  for (newledger_res, handle_block) in &responses {
     // NOTE: Every NewLedger response is individually verified and MUST pass.
-    let res = verify_new_ledger(
-      vs,
-      &newledger_res.block,
-      &newledger_res.receipt,
-      client_nonce,
-    );
+    let res = verify_new_ledger(vs, &handle_block.0, &handle_block.1, &newledger_res.receipt);
     assert!(res.is_ok());
   }
   let time_taken = seq_verification_start.stop();
@@ -452,7 +447,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config: Args = Args::parse();
   let coordinator_endpoint_addr = config.coordinator;
   let mut benchmarks_to_run = config.methods;
-  let app_byte_size = config.app_or_block_byte_size;
+  let block_byte_size = config.app_or_block_byte_size;
   let file_out_path_str = config.write_file_out;
 
   let mut writer = check_file_path_and_setup_dirs_necessary(&file_out_path_str).unwrap();
@@ -489,24 +484,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert!(res.is_ok());
 
   // Step 1: NewLedger Request (With Application Data Embedded)
-  let app_bytes: Vec<u8> = generate_random_bytes(app_byte_size);
-  let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let block_bytes: Vec<u8> = generate_random_bytes(block_byte_size);
+  let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
   let request = tonic::Request::new(NewLedgerReq {
-    nonce: client_nonce.to_vec(),
-    app_bytes: app_bytes.to_vec(),
+    handle: handle_bytes.to_vec(),
+    block: block_bytes.to_vec(),
   });
-  let NewLedgerResp { block, receipt } = coordinator_connection
+  let NewLedgerResp { receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
+  let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
   Timer::print(&format!("NewLedger (WithAppData) : {:?}", res.is_ok()));
   assert!(res.is_ok());
-
-  let (handle, ret_app_bytes) = res.unwrap();
-  assert_eq!(ret_app_bytes, app_bytes.to_vec());
+  let handle = handle_bytes.to_vec();
 
   let num_concurrent_clients = config.num_clients;
   let num_reqs_per_client = config.requests;
@@ -523,7 +516,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           &conn_pool,
           num_concurrent_clients,
           num_reqs_per_client,
-          app_byte_size,
+          block_byte_size,
         )
         .await;
         assert!(res.is_ok());
@@ -535,7 +528,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           &conn_pool,
           num_concurrent_clients,
           num_reqs_per_client,
-          app_byte_size,
+          block_byte_size,
           &handle,
         )
         .await;

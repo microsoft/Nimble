@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
-use uuid::Uuid;
 
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
@@ -358,33 +357,25 @@ impl CoordinatorState {
   pub async fn create_ledger(
     &self,
     endorsers: &[Vec<u8>],
-    client_nonce: &[u8],
-    app_bytes: &[u8],
-  ) -> Result<(Block, Receipt), CoordinatorError> {
-    // Generate a Unique Value, this is the coordinator chosen nonce.
-    let service_nonce = Uuid::new_v4().as_bytes().to_vec();
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+  ) -> Result<Receipt, CoordinatorError> {
+    let genesis_block = Block::new(handle_bytes);
+    let first_block = Block::new(block_bytes);
+    let handle = genesis_block.hash();
+    let block_hash = first_block.hash();
 
-    // Package the contents into a Block
-    let genesis_block = {
-      let genesis_op = Block::genesis(&service_nonce, client_nonce, app_bytes);
-      if genesis_op.is_err() {
-        eprintln!("Failed to create a genesis block for a new ledger");
-        return Err(CoordinatorError::FailedToCreateGenesis);
-      }
-      genesis_op.unwrap()
-    };
-
-    let handle = {
-      let res = self.ledger_store.create_ledger(&genesis_block).await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to create ledger in the ledger store ({:?})",
-          res.unwrap_err()
-        );
-        return Err(CoordinatorError::FailedToCreateLedger);
-      }
-      res.unwrap()
-    };
+    let res = self
+      .ledger_store
+      .create_ledger(&handle, genesis_block, first_block)
+      .await;
+    if res.is_err() {
+      eprintln!(
+        "Failed to create ledger in the ledger store ({:?})",
+        res.unwrap_err()
+      );
+      return Err(CoordinatorError::FailedToCreateLedger);
+    }
 
     // Make a request to the endorsers for NewLedger using the handle which returns a signature.
     let receipt = {
@@ -412,7 +403,33 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAttachReceipt);
     }
 
-    Ok((genesis_block, receipt))
+    // Make a request to the endorsers for the first entry.
+    let receipt = {
+      let res = self
+        .connections
+        .append_ledger(endorsers, &handle, &block_hash, 1usize, false)
+        .await;
+      if res.is_err() {
+        eprintln!("Failed to append to ledger in endorsers ({:?})", res);
+        return Err(res.unwrap_err());
+      }
+      res.unwrap()
+    };
+
+    // Store the receipt
+    let res = self
+      .ledger_store
+      .attach_ledger_receipt(&handle, &receipt)
+      .await;
+    if res.is_err() {
+      eprintln!(
+        "Failed to attach ledger receipt to the ledger store ({:?})",
+        res
+      );
+      return Err(CoordinatorError::FailedToAttachReceipt);
+    }
+
+    Ok(receipt)
   }
 
   pub async fn append_ledger(
@@ -422,14 +439,7 @@ impl CoordinatorState {
     block_bytes: &[u8],
     expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
-    let handle = {
-      let h = NimbleDigest::from_bytes(handle_bytes);
-      if h.is_err() {
-        eprintln!("Incorrect ledger handle for append");
-        return Err(CoordinatorError::InvalidHandle);
-      }
-      h.unwrap()
-    };
+    let handle = NimbleDigest::digest(handle_bytes);
     let data_block = Block::new(block_bytes);
     let hash_of_block = data_block.hash();
 
@@ -484,21 +494,20 @@ impl Call for CoordinatorState {
     req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
     let NewLedgerReq {
-      nonce: client_nonce,
-      app_bytes,
+      handle: handle_bytes,
+      block: block_bytes,
     } = req.into_inner();
 
     let endorsers = self.connections.get_all();
     let res = self
-      .create_ledger(&endorsers, &client_nonce, &app_bytes)
+      .create_ledger(&endorsers, &handle_bytes, &block_bytes)
       .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to create a new ledger"));
     }
 
-    let (block, receipt) = res.unwrap();
+    let receipt = res.unwrap();
     let reply = NewLedgerResp {
-      block: block.to_bytes(),
       receipt: receipt.to_bytes(),
     };
     Ok(Response::new(reply))
@@ -506,14 +515,19 @@ impl Call for CoordinatorState {
 
   async fn append(&self, request: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
     let AppendReq {
-      handle,
-      block,
+      handle: handle_bytes,
+      block: block_bytes,
       expected_height,
     } = request.into_inner();
 
     let endorsers = self.connections.get_all();
     let res = self
-      .append_ledger(&endorsers, &handle, &block, expected_height as usize)
+      .append_ledger(
+        &endorsers,
+        &handle_bytes,
+        &block_bytes,
+        expected_height as usize,
+      )
       .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to append to a ledger"));
@@ -531,7 +545,10 @@ impl Call for CoordinatorState {
     &self,
     request: Request<ReadLatestReq>,
   ) -> Result<Response<ReadLatestResp>, Status> {
-    let ReadLatestReq { handle, nonce } = request.into_inner();
+    let ReadLatestReq {
+      handle: handle_bytes,
+      nonce,
+    } = request.into_inner();
 
     let nonce = {
       let nonce_op = Nonce::new(&nonce);
@@ -542,14 +559,7 @@ impl Call for CoordinatorState {
       nonce_op.unwrap().to_owned()
     };
 
-    let handle = {
-      let h = NimbleDigest::from_bytes(&handle);
-      if h.is_err() {
-        eprintln!("Incorrect handle provided");
-        return Err(Status::invalid_argument("Incorrect Handle Provided"));
-      }
-      h.unwrap()
-    };
+    let handle = NimbleDigest::digest(&handle_bytes);
 
     let ledger_entry = {
       let res = self.ledger_store.read_ledger_tail(&handle).await;
@@ -593,15 +603,11 @@ impl Call for CoordinatorState {
     &self,
     request: Request<ReadByIndexReq>,
   ) -> Result<Response<ReadByIndexResp>, Status> {
-    let ReadByIndexReq { handle, index } = request.into_inner();
-    let handle = {
-      let res = NimbleDigest::from_bytes(&handle);
-      if res.is_err() {
-        eprintln!("Incorrect handle provided");
-        return Err(Status::invalid_argument("Incorrect Handle Provided"));
-      }
-      res.unwrap()
-    };
+    let ReadByIndexReq {
+      handle: handle_bytes,
+      index,
+    } = request.into_inner();
+    let handle = NimbleDigest::digest(&handle_bytes);
 
     let ledger_entry = {
       let res = self
@@ -745,7 +751,6 @@ mod tests {
     ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
   };
   use crate::CoordinatorState;
-  use ledger::NimbleHashTrait;
   use rand::Rng;
   use std::collections::HashMap;
   use std::io::{BufRead, BufReader};
@@ -865,38 +870,20 @@ mod tests {
     }
 
     // Step 0: Create some app data
-    let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let block_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     // Step 1: NewLedger Request (With Application Data Embedded)
-    let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
     let request = tonic::Request::new(NewLedgerReq {
-      nonce: client_nonce.to_vec(),
-      app_bytes: app_bytes.to_vec(),
+      handle: handle_bytes.to_vec(),
+      block: block_bytes.to_vec(),
     });
-    let NewLedgerResp { block, receipt } =
-      coordinator.new_ledger(request).await.unwrap().into_inner();
-    let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
-    println!("NewLedger (WithAppData) : {:?}", res.is_ok());
+    let NewLedgerResp { receipt } = coordinator.new_ledger(request).await.unwrap().into_inner();
+    let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
+    println!("NewLedger (WithAppData) : {:?}", res);
     assert!(res.is_ok());
 
-    let (_handle, ret_app_bytes) = res.unwrap();
-    assert_eq!(ret_app_bytes, app_bytes.to_vec());
-
-    // Step 1a. NewLedger Request with No Application Data Embedded
-    let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
-    let request = tonic::Request::new(NewLedgerReq {
-      nonce: client_nonce.to_vec(),
-      app_bytes: vec![],
-    });
-    let NewLedgerResp { block, receipt } =
-      coordinator.new_ledger(request).await.unwrap().into_inner();
-
-    let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
-    println!("NewLedger (NoAppData) : {:?}", res.is_ok());
-    assert!(res.is_ok());
-
-    let (handle, app_bytes) = res.unwrap();
-    assert_eq!(app_bytes.len(), 0);
+    let handle = handle_bytes.to_vec();
 
     // Step 2: Read At Index
     let req = tonic::Request::new(ReadByIndexReq {
@@ -931,7 +918,7 @@ mod tests {
     let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
     let blocks = vec![&b1, &b2, &b3].to_vec();
 
-    let mut expected_height = 0;
+    let mut expected_height = 1;
     for block_to_append in blocks {
       expected_height += 1;
       let req = tonic::Request::new(AppendReq {
@@ -943,7 +930,7 @@ mod tests {
       let AppendResp { receipt } = coordinator.append(req).await.unwrap().into_inner();
 
       let res = verify_append(&vs, block_to_append.as_ref(), expected_height, &receipt);
-      println!("Append verification: {:?}", res);
+      println!("Append verification: {:?} {:?}", block_to_append, res);
       assert!(res.is_ok());
     }
 
@@ -976,7 +963,7 @@ mod tests {
 
     let ReadByIndexResp { block, receipt } =
       coordinator.read_by_index(req).await.unwrap().into_inner();
-    assert_eq!(block, b2.clone());
+    assert_eq!(block, b1.clone());
 
     let res = verify_read_by_index(&vs, &block, 2, &receipt);
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
@@ -1063,15 +1050,14 @@ mod tests {
     let mut endorsers = coordinator.get_endorsers();
     endorsers.remove(1);
 
-    let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
     let res = coordinator
-      .create_ledger(&endorsers, client_nonce.as_ref(), &[])
+      .create_ledger(&endorsers, handle_bytes.as_ref(), &[])
       .await;
     println!("create_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
-    let (block, _receipt) = res.unwrap();
-    let new_handle = block.hash().to_bytes();
+    let new_handle = handle_bytes.to_vec();
 
     let message = "no_condition_data_block_append 2".as_bytes();
     let res = coordinator

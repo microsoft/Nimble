@@ -11,13 +11,12 @@ service Call {
 }
 
 message NewLedgerReq {
-  bytes nonce = 1;  // This is a client chosen nonce.
-  bytes app_bytes = 2;
+  bytes handle = 1;
+  bytes block = 2;
 }
 
 message NewLedgerResp {
-  bytes block = 1;
-  bytes receipt = 2;
+  bytes receipt = 1;
 }
 
 message AppendReq {

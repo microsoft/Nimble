@@ -74,45 +74,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   assert!(res.is_ok());
 
   // Step 0: Create some app data
-  let app_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  let block_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
   // Step 1: NewLedger Request (With Application Data Embedded)
-  let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
+  let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
   let request = tonic::Request::new(NewLedgerReq {
-    nonce: client_nonce.to_vec(),
-    app_bytes: app_bytes.to_vec(),
+    handle: handle_bytes.to_vec(),
+    block: block_bytes.to_vec(),
   });
-  let NewLedgerResp { block, receipt } = coordinator_connection
+  let NewLedgerResp { receipt } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
+  let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  let (_handle, ret_app_bytes) = res.unwrap();
-  assert_eq!(ret_app_bytes, app_bytes.to_vec());
-
-  // Step 1a. NewLedger Request with No Application Data Embedded
-  let client_nonce = rand::thread_rng().gen::<[u8; 16]>();
-  let request = tonic::Request::new(NewLedgerReq {
-    nonce: client_nonce.to_vec(),
-    app_bytes: vec![],
-  });
-  let NewLedgerResp { block, receipt } = coordinator_connection
-    .client
-    .new_ledger(request)
-    .await?
-    .into_inner();
-
-  let res = verify_new_ledger(&vs, &block, &receipt, &client_nonce);
-  println!("NewLedger (NoAppData) : {:?}", res.is_ok());
-  assert!(res.is_ok());
-
-  let (handle, app_bytes) = res.unwrap();
-  assert_eq!(app_bytes.len(), 0);
+  let handle = handle_bytes.to_vec();
 
   // Step 2: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
@@ -153,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let blocks = vec![&b1, &b2, &b3].to_vec();
 
-  let mut expected_height: usize = 0;
+  let mut expected_height: usize = 1;
   for block_to_append in blocks {
     expected_height += 1;
     let req = tonic::Request::new(AppendReq {
@@ -205,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .read_by_index(req)
     .await?
     .into_inner();
-  assert_eq!(block, b2.clone());
+  assert_eq!(block, b1.clone());
 
   let res = verify_read_by_index(&vs, &block, 2, &receipt);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());

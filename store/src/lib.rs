@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use ledger::{Block, Handle, NimbleHashTrait, Receipt};
+use ledger::{Block, Handle, NimbleDigest, Receipt};
 
 mod errors;
 pub mod in_memory;
@@ -15,7 +15,12 @@ pub struct LedgerEntry {
 
 #[async_trait]
 pub trait LedgerStore {
-  async fn create_ledger(&self, block: &Block) -> Result<Handle, LedgerStoreError>;
+  async fn create_ledger(
+    &self,
+    handle: &NimbleDigest,
+    genesis_block: Block,
+    first_block: Block,
+  ) -> Result<(), LedgerStoreError>;
   async fn append_ledger(
     // TODO: should self be mutable?
     &self,
@@ -51,7 +56,7 @@ mod tests {
   use crate::{
     in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
   };
-  use ledger::{Block, CustomSerde};
+  use ledger::{Block, CustomSerde, NimbleHashTrait};
   use std::collections::HashMap;
 
   pub async fn check_store_creation_and_operations(state: &dyn LedgerStore) {
@@ -60,10 +65,12 @@ mod tests {
       1, 2,
     ];
 
-    let block = Block::new(&initial_value);
+    let genesis_block = Block::new(&initial_value);
+    let first_block = Block::new(&initial_value);
+    let handle = genesis_block.hash();
 
-    let handle = state
-      .create_ledger(&block)
+    state
+      .create_ledger(&handle, genesis_block, first_block)
       .await
       .expect("failed create ledger");
 
