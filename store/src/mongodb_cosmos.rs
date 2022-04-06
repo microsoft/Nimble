@@ -396,7 +396,7 @@ async fn find_ledger_height(
     return Err(LedgerStoreError::MongoDBError(error));
   }
   
-  Ok(i64::try_from(res.unwrap()).expect("potential integer overflow"))
+  Ok(i64::try_from(res.unwrap()).expect("potential integer overflow") - 1)
 }
 
 const RETRY_SLEEP: u64 = 50; // ms
