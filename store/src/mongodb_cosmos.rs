@@ -469,8 +469,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
   async fn create_ledger(
     &self,
     handle: &Handle,
-    genesis_block: &Block,
-    first_block: &Block,
+    genesis_block: Block,
+    first_block: Block,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
     let ledgers = client
