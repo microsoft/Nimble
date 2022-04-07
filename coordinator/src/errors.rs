@@ -46,4 +46,6 @@ pub enum CoordinatorError {
   InvalidHandle,
   /// returned if failed to (de)serialize endorser hostnames
   FailedToSerde,
+  /// returned if the provided nonce is invalid
+  InvalidNonce,
 }
