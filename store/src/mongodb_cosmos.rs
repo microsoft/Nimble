@@ -2,6 +2,7 @@ use crate::errors::{LedgerStoreError, StorageError};
 use crate::{LedgerEntry, LedgerStore};
 use async_trait::async_trait;
 use bincode;
+use hex;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
 use mongodb::bson::doc;
 use mongodb::bson::{spec::BinarySubtype, Binary};
@@ -9,39 +10,38 @@ use mongodb::error::WriteFailure::WriteError;
 use mongodb::{Client, Collection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Debug;
-use hex;
 use std::convert::TryFrom;
+use std::fmt::Debug;
 
 macro_rules! with_retry {
   ($x:expr, $write_retry:expr) => {
     match $x {
       Err(error) => match error {
         LedgerStoreError::MongoDBError(mongodb_error) => {
-            match mongodb_error.kind.as_ref() {
-              mongodb::error::ErrorKind::Command(cmd_err) => {
-                if cmd_err.code == WRITE_CONFLICT_CODE {
-                  continue;
-                } else if cmd_err.code == REQUEST_RATE_TOO_HIGH_CODE {
-                  std::thread::sleep(std::time::Duration::from_millis(RETRY_SLEEP));
+          match mongodb_error.kind.as_ref() {
+            mongodb::error::ErrorKind::Command(cmd_err) => {
+              if cmd_err.code == WRITE_CONFLICT_CODE {
+                continue;
+              } else if cmd_err.code == REQUEST_RATE_TOO_HIGH_CODE {
+                std::thread::sleep(std::time::Duration::from_millis(RETRY_SLEEP));
+                continue;
+              } else {
+                return Err(LedgerStoreError::MongoDBError(mongodb_error));
+              }
+            },
+            mongodb::error::ErrorKind::Write(WriteError(write_error)) => {
+              if write_error.code == DUPLICATE_KEY_CODE {
+                if $write_retry {
                   continue;
                 } else {
-                  return Err(LedgerStoreError::MongoDBError(mongodb_error));
+                  return Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey));
                 }
-              },
-              mongodb::error::ErrorKind::Write(WriteError(write_error)) => {
-                  if write_error.code == DUPLICATE_KEY_CODE {
-                     if $write_retry {
-                        continue;
-                     } else {
-                        return Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey));
-                     }
-                  }
               }
-              _ => {
-                return Err(LedgerStoreError::MongoDBError(mongodb_error));
-              },
-            };
+            },
+            _ => {
+              return Err(LedgerStoreError::MongoDBError(mongodb_error));
+            },
+          };
         },
         _ => {
           return Err(error);
@@ -129,17 +129,14 @@ impl MongoCosmosLedgerStore {
     let ledger_store = MongoCosmosLedgerStore {
       client: cosmos_client,
       dbname: nimble_db_name.clone(),
-      view_handle
+      view_handle,
     };
-
-
 
     // Check if the view ledger exists
     let res = ledger_store.read_view_ledger_tail().await;
     if let Err(error) = res {
       match error {
         LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
-
           // Initialized view ledger's entry
           let entry = SerializedLedgerEntry {
             block: Block::new(&[0; 0]).to_bytes(),
@@ -151,7 +148,7 @@ impl MongoCosmosLedgerStore {
             .to_bson_binary();
 
           let tail_entry = DBEntry {
-            index: 0_i64, 
+            index: 0_i64,
             value: bson_entry.clone(),
           };
 
@@ -201,7 +198,6 @@ async fn append_ledger_op(
   expected_height: Option<usize>,
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
-
   let height = find_ledger_height(ledger).await?;
 
   let height_plus_one = {
@@ -215,12 +211,13 @@ async fn append_ledger_op(
   };
 
   // 2. If it is a conditional update, check if condition still holds
-  if expected_height.is_some() && 
-      i64::try_from(expected_height.unwrap()).expect("potential integer overflow") 
-      != height_plus_one {
-        return Err(LedgerStoreError::LedgerError(
-            StorageError::IncorrectConditionalData,
-        ));
+  if expected_height.is_some()
+    && i64::try_from(expected_height.unwrap()).expect("potential integer overflow")
+      != height_plus_one
+  {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::IncorrectConditionalData,
+    ));
   }
 
   // 3. Construct the new entry we are going to append to the ledger
@@ -240,9 +237,7 @@ async fn append_ledger_op(
 
   // 4. Try to insert the new entry into the ledger.
   // If it fails, caller must retry.
-  ledger
-    .insert_one(new_entry, None)
-    .await?;
+  ledger.insert_one(new_entry, None).await?;
 
   Ok(())
 }
@@ -255,11 +250,7 @@ async fn attach_ledger_receipt_op(
   // 1. Get the ledger's latest entry
 
   // 1a. Find the appropriate entry in the ledger
-  let ledger_entry: DBEntry = find_db_entry(
-    ledger,
-    index
-  )
-  .await?;
+  let ledger_entry: DBEntry = find_db_entry(ledger, index).await?;
 
   // 2. Recover the contents of the ledger entry
   let read_bson_ledger_entry: &Binary = &ledger_entry.value; // only entry due to unique handles
@@ -268,7 +259,7 @@ async fn attach_ledger_receipt_op(
 
   // 3. Assert the fetched block is the right one
   let entry_height = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
-  assert_eq!(index, entry_height); 
+  assert_eq!(index, entry_height);
 
   // 4. Update receipt
   let mut new_receipt =
@@ -306,7 +297,6 @@ async fn create_ledger_op(
   first_block: &Block,
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
-
   // 1. Create the ledger entry that we will add to the brand new ledger
   let init_data_ledger_entry = SerializedLedgerEntry {
     block: genesis_block.to_bytes(),
@@ -328,7 +318,7 @@ async fn create_ledger_op(
 
   // 2. init data entry
   let init_entry = DBEntry {
-    index: 0, 
+    index: 0,
     value: bson_init_data_ledger_entry,
   };
 
@@ -382,12 +372,9 @@ async fn read_ledger_op(
   Ok(res)
 }
 
-async fn find_ledger_height(
-  ledger: &Collection<DBEntry>,
-) -> Result<i64, LedgerStoreError> {
-
-  // There are two methods for computing height estimated_document_count returns 
-  // height from metadata stored in mongodb. This is an estimate in the sense 
+async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerStoreError> {
+  // There are two methods for computing height estimated_document_count returns
+  // height from metadata stored in mongodb. This is an estimate in the sense
   // that it might return a stale count the if the database shutdown in an unclean way and restarted.
   // In contrast, count_documents returns an accurate count but requires scanning all docs.
   let res = ledger.estimated_document_count(None).await;
@@ -395,7 +382,7 @@ async fn find_ledger_height(
   if let Err(error) = res {
     return Err(LedgerStoreError::MongoDBError(error));
   }
-  
+
   Ok(i64::try_from(res.unwrap()).expect("potential integer overflow"))
 }
 
@@ -418,7 +405,10 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(create_ledger_op(&genesis_block, &first_block, &ledger).await, false);
+      with_retry!(
+        create_ledger_op(&genesis_block, &first_block, &ledger).await,
+        false
+      );
     }
   }
 
@@ -446,8 +436,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError> {
-
-    let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow"); 
+    let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
 
     let client = self.client.clone();
     let ledger = client
@@ -456,8 +445,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        attach_ledger_receipt_op(index, receipt, &ledger)
-          .await,
+        attach_ledger_receipt_op(index, receipt, &ledger).await,
         false
       );
     }
@@ -470,7 +458,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      let index = find_ledger_height(&ledger).await?; 
+      let index = find_ledger_height(&ledger).await?;
       with_retry!(read_ledger_op(index, &ledger).await, false);
     }
   }
@@ -499,7 +487,12 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
 
     let index = find_ledger_height(&ledger).await?;
-    self.read_ledger_by_index(&self.view_handle, usize::try_from(index).expect("integer overflow")).await
+    self
+      .read_ledger_by_index(
+        &self.view_handle,
+        usize::try_from(index).expect("integer overflow"),
+      )
+      .await
   }
 
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {
@@ -522,12 +515,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        append_ledger_op(
-          block,
-          Some(expected_height),
-          &ledger,
-        )
-        .await,
+        append_ledger_op(block, Some(expected_height), &ledger,).await,
         true
       );
     }
