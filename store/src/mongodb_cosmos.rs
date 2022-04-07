@@ -243,34 +243,38 @@ async fn append_ledger_op(
 }
 
 async fn attach_ledger_receipt_op(
-  index: i64,
   receipt: &Receipt,
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
-  // 1. Find the appropriate entry in the ledger
+  // 1. Get the desired index.
+  let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
+
+  // 2. Find the appropriate entry in the ledger
   let ledger_entry: DBEntry = find_db_entry(ledger, index).await?;
 
-  // 2. Recover the contents of the ledger entry
+  // 3. Recover the contents of the ledger entry
   let read_bson_ledger_entry: &Binary = &ledger_entry.value; // only entry due to unique handles
   let mut ledger_entry: SerializedLedgerEntry = bincode::deserialize(&read_bson_ledger_entry.bytes)
     .expect("failed to deserialize ledger entry");
 
-  // 3. Assert the fetched block is the right one
-  let entry_height = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
+  let mut ledger_entry_receipt =
+    Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
+
+  // 4. Assert the fetched block is the right one
+  let entry_height =
+    i64::try_from(ledger_entry_receipt.get_height()).expect("Potential integer overflow");
   assert_eq!(index, entry_height);
 
-  // 4. Update receipt
-  let mut new_receipt =
-    Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
-  let res = new_receipt.append(receipt);
+  // 5. Update receipt
+  let res = ledger_entry_receipt.append(receipt);
   if res.is_err() {
     return Err(LedgerStoreError::LedgerError(
       StorageError::MismatchedReceipts,
     ));
   }
-  ledger_entry.receipt = new_receipt.to_bytes();
+  ledger_entry.receipt = ledger_entry_receipt.to_bytes();
 
-  // 5. Re-serialize into bson binary
+  // 6. Re-serialize into bson binary
   let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)
     .expect("failed to serialized ledger entry")
     .to_bson_binary();
@@ -375,13 +379,8 @@ async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerS
   // height from metadata stored in mongodb. This is an estimate in the sense
   // that it might return a stale count the if the database shutdown in an unclean way and restarted.
   // In contrast, count_documents returns an accurate count but requires scanning all docs.
-  let res = ledger.estimated_document_count(None).await;
-
-  if let Err(error) = res {
-    return Err(LedgerStoreError::MongoDBError(error));
-  }
-
-  Ok(i64::try_from(res.unwrap()).expect("potential integer overflow"))
+  let height = ledger.estimated_document_count(None).await?;
+  Ok(i64::try_from(height).expect("potential integer overflow"))
 }
 
 const RETRY_SLEEP: u64 = 50; // ms
@@ -434,18 +433,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError> {
-    let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
-
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(
-        attach_ledger_receipt_op(index, receipt, &ledger).await,
-        false
-      );
+      with_retry!(attach_ledger_receipt_op(receipt, &ledger).await, false);
     }
   }
 
@@ -479,18 +473,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
   }
 
   async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
-    let client = self.client.clone();
-    let ledger = client
-      .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
-
-    let index = find_ledger_height(&ledger).await?;
-    self
-      .read_ledger_by_index(
-        &self.view_handle,
-        usize::try_from(index).expect("integer overflow"),
-      )
-      .await
+    self.read_ledger_tail(&self.view_handle).await
   }
 
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {
@@ -506,17 +489,9 @@ impl LedgerStore for MongoCosmosLedgerStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<(), LedgerStoreError> {
-    let client = self.client.clone();
-    let ledger = client
-      .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&self.view_handle.to_bytes()));
-
-    loop {
-      with_retry!(
-        append_ledger_op(block, Some(expected_height), &ledger,).await,
-        true
-      );
-    }
+    self
+      .append_ledger(&self.view_handle, block, expected_height)
+      .await
   }
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError> {
