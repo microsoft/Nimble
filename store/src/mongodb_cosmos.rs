@@ -230,6 +230,12 @@ async fn append_ledger_op(
   if expected_height.is_some()
     && checked_conversion!(expected_height.unwrap(), i64) != height_plus_one
   {
+    eprintln!(
+      "Expected height {};  Height-plus-one: {}",
+      expected_height.unwrap(),
+      height_plus_one
+    );
+
     return Err(LedgerStoreError::LedgerError(
       StorageError::IncorrectConditionalData,
     ));
@@ -275,11 +281,7 @@ async fn attach_ledger_receipt_op(
   let mut ledger_entry_receipt =
     Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
 
-  // 4. Assert the fetched block is the right one
-  let entry_height = checked_conversion!(ledger_entry_receipt.get_height(), i64);
-  assert_eq!(index, entry_height);
-
-  // 5. Update receipt
+  // 4. Update receipt
   let res = ledger_entry_receipt.append(receipt);
   if res.is_err() {
     return Err(LedgerStoreError::LedgerError(
@@ -288,7 +290,7 @@ async fn attach_ledger_receipt_op(
   }
   ledger_entry.receipt = ledger_entry_receipt.to_bytes();
 
-  // 6. Re-serialize into bson binary
+  // 5. Re-serialize into bson binary
   let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)
     .expect("failed to serialized ledger entry")
     .to_bson_binary();
@@ -401,7 +403,12 @@ async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerS
   // that it might return a stale count the if the database shutdown in an unclean way and restarted.
   // In contrast, count_documents returns an accurate count but requires scanning all docs.
   let height = checked_conversion!(ledger.estimated_document_count(None).await?, i64);
-  Ok(height)
+
+  if height > 0 {
+    Ok(height - 1)
+  } else {
+    Ok(height)
+  }
 }
 
 const RETRY_SLEEP: u64 = 50; // ms
@@ -441,11 +448,14 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
+    let height = if expected_height > 0 {
+      Some(expected_height)
+    } else {
+      None
+    };
+
     loop {
-      with_retry!(
-        append_ledger_op(block, Some(expected_height), &ledger).await,
-        true
-      );
+      with_retry!(append_ledger_op(block, height, &ledger).await, true);
     }
   }
 
