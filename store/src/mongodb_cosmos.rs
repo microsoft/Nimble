@@ -232,7 +232,7 @@ async fn append_ledger_op(
 
   let new_entry = DBEntry {
     index: height_plus_one,
-    value: bson_new_ledger_entry.clone(),
+    value: bson_new_ledger_entry,
   };
 
   // 4. Try to insert the new entry into the ledger.
@@ -247,9 +247,7 @@ async fn attach_ledger_receipt_op(
   receipt: &Receipt,
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
-  // 1. Get the ledger's latest entry
-
-  // 1a. Find the appropriate entry in the ledger
+  // 1. Find the appropriate entry in the ledger
   let ledger_entry: DBEntry = find_db_entry(ledger, index).await?;
 
   // 2. Recover the contents of the ledger entry
