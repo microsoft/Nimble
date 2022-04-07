@@ -351,9 +351,16 @@ async fn create_ledger_op(
 }
 
 async fn read_ledger_op(
-  index: i64,
+  idx: Option<usize>,
   ledger: &Collection<DBEntry>,
 ) -> Result<LedgerEntry, LedgerStoreError> {
+  let index = match idx {
+    None => find_ledger_height(ledger).await?,
+    Some(i) => {
+      checked_conversion!(i, i64)
+    },
+  };
+
   // Find the latest value of view associated with the provided index.
   let res = ledger
     .find_one(
@@ -464,8 +471,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      let index = find_ledger_height(&ledger).await?;
-      with_retry!(read_ledger_op(index, &ledger).await, false);
+      with_retry!(read_ledger_op(None, &ledger).await, false);
     }
   }
 
@@ -479,10 +485,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    let index_i64 = checked_conversion!(index, i64);
-
     loop {
-      with_retry!(read_ledger_op(index_i64, &ledger).await, false);
+      with_retry!(read_ledger_op(Some(index), &ledger).await, false);
     }
   }
 
