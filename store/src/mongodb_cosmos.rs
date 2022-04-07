@@ -13,6 +13,30 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Debug;
 
+macro_rules! checked_increment {
+  ($x:expr) => {
+    match $x.checked_add(1) {
+      None => {
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerHeightOverflow,
+        ));
+      },
+      Some(e) => e,
+    }
+  };
+}
+
+macro_rules! checked_conversion {
+  ($x:expr, $type:tt) => {
+    match $type::try_from($x) {
+      Err(_) => {
+        return Err(LedgerStoreError::LedgerError(StorageError::IntegerOverflow));
+      },
+      Ok(e) => e,
+    }
+  };
+}
+
 macro_rules! with_retry {
   ($x:expr, $write_retry:expr) => {
     match $x {
@@ -200,20 +224,11 @@ async fn append_ledger_op(
 ) -> Result<(), LedgerStoreError> {
   let height = find_ledger_height(ledger).await?;
 
-  let height_plus_one = {
-    let res = height.checked_add(1);
-    if res.is_none() {
-      return Err(LedgerStoreError::LedgerError(
-        StorageError::LedgerHeightOverflow,
-      ));
-    }
-    res.unwrap()
-  };
+  let height_plus_one = checked_increment!(height);
 
   // 2. If it is a conditional update, check if condition still holds
   if expected_height.is_some()
-    && i64::try_from(expected_height.unwrap()).expect("potential integer overflow")
-      != height_plus_one
+    && checked_conversion!(expected_height.unwrap(), i64) != height_plus_one
   {
     return Err(LedgerStoreError::LedgerError(
       StorageError::IncorrectConditionalData,
@@ -247,7 +262,7 @@ async fn attach_ledger_receipt_op(
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
   // 1. Get the desired index.
-  let index = i64::try_from(receipt.get_height()).expect("Potential integer overflow");
+  let index = checked_conversion!(receipt.get_height(), i64);
 
   // 2. Find the appropriate entry in the ledger
   let ledger_entry: DBEntry = find_db_entry(ledger, index).await?;
@@ -261,8 +276,7 @@ async fn attach_ledger_receipt_op(
     Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
 
   // 4. Assert the fetched block is the right one
-  let entry_height =
-    i64::try_from(ledger_entry_receipt.get_height()).expect("Potential integer overflow");
+  let entry_height = checked_conversion!(ledger_entry_receipt.get_height(), i64);
   assert_eq!(index, entry_height);
 
   // 5. Update receipt
@@ -379,8 +393,8 @@ async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerS
   // height from metadata stored in mongodb. This is an estimate in the sense
   // that it might return a stale count the if the database shutdown in an unclean way and restarted.
   // In contrast, count_documents returns an accurate count but requires scanning all docs.
-  let height = ledger.estimated_document_count(None).await?;
-  Ok(i64::try_from(height).expect("potential integer overflow"))
+  let height = checked_conversion!(ledger.estimated_document_count(None).await?, i64);
+  Ok(height)
 }
 
 const RETRY_SLEEP: u64 = 50; // ms
@@ -465,7 +479,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    let index_i64 = i64::try_from(index).expect("potential integer overflow");
+    let index_i64 = checked_conversion!(index, i64);
 
     loop {
       with_retry!(read_ledger_op(index_i64, &ledger).await, false);
