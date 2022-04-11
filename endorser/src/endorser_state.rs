@@ -113,6 +113,20 @@ impl EndorserState {
     ))
   }
 
+  pub fn get_height(&self, handle: &NimbleDigest) -> Result<usize, EndorserError> {
+    if !self.is_initialized {
+      return Err(EndorserError::NotInitialized);
+    }
+
+    // check if the requested ledger exists in the state, if not return an error
+    if !self.ledger_tail_map.contains_key(handle) {
+      return Err(EndorserError::InvalidLedgerName);
+    }
+
+    let metablock = self.ledger_tail_map.get(handle).unwrap();
+    Ok(metablock.get_height())
+  }
+
   pub fn append(
     &mut self,
     handle: &NimbleDigest,

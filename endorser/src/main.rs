@@ -5,7 +5,7 @@ use ledger::{signature::PublicKeyTrait, CustomSerde, MetaBlock, NimbleDigest};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
-use tonic::{Request, Response, Status};
+use tonic::{Code, Request, Response, Status};
 
 mod endorser_state;
 mod errors;
@@ -80,14 +80,20 @@ impl EndorserCall for EndorserServiceState {
       .write()
       .expect("Unable to get a write lock on EndorserState");
 
-    let receipt = endorser
-      .new_ledger(&handle, ignore_lock)
-      .expect("Unable to get the signature on genesis handle");
+    let res = endorser.new_ledger(&handle, ignore_lock);
 
-    let reply = NewLedgerResp {
-      receipt: receipt.to_bytes().to_vec(),
-    };
-    Ok(Response::new(reply))
+    match res {
+      Ok(receipt) => {
+        let reply = NewLedgerResp {
+          receipt: receipt.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(error) => match error {
+        EndorserError::LedgerExists => Err(Status::already_exists("Invalid ledgher height")),
+        _ => Err(Status::aborted("Failed to append")),
+      },
+    }
   }
 
   async fn append(&self, req: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
@@ -105,13 +111,11 @@ impl EndorserCall for EndorserServiceState {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
+    let handle = handle_instance.unwrap();
+    let block_hash = block_hash_instance.unwrap();
+
     let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append(
-      &handle_instance.unwrap(),
-      &block_hash_instance.unwrap(),
-      expected_height as usize,
-      ignore_lock,
-    );
+    let res = endorser_state.append(&handle, &block_hash, expected_height as usize, ignore_lock);
 
     match res {
       Ok(receipt) => {
@@ -122,7 +126,14 @@ impl EndorserCall for EndorserServiceState {
       },
 
       Err(error) => match error {
-        EndorserError::OutOfOrderAppend => Err(Status::failed_precondition("Out of order append")),
+        EndorserError::OutOfOrderAppend => {
+          let height = endorser_state.get_height(&handle).unwrap();
+          Err(Status::with_details(
+            Code::FailedPrecondition,
+            "Out of order append",
+            bytes::Bytes::copy_from_slice(&(height as u64).to_le_bytes()),
+          ))
+        },
         EndorserError::InvalidLedgerName => Err(Status::not_found("Ledger handle not found")),
         EndorserError::LedgerHeightOverflow => Err(Status::out_of_range("Ledger height overflow")),
         EndorserError::InvalidTailHeight => Err(Status::already_exists("Invalid ledgher height")),

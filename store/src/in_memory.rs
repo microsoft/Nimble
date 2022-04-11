@@ -18,10 +18,7 @@ impl InMemoryLedgerStore {
     let ledgers = HashMap::new();
     let mut view_ledger = Vec::new();
 
-    let view_ledger_entry = LedgerEntry {
-      block: Block::new(&[0; 0]),
-      receipt: Receipt::default(),
-    };
+    let view_ledger_entry = LedgerEntry::new(Block::new(&[0; 0]), Receipt::default());
     view_ledger.push(view_ledger_entry);
 
     InMemoryLedgerStore {
@@ -39,14 +36,8 @@ impl LedgerStore for InMemoryLedgerStore {
     genesis_block: Block,
     first_block: Block,
   ) -> Result<(), LedgerStoreError> {
-    let init_ledger_entry = LedgerEntry {
-      block: genesis_block,
-      receipt: Receipt::default(),
-    };
-    let first_ledger_entry = LedgerEntry {
-      block: first_block,
-      receipt: Receipt::default(),
-    };
+    let init_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default());
+    let first_ledger_entry = LedgerEntry::new(first_block, Receipt::default());
     if let Ok(mut ledgers_map) = self.ledgers.write() {
       if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
         e.insert(Arc::new(RwLock::new(vec![
@@ -68,18 +59,18 @@ impl LedgerStore for InMemoryLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError> {
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          if expected_height == 0 || expected_height == ledgers.len() {
+          if expected_height.is_none() || expected_height.unwrap() == ledgers.len() {
             let ledger_entry = LedgerEntry {
               block: block.clone(),
               receipt: Receipt::default(),
             };
             ledgers.push(ledger_entry);
-            Ok(())
+            Ok(ledgers.len() - 1)
           } else {
             Err(LedgerStoreError::LedgerError(
               StorageError::IncorrectConditionalData,
@@ -186,16 +177,13 @@ impl LedgerStore for InMemoryLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError> {
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      if expected_height == 0 || expected_height == view_ledger_array.len() {
-        let ledger_entry = LedgerEntry {
-          block: block.clone(),
-          receipt: Receipt::default(),
-        };
+      if expected_height.is_none() || expected_height.unwrap() == view_ledger_array.len() {
+        let ledger_entry = LedgerEntry::new(block.clone(), Receipt::default());
         view_ledger_array.push(ledger_entry);
-        Ok(())
+        Ok(view_ledger_array.len() - 1)
       } else {
         Err(LedgerStoreError::LedgerError(
           StorageError::IncorrectConditionalData,

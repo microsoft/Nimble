@@ -6,10 +6,14 @@ use ledger::{
   NimbleHashTrait, Nonce, Receipt,
 };
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::sync::{Arc, RwLock};
-use store::{in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore};
+use store::{
+  in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
+};
 use tokio::sync::mpsc;
 use tonic::transport::{Channel, Endpoint};
+use tonic::Code;
 
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
@@ -19,12 +23,100 @@ use endorser_proto::endorser_call_client::EndorserCallClient;
 
 type EndorserConnMap = HashMap<Vec<u8>, (EndorserCallClient<Channel>, String)>;
 
+type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
+
 pub struct CoordinatorState {
-  ledger_store: Box<dyn LedgerStore + Send + Sync>,
+  ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
+
+async fn update_endorser(
+  ledger_store: LedgerStoreRef,
+  mut endorser_client: EndorserCallClient<Channel>,
+  handle: NimbleDigest,
+  start: usize,
+  end: usize,
+  ignore_lock: bool,
+) -> Result<(), CoordinatorError> {
+  if start == 0 {
+    let res = endorser_client
+      .new_ledger(tonic::Request::new(endorser_proto::NewLedgerReq {
+        handle: handle.to_bytes(),
+        ignore_lock,
+      }))
+      .await;
+
+    if res.is_err() {
+      let status = res.unwrap_err();
+      match status.code() {
+        Code::AlreadyExists => return Ok(()),
+        _ => {
+          return Err(CoordinatorError::FailedToCreateLedger);
+        },
+      }
+    }
+    let endorser_proto::NewLedgerResp { receipt } = res.unwrap().into_inner();
+
+    let res = Receipt::from_bytes(&receipt);
+    if res.is_ok() {
+      let receipt_rs = res.unwrap();
+      let res = ledger_store
+        .attach_ledger_receipt(&handle, &receipt_rs)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to attach ledger receipt to the ledger store ({:?})",
+          res
+        );
+      }
+    }
+  }
+
+  for idx in max(1, start)..=end {
+    let res = ledger_store.read_ledger_by_index(&handle, idx).await;
+    if res.is_err() {
+      eprintln!("Failed to read ledger by index {:?}", res);
+      return Err(CoordinatorError::FailedToReadLedger);
+    }
+    let ledger_entry = res.unwrap();
+
+    let res = endorser_client
+      .append(tonic::Request::new(endorser_proto::AppendReq {
+        handle: handle.to_bytes(),
+        block_hash: ledger_entry.get_receipt().get_block_hash().to_bytes(),
+        expected_height: ledger_entry.get_receipt().get_height() as u64,
+        ignore_lock,
+      }))
+      .await;
+
+    if res.is_err() {
+      let status = res.unwrap_err();
+      match status.code() {
+        Code::AlreadyExists => return Ok(()),
+        _ => return Err(CoordinatorError::FailedToAppendLedger),
+      }
+    }
+    let endorser_proto::AppendResp { receipt } = res.unwrap().into_inner();
+
+    let res = Receipt::from_bytes(&receipt);
+    if res.is_ok() {
+      let receipt_rs = res.unwrap();
+      let res = ledger_store
+        .attach_ledger_receipt(&handle, &receipt_rs)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to attach ledger receipt to the ledger store ({:?})",
+          res
+        );
+      }
+    }
+  }
+
+  Ok(())
+}
 
 impl CoordinatorState {
   pub async fn new(
@@ -33,11 +125,11 @@ impl CoordinatorState {
   ) -> Result<CoordinatorState, CoordinatorError> {
     let coordinator = match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
-        ledger_store: Box::new(MongoCosmosLedgerStore::new(args).await.unwrap()),
+        ledger_store: Arc::new(Box::new(MongoCosmosLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
       },
       _ => CoordinatorState {
-        ledger_store: Box::new(InMemoryLedgerStore::new()),
+        ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
       },
     };
@@ -49,8 +141,8 @@ impl CoordinatorState {
     }
 
     let view_ledger_tail = res.unwrap();
-    if view_ledger_tail.receipt.get_height() > 0 {
-      let res = bincode::deserialize(&view_ledger_tail.block.to_bytes());
+    if view_ledger_tail.get_receipt().get_height() > 0 {
+      let res = bincode::deserialize(&view_ledger_tail.get_block().to_bytes());
       if res.is_err() {
         eprintln!(
           "Failed to deserialize the view ledger tail's genesis block {:?}",
@@ -69,8 +161,6 @@ impl CoordinatorState {
         eprintln!("Failed to connect to endorsers {:?}", res);
         return Err(CoordinatorError::FailedToConnectToEndorser);
       }
-
-      // TODO: what if endorser's state is not in sync with ledger store?
     }
     Ok(coordinator)
   }
@@ -302,6 +392,7 @@ impl CoordinatorState {
       let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
       let block = *block_hash;
+      let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
         let res = endorser_client
           .append(tonic::Request::new(endorser_proto::AppendReq {
@@ -311,27 +402,67 @@ impl CoordinatorState {
             ignore_lock,
           }))
           .await;
-        tx.send(res).await.unwrap();
+        if let Ok(resp) = res {
+          let endorser_proto::AppendResp { receipt } = resp.into_inner();
+          let res = Receipt::from_bytes(&receipt);
+          if let Ok(receipt_rs) = res {
+            tx.send(receipt_rs).await.unwrap();
+          } else {
+            eprintln!("Failed to parse a receipt");
+          }
+        } else {
+          let status = res.unwrap_err();
+          if status.code() == Code::NotFound || status.code() == Code::FailedPrecondition {
+            let height_to_start = {
+              if status.code() == Code::NotFound {
+                0
+              } else {
+                let bytes = status.details();
+                let ledger_height = u64::from_le_bytes(bytes[0..].try_into().unwrap()) as usize;
+                ledger_height.checked_add(1).unwrap()
+              }
+            };
+            let height_to_end = expected_height - 1;
+            let res = update_endorser(
+              ledger_store,
+              endorser_client.clone(),
+              handle,
+              height_to_start,
+              height_to_end,
+              ignore_lock,
+            )
+            .await;
+            if res.is_ok() {
+              let res = endorser_client
+                .append(tonic::Request::new(endorser_proto::AppendReq {
+                  handle: handle.to_bytes(),
+                  block_hash: block.to_bytes(),
+                  expected_height: expected_height as u64,
+                  ignore_lock,
+                }))
+                .await;
+              if let Ok(resp) = res {
+                let endorser_proto::AppendResp { receipt } = resp.into_inner();
+                let res = Receipt::from_bytes(&receipt);
+                if let Ok(receipt_rs) = res {
+                  tx.send(receipt_rs).await.unwrap();
+                } else {
+                  eprintln!("Failed to parse a receipt");
+                }
+              }
+            }
+          } else {
+            eprintln!("Failed to append to a ledger status={:?}", status);
+          }
+        }
       });
     }
 
     drop(mpsc_tx);
 
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        // TODO: retry
-        eprintln!("Failed to append to an endorser");
-        continue;
-      }
-      let endorser_proto::AppendResp { receipt } = res.unwrap().into_inner();
-      let res = Receipt::from_bytes(&receipt);
-      if res.is_err() {
-        eprintln!("Failed to parse a receipt");
-        continue;
-      }
-      let receipt_rs = res.unwrap();
-      receipts.push(receipt_rs);
+    while let Some(receipt) = mpsc_rx.recv().await {
+      receipts.push(receipt);
     }
 
     match Receipt::merge_receipts(&receipts) {
@@ -540,69 +671,6 @@ impl CoordinatorState {
     Ok(())
   }
 
-  async fn update_endorser(
-    &self,
-    pk: &PublicKey,
-    handle: &NimbleDigest,
-    start: usize,
-    end: usize,
-  ) -> Result<(), CoordinatorError> {
-    let pk_vec = vec![pk.to_bytes()];
-    if start == 0 {
-      let res = self.endorser_create_ledger(&pk_vec, handle, true).await;
-      if let Err(error) = res {
-        return Err(error);
-      }
-      let receipt = res.unwrap();
-
-      let res = self
-        .ledger_store
-        .attach_ledger_receipt(handle, &receipt)
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to attach ledger receipt to the ledger store ({:?})",
-          res
-        );
-        return Err(CoordinatorError::FailedToAttachReceipt);
-      }
-    }
-
-    for idx in max(1, start)..=end {
-      let res = self.ledger_store.read_ledger_by_index(handle, idx).await;
-      if res.is_err() {
-        eprintln!("Failed to read ledger by index {:?}", res);
-        return Err(CoordinatorError::FailedToReadLedger);
-      }
-      let ledger_entry = res.unwrap();
-
-      let res = self
-        .endorser_append_ledger(
-          &pk_vec,
-          handle,
-          ledger_entry.receipt.get_block_hash(),
-          ledger_entry.receipt.get_height(),
-          true,
-        )
-        .await;
-      if let Err(error) = res {
-        return Err(error);
-      }
-      let receipt = res.unwrap();
-
-      let res = self
-        .ledger_store
-        .attach_ledger_receipt(handle, &receipt)
-        .await;
-      if res.is_err() {
-        eprintln!("Failed to attach ledger receipt {:?}", res);
-        return Err(CoordinatorError::FailedToAttachReceipt);
-      }
-    }
-
-    Ok(())
-  }
-
   async fn sync_ledger_views(
     &self,
     ledger_views: &[(PublicKey, LedgerView)],
@@ -643,30 +711,55 @@ impl CoordinatorState {
       }
     }
 
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(32);
+
     // Update endorsers to the max cut
     for (pk, ledger_view) in ledger_views {
+      let client = self.get_endorser_client(&pk.to_bytes()).unwrap();
+
       for (handle, metablock) in max_cut.ledger_tail_map.iter() {
-        let res = {
+        if ledger_view.ledger_tail_map.contains_key(handle)
+          && ledger_view.ledger_tail_map[handle].get_height() >= metablock.get_height()
+        {
+          continue;
+        }
+        let height_to_start = {
           if !ledger_view.ledger_tail_map.contains_key(handle) {
-            self
-              .update_endorser(pk, handle, 0, metablock.get_height())
-              .await
-          } else if ledger_view.ledger_tail_map[handle].get_height() < metablock.get_height() {
-            self
-              .update_endorser(
-                pk,
-                handle,
-                ledger_view.ledger_tail_map[handle].get_height(),
-                metablock.get_height(),
-              )
-              .await
+            0
           } else {
-            Ok(())
+            ledger_view.ledger_tail_map[handle]
+              .get_height()
+              .checked_add(1)
+              .unwrap()
           }
         };
-        if let Err(error) = res {
-          return Err(error);
-        }
+        let height_to_end = metablock.get_height();
+
+        let ledger_store = self.ledger_store.clone();
+        let endorser_client = client.clone();
+        let ledger_handle = *handle;
+        let tx = mpsc_tx.clone();
+        let pk_bytes = pk.to_bytes();
+        let _job = tokio::spawn(async move {
+          let res = update_endorser(
+            ledger_store,
+            endorser_client,
+            ledger_handle,
+            height_to_start,
+            height_to_end,
+            true,
+          )
+          .await;
+          tx.send((pk_bytes, res)).await.unwrap();
+        });
+      }
+    }
+
+    drop(mpsc_tx);
+
+    while let Some((pk_bytes, res)) = mpsc_rx.recv().await {
+      if res.is_err() {
+        eprintln!("failed to update endorser pk={:?} res={:?}", pk_bytes, res);
       }
     }
 
@@ -726,7 +819,7 @@ impl CoordinatorState {
     // Store the genesis block of the view ledger in the ledger store
     let res = self
       .ledger_store
-      .append_view_ledger(&view_ledger_genesis_block, 0)
+      .append_view_ledger(&view_ledger_genesis_block, None)
       .await;
     if res.is_err() {
       eprintln!(
@@ -904,9 +997,14 @@ impl CoordinatorState {
     let data_block = Block::new(block_bytes);
     let hash_of_block = data_block.hash();
 
+    let requested_height = match expected_height {
+      0 => None,
+      _ => Some(expected_height),
+    };
+
     let res = self
       .ledger_store
-      .append_ledger(&handle, &data_block, expected_height)
+      .append_ledger(&handle, &data_block, requested_height)
       .await;
     if res.is_err() {
       eprintln!(
@@ -916,13 +1014,16 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAppendLedger);
     }
 
+    let actual_height = res.unwrap();
+    assert!(expected_height == 0 || actual_height == expected_height);
+
     let receipt = {
       let endorsers = match endorsers_opt {
         Some(endorsers) => endorsers,
         None => self.get_endorser_pks(),
       };
       let res = self
-        .endorser_append_ledger(&endorsers, &handle, &hash_of_block, expected_height, false)
+        .endorser_append_ledger(&endorsers, &handle, &hash_of_block, actual_height, false)
         .await;
       if res.is_err() {
         eprintln!("Failed to append to the ledger in endorsers {:?}", res);
@@ -996,7 +1097,7 @@ impl CoordinatorState {
     &self,
     handle_bytes: &[u8],
     index: usize,
-  ) -> Result<(Block, Receipt), CoordinatorError> {
+  ) -> Result<LedgerEntry, CoordinatorError> {
     let handle = NimbleDigest::digest(handle_bytes);
 
     let ledger_entry = {
@@ -1011,13 +1112,10 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    Ok((ledger_entry.block, ledger_entry.receipt))
+    Ok(ledger_entry)
   }
 
-  pub async fn read_view_by_index(
-    &self,
-    index: usize,
-  ) -> Result<(Block, Receipt), CoordinatorError> {
+  pub async fn read_view_by_index(&self, index: usize) -> Result<LedgerEntry, CoordinatorError> {
     let ledger_entry = {
       let res = self.ledger_store.read_view_ledger_by_index(index).await;
       if res.is_err() {
@@ -1030,6 +1128,6 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    Ok((ledger_entry.block, ledger_entry.receipt))
+    Ok(ledger_entry)
   }
 }

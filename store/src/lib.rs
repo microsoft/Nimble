@@ -10,7 +10,21 @@ use crate::errors::LedgerStoreError;
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
   pub block: Block,
-  pub receipt: Receipt,
+  receipt: Receipt,
+}
+
+impl LedgerEntry {
+  pub fn new(block: Block, receipt: Receipt) -> Self {
+    Self { block, receipt }
+  }
+
+  pub fn get_block(&self) -> &Block {
+    &self.block
+  }
+
+  pub fn get_receipt(&self) -> &Receipt {
+    &self.receipt
+  }
 }
 
 #[async_trait]
@@ -22,12 +36,11 @@ pub trait LedgerStore {
     first_block: Block,
   ) -> Result<(), LedgerStoreError>;
   async fn append_ledger(
-    // TODO: should self be mutable?
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError>;
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError>;
   async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
@@ -42,8 +55,8 @@ pub trait LedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError>;
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError>;
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
   async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError>;
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
@@ -87,7 +100,7 @@ mod tests {
 
     let new_block = Block::new(&new_value_appended);
 
-    let res = state.append_ledger(&handle, &new_block, 0).await;
+    let res = state.append_ledger(&handle, &new_block, None).await;
     assert!(res.is_ok());
 
     let res = state.read_ledger_tail(&handle).await;

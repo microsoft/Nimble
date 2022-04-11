@@ -221,7 +221,7 @@ async fn append_ledger_op(
   block: &Block,
   expected_height: Option<usize>,
   ledger: &Collection<DBEntry>,
-) -> Result<(), LedgerStoreError> {
+) -> Result<usize, LedgerStoreError> {
   let height = find_ledger_height(ledger).await?;
 
   let height_plus_one = checked_increment!(height);
@@ -260,7 +260,7 @@ async fn append_ledger_op(
   // If it fails, caller must retry.
   ledger.insert_one(new_entry, None).await?;
 
-  Ok(())
+  Ok(height_plus_one as usize)
 }
 
 async fn attach_ledger_receipt_op(
@@ -389,10 +389,10 @@ async fn read_ledger_op(
   let entry: SerializedLedgerEntry =
     bincode::deserialize(&bson_entry.bytes).expect("failed to deserialize entry");
 
-  let res = LedgerEntry {
-    block: Block::from_bytes(&entry.block).unwrap(),
-    receipt: Receipt::from_bytes(&entry.receipt).unwrap(),
-  };
+  let res = LedgerEntry::new(
+    Block::from_bytes(&entry.block).unwrap(),
+    Receipt::from_bytes(&entry.receipt).unwrap(),
+  );
 
   Ok(res)
 }
@@ -441,21 +441,18 @@ impl LedgerStore for MongoCosmosLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError> {
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
-    let height = if expected_height > 0 {
-      Some(expected_height)
-    } else {
-      None
-    };
-
     loop {
-      with_retry!(append_ledger_op(block, height, &ledger).await, true);
+      with_retry!(
+        append_ledger_op(block, expected_height, &ledger).await,
+        true
+      );
     }
   }
 
@@ -515,8 +512,8 @@ impl LedgerStore for MongoCosmosLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: usize,
-  ) -> Result<(), LedgerStoreError> {
+    expected_height: Option<usize>,
+  ) -> Result<usize, LedgerStoreError> {
     self
       .append_ledger(&self.view_handle, block, expected_height)
       .await

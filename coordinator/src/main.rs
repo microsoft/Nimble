@@ -125,10 +125,10 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to read a ledger"));
     }
 
-    let (block, receipt) = res.unwrap();
+    let ledger_entry = res.unwrap();
     let reply = ReadByIndexResp {
-      block: block.to_bytes(),
-      receipt: receipt.to_bytes(),
+      block: ledger_entry.get_block().to_bytes(),
+      receipt: ledger_entry.get_receipt().to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -145,10 +145,10 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to read the view ledger"));
     }
 
-    let (block, receipt) = res.unwrap();
+    let ledger_entry = res.unwrap();
     let reply = ReadViewByIndexResp {
-      block: block.to_bytes(),
-      receipt: receipt.to_bytes(),
+      block: ledger_entry.get_block().to_bytes(),
+      receipt: ledger_entry.get_receipt().to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -563,6 +563,29 @@ mod tests {
     println!("append_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
+    let handle2_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let res = server
+      .get_state()
+      .create_ledger(None, handle2_bytes.as_ref(), &[])
+      .await;
+    println!("create_ledger with first endorser: {:?}", res);
+    assert!(res.is_ok());
+
+    let new_handle2 = handle2_bytes.to_vec();
+
+    let message2 = "no_condition_data_block_append 3".as_bytes();
+    let res = server
+      .get_state()
+      .append_ledger(
+        Some(endorsers.clone()),
+        &new_handle2.clone(),
+        message2,
+        0usize,
+      )
+      .await;
+    println!("append_ledger with first endorser: {:?}", res);
+    assert!(res.is_ok());
+
     // Step 10: add the third endorser
     let endorser_args3 = endorser_args.clone() + " 9092";
     let mut endorser3 = BoxChild {
@@ -636,17 +659,82 @@ mod tests {
     assert!(res.is_ok());
 
     if store != "memory" {
+      // set up the endorsers to be at different heights
+      let mut endorsers = server.get_state().get_endorser_pks();
+      endorsers.remove(1);
+
+      let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+      let res = server
+        .get_state()
+        .create_ledger(Some(endorsers.clone()), handle_bytes.as_ref(), &[])
+        .await;
+      println!("create_ledger with the first two endorser: {:?}", res);
+      assert!(res.is_ok());
+
+      let new_handle = handle_bytes.to_vec();
+
+      let message = "no_condition_data_block_append 2".as_bytes();
+      let res = server
+        .get_state()
+        .append_ledger(
+          Some(endorsers.clone()),
+          &new_handle.clone(),
+          message,
+          0usize,
+        )
+        .await;
+      println!("append_ledger with the first two endorser: {:?}", res);
+      assert!(res.is_ok());
+
+      let handle2_bytes = rand::thread_rng().gen::<[u8; 16]>();
+      let res = server
+        .get_state()
+        .create_ledger(None, handle2_bytes.as_ref(), &[])
+        .await;
+      println!("create_ledger with all three endorser: {:?}", res);
+      assert!(res.is_ok());
+
+      let new_handle2 = handle2_bytes.to_vec();
+
+      let message2 = "no_condition_data_block_append 3".as_bytes();
+      let res = server
+        .get_state()
+        .append_ledger(
+          Some(endorsers.clone()),
+          &new_handle2.clone(),
+          message2,
+          0usize,
+        )
+        .await;
+      println!("append_ledger with the first two endorser: {:?}", res);
+      assert!(res.is_ok());
+
       // Step 13: start a new coordinator
       let coordinator2 = CoordinatorState::new(&store, &ledger_store_args)
         .await
         .unwrap();
 
       let server2 = CoordinatorServiceState::new(coordinator2);
+      println!("Started a new coordinator");
 
       // Step 14: Append without a condition via the new coordinator
       let message = "no_condition_data_block_append 4".as_bytes();
       let req = tonic::Request::new(AppendReq {
         handle: new_handle.clone(),
+        block: message.to_vec(),
+        expected_height: 0_u64,
+      });
+
+      let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
+
+      let res = verify_append(&vs, message, 0, &receipt);
+      println!("Append verification no condition: {:?}", res.is_ok());
+      assert!(res.is_ok());
+
+      // Step 14: Append without a condition via the new coordinator
+      let message = "no_condition_data_block_append 4".as_bytes();
+      let req = tonic::Request::new(AppendReq {
+        handle: new_handle2.clone(),
         block: message.to_vec(),
         expected_height: 0_u64,
       });
