@@ -16,4 +16,16 @@ pub enum EndorserError {
   OutOfOrderAppend,
   /// returned if the endorser is locked
   IsLocked,
+  /// returned if failed to acquire view ledger read lock
+  FailedToAcquireViewLedgerReadLock,
+  /// returned if failed to acquire view ledger write lock
+  FailedToAcquireViewLedgerWriteLock,
+  /// returned if failed to acquire ledger map read lock
+  FailedToAcquireLedgerMapReadLock,
+  /// returned if failed to acquire ledger map write lock
+  FailedToAcquireLedgerMapWriteLock,
+  /// returned if failed to acquire ledger entry read lock
+  FailedToAcquireLedgerEntryReadLock,
+  /// returned if failed to acquire ledger entry write lock
+  FailedToAcquireLedgerEntryWriteLock,
 }

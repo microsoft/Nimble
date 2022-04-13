@@ -829,6 +829,8 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
 
+    let view_ledger_height = res.unwrap();
+
     // Initialize new endorsers
     let receipt1 = {
       let res = self
@@ -836,7 +838,7 @@ impl CoordinatorState {
           &new_endorsers,
           &ledger_view,
           &view_ledger_genesis_block.hash(),
-          0,
+          view_ledger_height,
         )
         .await;
       if res.is_err() {
@@ -854,7 +856,11 @@ impl CoordinatorState {
         // Update existing endorsers
         let receipt2 = {
           let res = self
-            .endorser_append_view_ledger(&existing_endorsers, &view_ledger_genesis_block.hash(), 0)
+            .endorser_append_view_ledger(
+              &existing_endorsers,
+              &view_ledger_genesis_block.hash(),
+              view_ledger_height,
+            )
             .await;
           if res.is_err() {
             eprintln!(

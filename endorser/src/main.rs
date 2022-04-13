@@ -3,7 +3,6 @@ use crate::errors::EndorserError;
 use clap::{App, Arg};
 use ledger::{signature::PublicKeyTrait, CustomSerde, MetaBlock, NimbleDigest};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
@@ -23,13 +22,13 @@ use endorser_proto::{
 };
 
 pub struct EndorserServiceState {
-  state: Arc<RwLock<EndorserState>>,
+  state: EndorserState,
 }
 
 impl EndorserServiceState {
   pub fn new() -> Self {
     EndorserServiceState {
-      state: Arc::new(RwLock::new(EndorserState::new())),
+      state: EndorserState::new(),
     }
   }
 }
@@ -46,11 +45,7 @@ impl EndorserCall for EndorserServiceState {
     &self,
     _req: Request<GetPublicKeyReq>,
   ) -> Result<Response<GetPublicKeyResp>, Status> {
-    let pk = self
-      .state
-      .read()
-      .expect("Failed to acquire read lock")
-      .get_public_key();
+    let pk = self.state.get_public_key();
 
     let reply = GetPublicKeyResp {
       pk: pk.to_bytes().to_vec(),
@@ -75,12 +70,7 @@ impl EndorserCall for EndorserServiceState {
       handle_instance.unwrap()
     };
 
-    let mut endorser = self
-      .state
-      .write()
-      .expect("Unable to get a write lock on EndorserState");
-
-    let res = endorser.new_ledger(&handle, ignore_lock);
+    let res = self.state.new_ledger(&handle, ignore_lock);
 
     match res {
       Ok(receipt) => {
@@ -114,8 +104,9 @@ impl EndorserCall for EndorserServiceState {
     let handle = handle_instance.unwrap();
     let block_hash = block_hash_instance.unwrap();
 
-    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res = endorser_state.append(&handle, &block_hash, expected_height as usize, ignore_lock);
+    let res = self
+      .state
+      .append(&handle, &block_hash, expected_height as usize, ignore_lock);
 
     match res {
       Ok(receipt) => {
@@ -127,7 +118,7 @@ impl EndorserCall for EndorserServiceState {
 
       Err(error) => match error {
         EndorserError::OutOfOrderAppend => {
-          let height = endorser_state.get_height(&handle).unwrap();
+          let height = self.state.get_height(&handle).unwrap();
           Err(Status::with_details(
             Code::FailedPrecondition,
             "Out of order append",
@@ -154,8 +145,7 @@ impl EndorserCall for EndorserServiceState {
       }
       res.unwrap()
     };
-    let latest_state = self.state.read().expect("Failed to acquire read lock");
-    let res = latest_state.read_latest(&handle, &nonce);
+    let res = self.state.read_latest(&handle, &nonce);
 
     match res {
       Ok(receipt) => {
@@ -183,9 +173,9 @@ impl EndorserCall for EndorserServiceState {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
-    let mut endorser_state = self.state.write().expect("Unable to obtain write lock");
-    let res =
-      endorser_state.append_view_ledger(&block_hash_instance.unwrap(), expected_height as usize);
+    let res = self
+      .state
+      .append_view_ledger(&block_hash_instance.unwrap(), expected_height as usize);
 
     match res {
       Ok(receipt) => {
@@ -204,8 +194,7 @@ impl EndorserCall for EndorserServiceState {
     request: Request<ReadLatestViewLedgerReq>,
   ) -> Result<Response<ReadLatestViewLedgerResp>, Status> {
     let ReadLatestViewLedgerReq { nonce } = request.into_inner();
-    let endorser = self.state.read().expect("Failed to acquire read lock");
-    let res = endorser.read_latest_view_ledger(&nonce);
+    let res = self.state.read_latest_view_ledger(&nonce);
 
     match res {
       Ok(receipt) => {
@@ -239,16 +228,12 @@ impl EndorserCall for EndorserServiceState {
       .collect();
     let view_tail_metablock_rs = MetaBlock::from_bytes(&view_tail_metablock).unwrap();
     let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
-    let res = self
-      .state
-      .write()
-      .expect("Failed to acquire write lock")
-      .initialize_state(
-        &ledger_tail_map_rs,
-        &view_tail_metablock_rs,
-        &block_hash_rs,
-        expected_height as usize,
-      );
+    let res = self.state.initialize_state(
+      &ledger_tail_map_rs,
+      &view_tail_metablock_rs,
+      &block_hash_rs,
+      expected_height as usize,
+    );
 
     match res {
       Ok(receipt) => {
@@ -257,7 +242,7 @@ impl EndorserCall for EndorserServiceState {
         };
         Ok(Response::new(reply))
       },
-      Err(_) => Err(Status::aborted("Failed to endorse_state")),
+      Err(_) => Err(Status::aborted("Failed to initialize the endorser state")),
     }
   }
 
@@ -268,18 +253,13 @@ impl EndorserCall for EndorserServiceState {
     let ReadLatestStateReq { to_lock } = request.into_inner();
 
     if to_lock {
-      self
-        .state
-        .write()
-        .expect("Failed to acquire write lock")
-        .lock();
+      let res = self.state.lock();
+      if res.is_err() {
+        return Err(Status::aborted("Failed to lock"));
+      }
     }
 
-    let res = self
-      .state
-      .read()
-      .expect("Failed to acquire read lock")
-      .read_latest_state();
+    let res = self.state.read_latest_state();
 
     if res.is_err() {
       return Err(Status::aborted("Failed to read latest state"));
@@ -302,14 +282,13 @@ impl EndorserCall for EndorserServiceState {
   }
 
   async fn unlock(&self, _req: Request<UnlockReq>) -> Result<Response<UnlockResp>, Status> {
-    self
-      .state
-      .write()
-      .expect("Failed to acquire write lock")
-      .unlock();
-
-    let reply = UnlockResp {};
-    Ok(Response::new(reply))
+    let res = self.state.unlock();
+    if res.is_err() {
+      Err(Status::aborted("Failed to unlock"))
+    } else {
+      let reply = UnlockResp {};
+      Ok(Response::new(reply))
+    }
   }
 }
 
