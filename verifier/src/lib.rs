@@ -175,7 +175,7 @@ pub fn verify_read_latest(
   block_bytes: &[u8],
   nonce_bytes: &[u8],
   receipt_bytes: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), VerificationError> {
+) -> Result<(Vec<u8>, usize), VerificationError> {
   let res = Receipt::from_bytes(receipt_bytes);
   if res.is_err() {
     return Err(VerificationError::InvalidReceipt);
@@ -210,7 +210,7 @@ pub fn verify_read_latest(
   } else {
     block_bytes.to_vec()
   };
-  Ok((tail_hash_prime.to_bytes(), filtered_block_data))
+  Ok((filtered_block_data, receipt.get_height()))
 }
 
 pub fn verify_read_by_index(
