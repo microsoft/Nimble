@@ -34,6 +34,10 @@ pub enum StorageError {
   IntegerOverflow,
   /// return if receipts are mismatch
   MismatchedReceipts,
+  /// return if there was an error serializing an entry
+  SerializationError,
+  /// return if there was an error deserializing an entry
+  DeserializationError,
 }
 
 use std::fmt::Display;

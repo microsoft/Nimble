@@ -12,7 +12,12 @@ use mongodb::{
   Client, Collection,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, convert::TryFrom, fmt::Debug};
+use std::{
+  collections::HashMap,
+  convert::TryFrom,
+  fmt::Debug,
+  sync::{Arc, RwLock},
+};
 
 macro_rules! checked_increment {
   ($x:expr) => {
@@ -39,7 +44,7 @@ macro_rules! checked_conversion {
 }
 
 macro_rules! with_retry {
-  ($x:expr, $write_retry:expr) => {
+  ($x:expr, $handle:expr, $cache:expr, $ledger:expr, $write_retry:expr) => {
     match $x {
       Err(error) => match error {
         LedgerStoreError::MongoDBError(mongodb_error) => {
@@ -56,6 +61,8 @@ macro_rules! with_retry {
             },
             mongodb::error::ErrorKind::Write(WriteError(write_error)) => {
               if write_error.code == DUPLICATE_KEY_CODE {
+                fix_cached_height($handle, $cache, $ledger).await?;
+
                 if $write_retry {
                   continue;
                 } else {
@@ -101,6 +108,9 @@ impl BsonBinaryData for Handle {
   }
 }
 
+type CacheEntry = Arc<RwLock<i64>>;
+type CacheMap = Arc<RwLock<HashMap<Handle, CacheEntry>>>;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
@@ -119,6 +129,7 @@ pub struct MongoCosmosLedgerStore {
   client: Client,
   view_handle: Handle,
   dbname: String,
+  cache: CacheMap,
 }
 
 impl MongoCosmosLedgerStore {
@@ -145,21 +156,26 @@ impl MongoCosmosLedgerStore {
     }
     let cosmos_client = res.unwrap();
 
-    let view_handle: Handle = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()])
-      .expect(
-        "unable
-          to deserialize view ledger handle",
-      );
+    let view_handle = match NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()]) {
+      Ok(e) => e,
+      Err(_) => {
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::DeserializationError,
+        ));
+      },
+    };
+
+    let cache = Arc::new(RwLock::new(HashMap::new()));
 
     let ledger_store = MongoCosmosLedgerStore {
       client: cosmos_client,
       dbname: nimble_db_name.clone(),
       view_handle,
+      cache,
     };
 
-    // Check if the view ledger exists
-    let res = ledger_store.read_view_ledger_tail().await;
-    if let Err(error) = res {
+    // Check if the view ledger exists, if not, create a new one
+    if let Err(error) = ledger_store.read_view_ledger_tail().await {
       match error {
         LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
           // Initialized view ledger's entry
@@ -168,9 +184,14 @@ impl MongoCosmosLedgerStore {
             receipt: Receipt::default().to_bytes(),
           };
 
-          let bson_entry: Binary = bincode::serialize(&entry)
-            .expect("failed to serialize entry")
-            .to_bson_binary();
+          let bson_entry: Binary = match bincode::serialize(&entry) {
+            Ok(e) => e.to_bson_binary(),
+            Err(_) => {
+              return Err(LedgerStoreError::LedgerError(
+                StorageError::SerializationError,
+              ));
+            },
+          };
 
           let tail_entry = DBEntry {
             index: 0_i64,
@@ -183,11 +204,20 @@ impl MongoCosmosLedgerStore {
             .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()))
             .insert_one(tail_entry, None)
             .await?;
+
+          update_cache_entry(&view_handle, &ledger_store.cache, 0)?;
         },
         _ => {
           return Err(error);
         },
-      }
+      };
+    } else {
+      // Since view ledger exists, update the cache height with the latest height
+      let ledger = ledger_store
+        .client
+        .database(&nimble_db_name)
+        .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()));
+      fix_cached_height(&ledger_store.view_handle, &ledger_store.cache, &ledger).await?;
     }
 
     Ok(ledger_store)
@@ -219,12 +249,13 @@ async fn find_db_entry(
 }
 
 async fn append_ledger_op(
+  handle: &Handle,
   block: &Block,
   expected_height: Option<usize>,
   ledger: &Collection<DBEntry>,
+  cache: &CacheMap,
 ) -> Result<usize, LedgerStoreError> {
-  let height = find_ledger_height(ledger).await?;
-
+  let height = get_cached_height(handle, cache, ledger).await?;
   let height_plus_one = checked_increment!(height);
 
   // 2. If it is a conditional update, check if condition still holds
@@ -261,6 +292,8 @@ async fn append_ledger_op(
   // If it fails, caller must retry.
   ledger.insert_one(new_entry, None).await?;
 
+  // Update the cached height for this ledger
+  update_cache_entry(handle, cache, height_plus_one)?;
   Ok(height_plus_one as usize)
 }
 
@@ -312,9 +345,11 @@ async fn attach_ledger_receipt_op(
 }
 
 async fn create_ledger_op(
+  handle: &Handle,
   genesis_block: &Block,
   first_block: &Block,
   ledger: &Collection<DBEntry>,
+  cache: &CacheMap,
 ) -> Result<(), LedgerStoreError> {
   // 1. Create the ledger entry that we will add to the brand new ledger
   let init_data_ledger_entry = SerializedLedgerEntry {
@@ -350,21 +385,26 @@ async fn create_ledger_op(
   ledger
     .insert_many(&vec![first_entry, init_entry], None)
     .await?;
+
+  // Update the ledger's cache height with the the latest height (which is 1)
+  update_cache_entry(handle, cache, 1)?;
+
   Ok(())
 }
 
 async fn read_ledger_op(
+  handle: &Handle,
   idx: Option<usize>,
   ledger: &Collection<DBEntry>,
+  cache: &CacheMap,
 ) -> Result<LedgerEntry, LedgerStoreError> {
   let index = match idx {
-    None => find_ledger_height(ledger).await?,
+    None => get_cached_height(handle, cache, ledger).await?,
     Some(i) => {
       checked_conversion!(i, i64)
     },
   };
 
-  // Find the latest value of view associated with the provided index.
   let res = ledger
     .find_one(
       doc! {
@@ -398,17 +438,101 @@ async fn read_ledger_op(
   Ok(res)
 }
 
+async fn get_cached_height(
+  handle: &Handle,
+  cache: &CacheMap,
+  ledger: &Collection<DBEntry>,
+) -> Result<i64, LedgerStoreError> {
+  if let Ok(read_map) = cache.read() {
+    if let Some(cache_entry) = read_map.get(handle) {
+      if let Ok(height) = cache_entry.read() {
+        return Ok(*height);
+      } else {
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerReadLockFailed,
+        ));
+      }
+    }
+  } else {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::LedgerReadLockFailed,
+    ));
+  }
+
+  // If above doesn't return, it means the entry isn't around and we need to populate it.
+  let height = find_ledger_height(ledger).await?;
+
+  if let Ok(mut write_map) = cache.write() {
+    write_map
+      .entry(*handle)
+      .or_insert_with(|| Arc::new(RwLock::new(height)));
+    Ok(height)
+  } else {
+    Err(LedgerStoreError::LedgerError(
+      StorageError::LedgerWriteLockFailed,
+    ))
+  }
+}
+
+// This is called when the cache height is incorrect (e.g., concurrent appends)
+async fn fix_cached_height(
+  handle: &Handle,
+  cache: &CacheMap,
+  ledger: &Collection<DBEntry>,
+) -> Result<(), LedgerStoreError> {
+  // find the correct height
+  let height = find_ledger_height(ledger).await?;
+  update_cache_entry(handle, cache, height)?;
+
+  Ok(())
+}
+
+fn update_cache_entry(
+  handle: &Handle,
+  cache: &CacheMap,
+  new_height: i64,
+) -> Result<(), LedgerStoreError> {
+  if let Ok(cache_map) = cache.read() {
+    if let Some(cache_entry) = cache_map.get(handle) {
+      if let Ok(mut height) = cache_entry.write() {
+        *height = new_height;
+        return Ok(());
+      } else {
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerWriteLockFailed,
+        ));
+      };
+    }
+  } else {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::LedgerReadLockFailed,
+    ));
+  }
+
+  // If above doesn't return, it means the entry isn't around and we need to populate it.
+  if let Ok(mut write_map) = cache.write() {
+    write_map.insert(*handle, Arc::new(RwLock::new(new_height)));
+  } else {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::LedgerWriteLockFailed,
+    ));
+  }
+
+  Ok(())
+}
+
 async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerStoreError> {
   // There are two methods for computing height estimated_document_count returns
   // height from metadata stored in mongodb. This is an estimate in the sense
   // that it might return a stale count the if the database shutdown in an unclean way and restarted.
   // In contrast, count_documents returns an accurate count but requires scanning all docs.
-  let height = checked_conversion!(ledger.estimated_document_count(None).await?, i64);
+  let count = checked_conversion!(ledger.estimated_document_count(None).await?, i64);
 
-  if height > 0 {
-    Ok(height - 1)
+  // The height or offset is count - 1 since we index from 0.
+  if count > 0 {
+    Ok(count - 1)
   } else {
-    Ok(height)
+    Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
   }
 }
 
@@ -432,7 +556,10 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        create_ledger_op(&genesis_block, &first_block, &ledger).await,
+        create_ledger_op(handle, &genesis_block, &first_block, &ledger, &self.cache).await,
+        handle,
+        &self.cache,
+        &ledger,
         false
       );
     }
@@ -451,8 +578,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        append_ledger_op(block, expected_height, &ledger).await,
-        true
+        append_ledger_op(handle, block, expected_height, &ledger, &self.cache).await,
+        handle,
+        &self.cache,
+        &ledger,
+        expected_height.is_none()
       );
     }
   }
@@ -468,7 +598,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(attach_ledger_receipt_op(receipt, &ledger).await, false);
+      with_retry!(
+        attach_ledger_receipt_op(receipt, &ledger).await,
+        handle,
+        &self.cache,
+        &ledger,
+        false
+      );
     }
   }
 
@@ -479,7 +615,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(read_ledger_op(None, &ledger).await, false);
+      with_retry!(
+        read_ledger_op(handle, None, &ledger, &self.cache).await,
+        handle,
+        &self.cache,
+        &ledger,
+        false
+      );
     }
   }
 
@@ -494,7 +636,13 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
     loop {
-      with_retry!(read_ledger_op(Some(index), &ledger).await, false);
+      with_retry!(
+        read_ledger_op(handle, Some(index), &ledger, &self.cache).await,
+        handle,
+        &self.cache,
+        &ledger,
+        false
+      );
     }
   }
 
