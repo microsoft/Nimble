@@ -1,15 +1,18 @@
 mod errors;
 pub mod signature;
-use crate::errors::VerificationError;
-use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
+use crate::{
+  errors::VerificationError,
+  signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait},
+};
 use digest::Output;
-use generic_array::typenum::U32;
-use generic_array::GenericArray;
+use generic_array::{typenum::U32, GenericArray};
 use itertools::{concat, Itertools};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
+use std::{
+  collections::{HashMap, HashSet},
+  convert::TryInto,
+};
 
 /// A cryptographic digest
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Copy, Ord, PartialOrd)]

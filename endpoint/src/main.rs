@@ -13,17 +13,18 @@ pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
-use crate::endpoint_proto::call_server::{Call, CallServer};
-use crate::endpoint_proto::{
-  GetIdentityReq, GetIdentityResp, IncrementCounterReq, IncrementCounterResp, NewCounterReq,
-  NewCounterResp, ReadCounterReq, ReadCounterResp,
+use crate::{
+  endpoint_proto::{
+    call_server::{Call, CallServer},
+    GetIdentityReq, GetIdentityResp, IncrementCounterReq, IncrementCounterResp, NewCounterReq,
+    NewCounterResp, ReadCounterReq, ReadCounterResp,
+  },
+  errors::EndpointError,
 };
-use crate::errors::EndpointError;
 use clap::{App, Arg};
-use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
-  ReadViewByIndexReq, ReadViewByIndexResp,
+  call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
+  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use ledger::{
   signature::{PrivateKey, PrivateKeyTrait, PublicKeyTrait, SignatureTrait},

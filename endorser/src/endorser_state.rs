@@ -4,8 +4,10 @@ use ledger::{
   signature::{PrivateKey, PrivateKeyTrait, PublicKey},
   Handle, IdSig, LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
 };
-use std::collections::{hash_map, HashMap};
-use std::sync::{Arc, RwLock};
+use std::{
+  collections::{hash_map, HashMap},
+  sync::{Arc, RwLock},
+};
 
 struct ViewLedgerState {
   view_ledger_tail_metablock: MetaBlock,

@@ -1,23 +1,26 @@
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap};
-use std::convert::TryFrom;
+use std::{
+  collections::{btree_map::Entry, BTreeMap, HashMap},
+  convert::TryFrom,
+};
 
 use clap::Parser;
 use rand::Rng;
 use tokio::time::Instant;
 use tonic::transport::{Channel, Endpoint};
 
-use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
-  AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadViewByIndexReq, ReadViewByIndexResp,
+  call_client::CallClient, AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq,
+  ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use verifier::{verify_append, verify_new_ledger, verify_read_latest, VerifierState};
 
-use crate::cli::Args;
-use crate::errors::ClientError;
-use crate::log::{check_file_path_and_setup_dirs_necessary, BenchmarkLog};
-use crate::timer::Timer;
-use crate::utils::{compute_average, compute_throughput_per_second, generate_random_bytes};
+use crate::{
+  cli::Args,
+  errors::ClientError,
+  log::{check_file_path_and_setup_dirs_necessary, BenchmarkLog},
+  timer::Timer,
+  utils::{compute_average, compute_throughput_per_second, generate_random_bytes},
+};
 
 mod cli;
 mod errors;

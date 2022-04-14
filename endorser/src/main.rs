@@ -1,10 +1,8 @@
-use crate::endorser_state::EndorserState;
-use crate::errors::EndorserError;
+use crate::{endorser_state::EndorserState, errors::EndorserError};
 use clap::{App, Arg};
 use ledger::{signature::PublicKeyTrait, CustomSerde, MetaBlock, NimbleDigest};
 use std::collections::HashMap;
-use tonic::transport::Server;
-use tonic::{Code, Request, Response, Status};
+use tonic::{transport::Server, Code, Request, Response, Status};
 
 mod endorser_state;
 mod errors;
@@ -13,8 +11,8 @@ pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
 }
 
-use endorser_proto::endorser_call_server::{EndorserCall, EndorserCallServer};
 use endorser_proto::{
+  endorser_call_server::{EndorserCall, EndorserCallServer},
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
   GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
   NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,

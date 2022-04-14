@@ -1,8 +1,6 @@
 use colored::Colorize;
-use core::sync::atomic::AtomicUsize;
-use core::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 pub static CALL_DEPTH: AtomicUsize = AtomicUsize::new(0);
 

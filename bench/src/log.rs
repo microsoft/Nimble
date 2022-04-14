@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::fs::{create_dir_all, File, OpenOptions};
-use std::path::Path;
+use std::{
+  fs::{create_dir_all, File, OpenOptions},
+  path::Path,
+};
 
 pub struct FileWriter {
   writer: csv::Writer<File>,

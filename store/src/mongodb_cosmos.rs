@@ -1,17 +1,18 @@
-use crate::errors::{LedgerStoreError, StorageError};
-use crate::{LedgerEntry, LedgerStore};
+use crate::{
+  errors::{LedgerStoreError, StorageError},
+  LedgerEntry, LedgerStore,
+};
 use async_trait::async_trait;
 use bincode;
 use hex;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
-use mongodb::bson::doc;
-use mongodb::bson::{spec::BinarySubtype, Binary};
-use mongodb::error::WriteFailure::WriteError;
-use mongodb::{Client, Collection};
+use mongodb::{
+  bson::{doc, spec::BinarySubtype, Binary},
+  error::WriteFailure::WriteError,
+  Client, Collection,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::{collections::HashMap, convert::TryFrom, fmt::Debug};
 
 macro_rules! checked_increment {
   ($x:expr) => {

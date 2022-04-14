@@ -5,15 +5,19 @@ use ledger::{
   Block, CustomSerde, EndorserHostnames, Handle, LedgerView, MetaBlock, NimbleDigest,
   NimbleHashTrait, Nonce, Receipt,
 };
-use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
-use std::sync::{Arc, RwLock};
+use std::{
+  collections::{HashMap, HashSet},
+  convert::TryInto,
+  sync::{Arc, RwLock},
+};
 use store::{
   in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
 };
 use tokio::sync::mpsc;
-use tonic::transport::{Channel, Endpoint};
-use tonic::Code;
+use tonic::{
+  transport::{Channel, Endpoint},
+  Code,
+};
 
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");

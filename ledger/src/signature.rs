@@ -1,11 +1,12 @@
 use core::fmt::Debug;
 use itertools::concat;
-use openssl::bn::BigNum;
-use openssl::bn::BigNumContext;
-use openssl::ec::*;
-use openssl::ecdsa::EcdsaSig;
-use openssl::nid::Nid;
-use openssl::pkey::{Private, Public};
+use openssl::{
+  bn::{BigNum, BigNumContext},
+  ec::*,
+  ecdsa::EcdsaSig,
+  nid::Nid,
+  pkey::{Private, Public},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CryptoError {

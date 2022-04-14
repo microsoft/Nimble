@@ -8,10 +8,9 @@ pub mod coordinator_proto {
 
 use crate::errors::ClientError;
 use clap::{App, Arg};
-use coordinator_proto::call_client::CallClient;
 use coordinator_proto::{
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+  call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
+  ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use rand::Rng;
 use verifier::{

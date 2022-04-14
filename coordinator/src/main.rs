@@ -4,16 +4,15 @@ mod errors;
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::collections::HashMap;
-use tonic::transport::Server;
-use tonic::{Request, Response, Status};
+use tonic::{transport::Server, Request, Response, Status};
 
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
 use clap::{App, Arg};
-use coordinator_proto::call_server::{Call, CallServer};
 use coordinator_proto::{
+  call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
@@ -238,16 +237,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-  use crate::coordinator_proto::call_server::Call;
-  use crate::coordinator_proto::{
-    AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-    ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+  use crate::{
+    coordinator_proto::{
+      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
+      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+    },
+    CoordinatorServiceState, CoordinatorState,
   };
-  use crate::{CoordinatorServiceState, CoordinatorState};
   use rand::Rng;
-  use std::collections::HashMap;
-  use std::io::{BufRead, BufReader};
-  use std::process::{Child, Command, Stdio};
+  use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader},
+    process::{Child, Command, Stdio},
+  };
   use verifier::{
     verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest, VerifierState,
   };

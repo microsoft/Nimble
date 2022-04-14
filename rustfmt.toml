@@ -9,3 +9,4 @@ reorder_modules = true
 use_field_init_shorthand = true
 reorder_imports = true
 match_block_trailing_comma = true
+imports_granularity = "crate"

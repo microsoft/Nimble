@@ -12,10 +12,9 @@ mod endpoint_proto {
 
 use crate::errors::ClientError;
 use clap::{App, Arg};
-use endpoint_proto::call_client::CallClient;
 use endpoint_proto::{
-  GetIdentityReq, GetIdentityResp, IncrementCounterReq, IncrementCounterResp, NewCounterReq,
-  NewCounterResp, ReadCounterReq, ReadCounterResp,
+  call_client::CallClient, GetIdentityReq, GetIdentityResp, IncrementCounterReq,
+  IncrementCounterResp, NewCounterReq, NewCounterResp, ReadCounterReq, ReadCounterResp,
 };
 use rand::Rng;
 

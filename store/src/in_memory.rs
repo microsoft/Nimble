@@ -1,9 +1,13 @@
 use super::{Block, Handle, NimbleDigest, Receipt};
-use crate::errors::{LedgerStoreError, StorageError};
-use crate::{LedgerEntry, LedgerStore};
+use crate::{
+  errors::{LedgerStoreError, StorageError},
+  LedgerEntry, LedgerStore,
+};
 use async_trait::async_trait;
-use std::collections::{hash_map, HashMap};
-use std::sync::{Arc, RwLock};
+use std::{
+  collections::{hash_map, HashMap},
+  sync::{Arc, RwLock},
+};
 
 type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
 
