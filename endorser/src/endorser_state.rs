@@ -132,7 +132,8 @@ impl EndorserState {
         match ledger_tail_map.get(handle) {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
-            if let Ok(metablock) = protected_metablock.read() {
+            if let Ok(mut metablock) = protected_metablock.write() {
+              metablock.update_view(&view_ledger_state.view_ledger_tail_hash);
               let tail_hash = metablock.hash();
               let message = tail_hash.digest_with_bytes(nonce);
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();

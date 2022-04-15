@@ -348,12 +348,13 @@ impl CoordinatorState {
             ignore_lock,
           }))
           .await;
-        tx.send(res).await.unwrap();
+        let _ = tx.send(res).await;
       });
     }
 
     drop(mpsc_tx);
 
+    let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
     while let Some(res) = mpsc_rx.recv().await {
       if res.is_err() {
@@ -368,6 +369,9 @@ impl CoordinatorState {
       }
       let receipt_rs = res.unwrap();
       receipts.push(receipt_rs);
+      if receipts.len() == quorum_size {
+        break;
+      }
     }
 
     match Receipt::merge_receipts(&receipts) {
@@ -410,7 +414,7 @@ impl CoordinatorState {
           let endorser_proto::AppendResp { receipt } = resp.into_inner();
           let res = Receipt::from_bytes(&receipt);
           if let Ok(receipt_rs) = res {
-            tx.send(receipt_rs).await.unwrap();
+            let _ = tx.send(receipt_rs).await;
           } else {
             eprintln!("Failed to parse a receipt");
           }
@@ -449,7 +453,7 @@ impl CoordinatorState {
                 let endorser_proto::AppendResp { receipt } = resp.into_inner();
                 let res = Receipt::from_bytes(&receipt);
                 if let Ok(receipt_rs) = res {
-                  tx.send(receipt_rs).await.unwrap();
+                  let _ = tx.send(receipt_rs).await;
                 } else {
                   eprintln!("Failed to parse a receipt");
                 }
@@ -464,9 +468,13 @@ impl CoordinatorState {
 
     drop(mpsc_tx);
 
+    let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
     while let Some(receipt) = mpsc_rx.recv().await {
       receipts.push(receipt);
+      if receipts.len() == quorum_size {
+        break;
+      }
     }
 
     match Receipt::merge_receipts(&receipts) {
@@ -501,12 +509,13 @@ impl CoordinatorState {
             nonce: nonce.get(),
           }))
           .await;
-        tx.send(res).await.unwrap();
+        let _ = tx.send(res).await;
       });
     }
 
     drop(mpsc_tx);
 
+    let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
     while let Some(res) = mpsc_rx.recv().await {
       if res.is_err() {
@@ -521,6 +530,9 @@ impl CoordinatorState {
       }
       let receipt_rs = res.unwrap();
       receipts.push(receipt_rs);
+      if receipts.len() == quorum_size {
+        break;
+      }
     }
 
     match Receipt::merge_receipts(&receipts) {
@@ -554,12 +566,13 @@ impl CoordinatorState {
             expected_height: expected_height as u64,
           }))
           .await;
-        tx.send(res).await.unwrap();
+        let _ = tx.send(res).await;
       });
     }
 
     drop(mpsc_tx);
 
+    let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
     while let Some(res) = mpsc_rx.recv().await {
       if res.is_err() {
@@ -574,6 +587,9 @@ impl CoordinatorState {
       }
       let receipt_rs = res.unwrap();
       receipts.push(receipt_rs);
+      if receipts.len() == quorum_size {
+        break;
+      }
     }
 
     match Receipt::merge_receipts(&receipts) {

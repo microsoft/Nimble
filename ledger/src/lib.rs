@@ -191,6 +191,10 @@ impl MetaBlock {
   pub fn get_view(&self) -> &NimbleDigest {
     &self.view
   }
+
+  pub fn update_view(&mut self, view: &NimbleDigest) {
+    self.view = *view;
+  }
 }
 
 #[derive(Debug, Clone)]
