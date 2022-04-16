@@ -304,7 +304,7 @@ impl CoordinatorState {
     let mut receipts: Vec<Receipt> = Vec::new();
     while let Some(res) = mpsc_rx.recv().await {
       if res.is_err() {
-        eprintln!("Failed to create a ledger in endorser");
+        eprintln!("Failed to initialize endorser state");
         continue;
       }
       let endorser_proto::InitializeStateResp { receipt } = res.unwrap().into_inner();
