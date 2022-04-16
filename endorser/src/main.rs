@@ -15,8 +15,8 @@ use endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
   GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
-  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp, UnlockReq, UnlockResp,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp, UnlockReq,
+  UnlockResp,
 };
 
 pub struct EndorserServiceState {
@@ -184,24 +184,6 @@ impl EndorserCall for EndorserServiceState {
       },
 
       Err(_) => Err(Status::aborted("Failed to append_view_ledger")),
-    }
-  }
-
-  async fn read_latest_view_ledger(
-    &self,
-    request: Request<ReadLatestViewLedgerReq>,
-  ) -> Result<Response<ReadLatestViewLedgerResp>, Status> {
-    let ReadLatestViewLedgerReq { nonce } = request.into_inner();
-    let res = self.state.read_latest_view_ledger(&nonce);
-
-    match res {
-      Ok(receipt) => {
-        let reply = ReadLatestViewLedgerResp {
-          receipt: receipt.to_bytes().to_vec(),
-        };
-        Ok(Response::new(reply))
-      },
-      Err(_) => Err(Status::aborted("Failed to process read_latest_view_ledger")),
     }
   }
 

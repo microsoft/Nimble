@@ -253,26 +253,6 @@ impl EndorserState {
     self.public_key.clone()
   }
 
-  pub fn read_latest_view_ledger(&self, nonce: &[u8]) -> Result<Receipt, EndorserError> {
-    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
-      }
-      let message = view_ledger_state
-        .view_ledger_tail_hash
-        .digest_with_bytes(nonce)
-        .to_bytes();
-      let signature = self.private_key.sign(&message).unwrap();
-
-      Ok(Receipt::new(
-        view_ledger_state.view_ledger_tail_metablock.clone(),
-        vec![IdSig::new(self.public_key.clone(), signature)],
-      ))
-    } else {
-      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
-    }
-  }
-
   pub fn append_view_ledger(
     &self,
     block_hash: &NimbleDigest,

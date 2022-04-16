@@ -9,7 +9,6 @@ service EndorserCall {
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
-  rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
   rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
   rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
   rpc Unlock(UnlockReq) returns (UnlockResp);
@@ -48,14 +47,6 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes receipt = 1;
-}
-
-message ReadLatestViewLedgerReq {
-  bytes nonce = 1;
-}
-
-message ReadLatestViewLedgerResp {
   bytes receipt = 1;
 }
 
