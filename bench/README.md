@@ -15,7 +15,7 @@ $ cargo build --bin bench --release
 3. `-m, --methods`: A number/set of numbers between 1-4 corresponding to the APIs to benchmark.
    1. `1 = NewLedger`: Benchmark Creates `-r * -c` ledgers and uses `-a = 16` byte default app byte sizes.
    2. `2 = Append`: Benchmark Creates 1 ledger entry and appends `-r * -c` messages.
-   3. `3 = ReadByLatest`: :no_entry_sign: Unimplemented
+   3. `3 = ReadLatest`: Benchmark Creates 1 ledger entry and issues `-r * -c` read requests
    4. `4 = ReadByIndex` : :no_entry_sign: Unimplemented
 4. `-a, --app-or-block-byte-size`: Number of bytes to generate to use in benchmarks, defaults to 16 bytes.
 5. `-w, --write-file-out`: Writes Benchmark CSV log file out with the following schema:
