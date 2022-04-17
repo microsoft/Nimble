@@ -155,9 +155,9 @@ pub fn verify_new_ledger(
   let genesis_block_hash = NimbleDigest::digest(handle_bytes);
   let first_block_hash = NimbleDigest::digest(block_bytes);
 
-  let genesis_metablock = MetaBlock::genesis(view, &genesis_block_hash);
+  let genesis_metablock = MetaBlock::genesis(&genesis_block_hash);
   let prev = genesis_metablock.hash();
-  let first_metablock = MetaBlock::new(view, &prev, &first_block_hash, 1usize);
+  let first_metablock = MetaBlock::new(&prev, &first_block_hash, 1usize);
   let hash = first_metablock.hash().to_bytes();
 
   let res = receipt.verify(&hash, pk_vec);

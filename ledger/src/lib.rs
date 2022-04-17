@@ -139,21 +139,14 @@ impl Block {
 /// of the current block in the ledger
 #[derive(Clone, Debug, Default)]
 pub struct MetaBlock {
-  view: NimbleDigest,
   prev: NimbleDigest,
   block_hash: NimbleDigest,
   height: usize,
 }
 
 impl MetaBlock {
-  pub fn new(
-    view: &NimbleDigest,
-    prev: &NimbleDigest,
-    block_hash: &NimbleDigest,
-    height: usize,
-  ) -> Self {
+  pub fn new(prev: &NimbleDigest, block_hash: &NimbleDigest, height: usize) -> Self {
     MetaBlock {
-      view: *view,
       prev: *prev,
       block_hash: *block_hash,
       height,
@@ -161,15 +154,14 @@ impl MetaBlock {
   }
 
   pub fn num_bytes() -> usize {
-    NimbleDigest::num_bytes() * 3 + 0_u64.to_le_bytes().to_vec().len()
+    NimbleDigest::num_bytes() * 2 + 0_u64.to_le_bytes().to_vec().len()
   }
 
-  pub fn genesis(view: &NimbleDigest, block_hash: &NimbleDigest) -> Self {
+  pub fn genesis(block_hash: &NimbleDigest) -> Self {
     // unwrap is okay here since it will not fail
     let prev = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()]).unwrap();
     let height = 0usize;
     MetaBlock {
-      view: *view,
       prev,
       block_hash: *block_hash,
       height,
@@ -186,14 +178,6 @@ impl MetaBlock {
 
   pub fn get_block_hash(&self) -> &NimbleDigest {
     &self.block_hash
-  }
-
-  pub fn get_view(&self) -> &NimbleDigest {
-    &self.view
-  }
-
-  pub fn update_view(&mut self, view: &NimbleDigest) {
-    self.view = *view;
   }
 }
 
@@ -227,17 +211,22 @@ impl IdSig {
 
 #[derive(Debug, Clone, Default)]
 pub struct Receipt {
+  view: NimbleDigest,
   metablock: MetaBlock,
   id_sigs: Vec<IdSig>,
 }
 
 impl Receipt {
-  pub fn new(metablock: MetaBlock, id_sigs: Vec<IdSig>) -> Self {
-    Self { metablock, id_sigs }
+  pub fn new(view: NimbleDigest, metablock: MetaBlock, id_sigs: Vec<IdSig>) -> Self {
+    Self {
+      view,
+      metablock,
+      id_sigs,
+    }
   }
 
   pub fn get_view(&self) -> &NimbleDigest {
-    self.metablock.get_view()
+    &self.view
   }
 
   pub fn get_prev(&self) -> &NimbleDigest {
@@ -275,9 +264,12 @@ impl Receipt {
   pub fn append(&mut self, receipt: &Receipt) -> Result<(), VerificationError> {
     if self.get_metablock_hash() == MetaBlock::default().hash() {
       assert!(self.id_sigs.is_empty());
+      self.view = *receipt.get_view();
       self.metablock = receipt.get_metablock().clone();
       self.id_sigs = receipt.get_id_sigs().clone();
-    } else if self.get_metablock_hash() == receipt.get_metablock_hash() {
+    } else if self.view == *receipt.get_view()
+      && self.get_metablock_hash() == receipt.get_metablock_hash()
+    {
       self.id_sigs.extend(receipt.get_id_sigs().clone());
     } else {
       return Err(VerificationError::InvalidReceipt);
@@ -286,7 +278,7 @@ impl Receipt {
   }
 
   pub fn merge_receipts(receipts: &[Receipt]) -> Result<Receipt, VerificationError> {
-    let mut new_receipt = Receipt::new(MetaBlock::default(), Vec::new());
+    let mut new_receipt = Receipt::new(NimbleDigest::default(), MetaBlock::default(), Vec::new());
 
     for receipt in receipts.iter() {
       let res = new_receipt.append(receipt);
@@ -316,6 +308,7 @@ impl Receipt {
       return Err(VerificationError::DuplicateIds);
     }
 
+    let view_msg = self.get_view().digest_with_bytes(msg).to_bytes();
     let num_accepted_sigs = (0..id_sigs.len())
       .map(|i| {
         let id = id_sigs[i].get_id();
@@ -323,7 +316,7 @@ impl Receipt {
         let pk = pk_vec.iter().find(|pk| pk.to_bytes() == id.to_bytes());
         if pk.is_none() {
           Err(VerificationError::InvalidPublicKey)
-        } else if sig.verify(pk.unwrap(), msg).is_err() {
+        } else if sig.verify(pk.unwrap(), &view_msg).is_err() {
           Err(VerificationError::InvalidSignature)
         } else {
           Ok(())
@@ -403,11 +396,12 @@ impl Receipt {
       return Err(VerificationError::InsufficientQuorum);
     }
 
+    let view_msg = self.get_view().digest_with_bytes(msg).to_bytes();
     // verify the signatures in the receipt and ensure that the provided public keys are in pk_vec
     let res = (0..self.id_sigs.len()).try_for_each(|i| {
       let id = self.id_sigs[i].get_id();
       let sig = self.id_sigs[i].get_sig();
-      let res = sig.verify(id, msg);
+      let res = sig.verify(id, &view_msg);
       if res.is_err() {
         Err(VerificationError::InvalidSignature)
       } else {
@@ -482,7 +476,6 @@ impl CustomSerde for MetaBlock {
   fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
     let height_u64 = self.height as u64;
-    bytes.extend(&self.view.to_bytes());
     bytes.extend(&self.prev.to_bytes());
     bytes.extend(&self.block_hash.to_bytes());
     bytes.extend(&height_u64.to_le_bytes().to_vec());
@@ -501,11 +494,10 @@ impl CustomSerde for MetaBlock {
       Err(CustomSerdeError::IncorrectLength)
     } else {
       // unwrap is okay to call here given the error check above
-      let view = NimbleDigest::from_bytes(&bytes[0..digest_len]).unwrap();
-      let prev = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len]).unwrap();
-      let block_hash = NimbleDigest::from_bytes(&bytes[2 * digest_len..3 * digest_len]).unwrap();
+      let prev = NimbleDigest::from_bytes(&bytes[0..digest_len]).unwrap();
+      let block_hash = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len]).unwrap();
       let height = {
-        let res = bytes[3 * digest_len..].try_into();
+        let res = bytes[2 * digest_len..].try_into();
         if res.is_err() {
           return Err(CustomSerdeError::InternalError);
         }
@@ -514,7 +506,6 @@ impl CustomSerde for MetaBlock {
       };
 
       Ok(MetaBlock {
-        view,
         prev,
         block_hash,
         height,
@@ -550,6 +541,7 @@ impl CustomSerde for IdSig {
 impl CustomSerde for Receipt {
   fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
+    bytes.extend(&self.view.to_bytes());
     bytes.extend(&self.metablock.to_bytes());
     for id_sig in &self.id_sigs {
       bytes.extend(&id_sig.to_bytes());
@@ -558,26 +550,36 @@ impl CustomSerde for Receipt {
   }
 
   fn from_bytes(bytes: &[u8]) -> Result<Receipt, CustomSerdeError> {
-    if bytes.len() < MetaBlock::num_bytes() {
+    if bytes.len() < NimbleDigest::num_bytes() + MetaBlock::num_bytes() {
       eprintln!("bytes len {} is too short", bytes.len());
       return Err(CustomSerdeError::IncorrectLength);
     }
 
-    if (bytes.len() - MetaBlock::num_bytes()) % IdSig::num_bytes() != 0 {
+    if (bytes.len() - NimbleDigest::num_bytes() - MetaBlock::num_bytes()) % IdSig::num_bytes() != 0
+    {
       eprintln!("bytes len {} is not a multiple of IdSig", bytes.len());
       return Err(CustomSerdeError::IncorrectLength);
     }
 
-    let metablock = MetaBlock::from_bytes(&bytes[0..MetaBlock::num_bytes()].to_vec()).unwrap();
+    let view = NimbleDigest::from_bytes(&bytes[0..NimbleDigest::num_bytes()].to_vec()).unwrap();
+    let metablock = MetaBlock::from_bytes(
+      &bytes[NimbleDigest::num_bytes()..NimbleDigest::num_bytes() + MetaBlock::num_bytes()]
+        .to_vec(),
+    )
+    .unwrap();
     let mut id_sigs = Vec::new();
-    let mut pos = MetaBlock::num_bytes();
+    let mut pos = NimbleDigest::num_bytes() + MetaBlock::num_bytes();
     while pos < bytes.len() {
       let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()].to_vec()).unwrap();
       id_sigs.push(id_sig);
       pos += IdSig::num_bytes();
     }
 
-    Ok(Receipt { metablock, id_sigs })
+    Ok(Receipt {
+      view,
+      metablock,
+      id_sigs,
+    })
   }
 }
 

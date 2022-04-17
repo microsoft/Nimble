@@ -95,9 +95,9 @@ impl EndorserState {
       }
 
       // create a genesis metablock that embeds the current tail of the view/membership ledger
-      let view = &view_ledger_state.view_ledger_tail_hash;
-      let metablock = MetaBlock::genesis(view, handle);
-      let message = metablock.hash();
+      let view = view_ledger_state.view_ledger_tail_hash;
+      let metablock = MetaBlock::genesis(handle);
+      let message = view.digest_with(&metablock.hash());
       let signature = self
         .private_key
         .sign(message.to_bytes().as_slice())
@@ -108,6 +108,7 @@ impl EndorserState {
         if let hash_map::Entry::Vacant(e) = ledger_tail_map.entry(*handle) {
           e.insert(Arc::new(RwLock::new(metablock.clone())));
           Ok(Receipt::new(
+            view,
             metablock,
             vec![IdSig::new(self.public_key.clone(), signature)],
           ))
@@ -132,13 +133,14 @@ impl EndorserState {
         match ledger_tail_map.get(handle) {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
-            if let Ok(mut metablock) = protected_metablock.write() {
-              metablock.update_view(&view_ledger_state.view_ledger_tail_hash);
+            if let Ok(metablock) = protected_metablock.read() {
+              let view = view_ledger_state.view_ledger_tail_hash;
               let tail_hash = metablock.hash();
-              let message = tail_hash.digest_with_bytes(nonce);
+              let message = view.digest_with(&tail_hash.digest_with_bytes(nonce));
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
               Ok(Receipt::new(
+                view,
                 metablock.clone(),
                 vec![IdSig::new(self.public_key.clone(), signature)],
               ))
@@ -219,20 +221,17 @@ impl EndorserState {
                 return Err(EndorserError::OutOfOrderAppend);
               }
 
-              let new_metablock = MetaBlock::new(
-                &view_ledger_state.view_ledger_tail_hash,
-                &metablock.hash(),
-                block_hash,
-                height_plus_one,
-              );
+              let new_metablock = MetaBlock::new(&metablock.hash(), block_hash, height_plus_one);
 
+              let view = view_ledger_state.view_ledger_tail_hash;
               let signature = self
                 .private_key
-                .sign(&new_metablock.hash().to_bytes())
+                .sign(&view.digest_with(&new_metablock.hash()).to_bytes())
                 .unwrap();
 
               *metablock = new_metablock.clone();
               Ok(Receipt::new(
+                view,
                 new_metablock,
                 vec![IdSig::new(self.public_key.clone(), signature)],
               ))
@@ -300,17 +299,18 @@ impl EndorserState {
         let prev = &view_ledger_state.view_ledger_tail_hash;
 
         // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
-        let new_metablock = MetaBlock::new(&view, prev, block_hash, height_plus_one);
+        let new_metablock = MetaBlock::new(prev, block_hash, height_plus_one);
 
         // update the internal state
         view_ledger_state.view_ledger_tail_metablock = new_metablock.clone();
         view_ledger_state.view_ledger_tail_hash = new_metablock.hash();
 
         // sign the hash of the new metablock
-        let message = new_metablock.hash();
+        let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
         let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
         Ok(Receipt::new(
+          view,
           new_metablock,
           vec![IdSig::new(self.public_key.clone(), signature)],
         ))
@@ -420,15 +420,7 @@ mod tests {
     assert!(res.is_ok());
 
     let receipt = res.unwrap();
-    let genesis_tail_hash = MetaBlock::genesis(
-      &endorser_state
-        .view_ledger_state
-        .read()
-        .expect("failed")
-        .view_ledger_tail_hash,
-      &handle,
-    )
-    .hash();
+    let genesis_tail_hash = MetaBlock::genesis(&handle).hash();
     assert_eq!(
       *receipt.get_view(),
       endorser_state
@@ -553,16 +545,7 @@ mod tests {
     assert_eq!(*receipt.get_prev(), prev_tail);
     assert_eq!(new_ledger_height, height_plus_one);
 
-    let metadata = MetaBlock::new(
-      &endorser_state
-        .view_ledger_state
-        .read()
-        .expect("failed")
-        .view_ledger_tail_hash,
-      &prev_tail,
-      &block_hash_to_append,
-      new_ledger_height,
-    );
+    let metadata = MetaBlock::new(&prev_tail, &block_hash_to_append, new_ledger_height);
 
     let endorser_tail_expectation = metadata.hash();
     let message = endorser_tail_expectation;
