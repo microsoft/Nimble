@@ -1,0 +1,306 @@
+use clap::{App, Arg};
+
+use serde_derive::{Deserialize, Serialize};
+
+use rand::Rng;
+
+use ledger::{
+  signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait},
+  NimbleDigest,
+};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GetIdentityResponse {
+  #[serde(rename = "Identity")]
+  pub id: String,
+  #[serde(rename = "PublicKey")]
+  pub pk: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NewCounterRequest {
+  #[serde(rename = "Handle")]
+  pub handle: String,
+  #[serde(rename = "Tag")]
+  pub tag: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NewCounterResponse {
+  #[serde(rename = "Signature")]
+  pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IncrementCounterRequest {
+  #[serde(rename = "Handle")]
+  pub handle: String,
+  #[serde(rename = "Tag")]
+  pub tag: String,
+  #[serde(rename = "ExpectedCounter")]
+  pub expected_counter: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IncrementCounterResponse {
+  #[serde(rename = "Signature")]
+  pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReadCounterRequest {
+  #[serde(rename = "Handle")]
+  pub handle: String,
+  #[serde(rename = "Nonce")]
+  pub nonce: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReadCounterResponse {
+  #[serde(rename = "Tag")]
+  pub tag: String,
+  #[serde(rename = "Counter")]
+  pub counter: u64,
+  #[serde(rename = "Signature")]
+  pub signature: String,
+}
+
+static XML_DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
+
+#[tokio::main]
+async fn main() {
+  let config = App::new("client").arg(
+    Arg::with_name("endpoint")
+      .help("The hostname of the endpoint")
+      .default_value("http://127.0.0.1:8082")
+      .index(1),
+  );
+  let cli_matches = config.get_matches();
+  let endpoint_addr = cli_matches.value_of("endpoint").unwrap();
+
+  let client = reqwest::Client::new();
+
+  // Step 0: Obtain the identity and public key of the instance
+  let get_identity_url = reqwest::Url::parse(&format!("{}/getidentity", endpoint_addr)).unwrap();
+  let res = client.get(get_identity_url).send().await;
+
+  if res.is_err() {
+    eprintln!("get_identity failed: {:?}", res);
+    return;
+  }
+  let resp = res.unwrap();
+  assert!(resp.status() == reqwest::StatusCode::OK);
+
+  let get_identity_resp: GetIdentityResponse =
+    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
+
+  let id_bytes = base64::decode(get_identity_resp.id).unwrap();
+  let pk_bytes = base64::decode(get_identity_resp.pk).unwrap();
+  let id = NimbleDigest::from_bytes(&id_bytes).unwrap();
+  let pk = PublicKey::from_bytes(&pk_bytes).unwrap();
+
+  println!("id={:?}", id);
+  println!("pk={:?}", pk);
+
+  // Step 1: NewCounter Request
+  let tag_bytes: Vec<u8> = NimbleDigest::digest(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to_bytes();
+  let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let new_counter_req = NewCounterRequest {
+    handle: base64::encode(handle_bytes),
+    tag: base64::encode(tag_bytes.clone()),
+  };
+  let new_counter_req_body = format!(
+    "{}{}",
+    XML_DECLARATION,
+    serde_xml_rs::ser::to_string(&new_counter_req).unwrap(),
+  );
+  let new_counter_url = reqwest::Url::parse(&format!("{}/newcounter", endpoint_addr)).unwrap();
+  let res = client
+    .put(new_counter_url)
+    .body(new_counter_req_body)
+    .send()
+    .await;
+  if res.is_err() {
+    eprintln!("new_counter failed: {:?}", res);
+  }
+
+  let resp = res.unwrap();
+  assert!(resp.status() == reqwest::StatusCode::OK);
+
+  let new_counter_resp: NewCounterResponse =
+    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
+  let signature = base64::decode(new_counter_resp.signature).unwrap();
+
+  // verify a message that unequivocally identifies the counter and tag
+  let msg = {
+    let s = format!(
+      "NewCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
+      id.to_bytes(),
+      handle_bytes,
+      tag_bytes,
+      1_usize
+    );
+    NimbleDigest::digest(s.as_bytes())
+  };
+
+  let signature = Signature::from_bytes(&signature).unwrap();
+  let res = signature.verify(&pk, &msg.to_bytes());
+  println!("NewCounter: {:?}", res.is_ok());
+  assert!(res.is_ok());
+
+  // Step 2: Read Latest with the Nonce generated
+  let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let read_counter_req = ReadCounterRequest {
+    handle: base64::encode(handle_bytes),
+    nonce: base64::encode(nonce_bytes),
+  };
+  let read_counter_req_body = format!(
+    "{}{}",
+    XML_DECLARATION,
+    serde_xml_rs::ser::to_string(&read_counter_req).unwrap(),
+  );
+  let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
+  let res = client
+    .get(read_counter_url)
+    .body(read_counter_req_body)
+    .send()
+    .await;
+  if res.is_err() {
+    eprintln!("read_counter failed: {:?}", res);
+  }
+
+  let resp = res.unwrap();
+  assert!(resp.status() == reqwest::StatusCode::OK);
+
+  let read_counter_resp: ReadCounterResponse =
+    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
+
+  let tag = base64::decode(read_counter_resp.tag).unwrap();
+  let counter = read_counter_resp.counter;
+  let signature = base64::decode(read_counter_resp.signature).unwrap();
+
+  // verify a message that unequivocally identifies the counter and tag
+  let msg = {
+    let s = format!(
+      "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
+      id.to_bytes(),
+      handle_bytes,
+      tag,
+      counter,
+      nonce_bytes,
+    );
+    NimbleDigest::digest(s.as_bytes())
+  };
+
+  let signature = Signature::from_bytes(&signature).unwrap();
+  let res = signature.verify(&pk, &msg.to_bytes());
+  println!("ReadCounter: {:?}", res.is_ok());
+  assert!(res.is_ok());
+
+  // Step 3: IncrementCounter
+  let t1: Vec<u8> = NimbleDigest::digest("tag_example_1".as_bytes()).to_bytes();
+  let t2: Vec<u8> = NimbleDigest::digest("tag_example_2".as_bytes()).to_bytes();
+  let t3: Vec<u8> = NimbleDigest::digest("tag_example_3".as_bytes()).to_bytes();
+
+  let mut expected_counter: usize = 1;
+  for tag in [t1.clone(), t2.clone(), t3.clone()].iter() {
+    expected_counter += 1;
+    let increment_counter_req = IncrementCounterRequest {
+      handle: base64::encode(handle_bytes),
+      tag: base64::encode(tag.clone()),
+      expected_counter: expected_counter as u64,
+    };
+    let increment_counter_req_body = format!(
+      "{}{}",
+      XML_DECLARATION,
+      serde_xml_rs::ser::to_string(&increment_counter_req).unwrap(),
+    );
+
+    let increment_counter_url =
+      reqwest::Url::parse(&format!("{}/incrementcounter", endpoint_addr)).unwrap();
+    let res = client
+      .put(increment_counter_url)
+      .body(increment_counter_req_body)
+      .send()
+      .await;
+    if res.is_err() {
+      eprintln!("increment_counter failed: {:?}", res);
+    }
+
+    let resp = res.unwrap();
+    assert!(resp.status() == reqwest::StatusCode::OK);
+
+    let increment_counter_resp: IncrementCounterResponse =
+      serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap())
+        .unwrap();
+    let signature = base64::decode(increment_counter_resp.signature).unwrap();
+
+    // verify a message that unequivocally identifies the counter and tag
+    let msg = {
+      let s = format!(
+        "IncrementCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
+        id.to_bytes(),
+        handle_bytes,
+        tag,
+        expected_counter
+      );
+      NimbleDigest::digest(s.as_bytes())
+    };
+
+    let signature = Signature::from_bytes(&signature).unwrap();
+    let res = signature.verify(&pk, &msg.to_bytes());
+    println!("IncrementCounter: {:?}", res.is_ok());
+    assert!(res.is_ok());
+  }
+
+  // Step 4: ReadCounter with the Nonce generated and check for new data
+  let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let read_counter_req = ReadCounterRequest {
+    handle: base64::encode(handle_bytes),
+    nonce: base64::encode(nonce_bytes),
+  };
+  let read_counter_req_body = format!(
+    "{}{}",
+    XML_DECLARATION,
+    serde_xml_rs::ser::to_string(&read_counter_req).unwrap(),
+  );
+  let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
+  let res = client
+    .get(read_counter_url)
+    .body(read_counter_req_body)
+    .send()
+    .await;
+  if res.is_err() {
+    eprintln!("read_counter failed: {:?}", res);
+  }
+
+  let resp = res.unwrap();
+  assert!(resp.status() == reqwest::StatusCode::OK);
+
+  let read_counter_resp: ReadCounterResponse =
+    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
+
+  let tag = base64::decode(read_counter_resp.tag).unwrap();
+  assert_eq!(tag, t3.clone());
+  let counter = read_counter_resp.counter;
+  assert_eq!(counter, expected_counter as u64);
+  let signature = base64::decode(read_counter_resp.signature).unwrap();
+
+  // verify a message that unequivocally identifies the counter and tag
+  let msg = {
+    let s = format!(
+      "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
+      id.to_bytes(),
+      handle_bytes,
+      tag,
+      counter,
+      nonce_bytes,
+    );
+    NimbleDigest::digest(s.as_bytes())
+  };
+
+  let signature = Signature::from_bytes(&signature).unwrap();
+  let res = signature.verify(&pk, &msg.to_bytes());
+  println!("ReadCounter: {:?}", res.is_ok());
+  assert!(res.is_ok());
+}
