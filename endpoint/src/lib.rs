@@ -1,27 +1,15 @@
 mod errors;
 
 use tonic::{
-  transport::{Channel, Endpoint, Server},
-  Request, Response, Status,
+  transport::{Channel, Endpoint},
+  Request,
 };
-
-pub mod endpoint_proto {
-  tonic::include_proto!("endpoint_proto");
-}
 
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }
 
-use crate::{
-  endpoint_proto::{
-    call_server::{Call, CallServer},
-    GetIdentityReq, GetIdentityResp, IncrementCounterReq, IncrementCounterResp, NewCounterReq,
-    NewCounterResp, ReadCounterReq, ReadCounterResp,
-  },
-  errors::EndpointError,
-};
-use clap::{App, Arg};
+use crate::errors::EndpointError;
 use coordinator_proto::{
   call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
   ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
@@ -39,7 +27,7 @@ pub struct Connection {
 }
 
 impl Connection {
-  pub async fn new(coordinator_endpoint_address: String) -> Result<Self, errors::EndpointError> {
+  pub async fn new(coordinator_endpoint_address: String) -> Result<Self, EndpointError> {
     let connection_attempt = Endpoint::from_shared(coordinator_endpoint_address);
     let connection = match connection_attempt {
       Ok(connection) => connection,
@@ -103,6 +91,22 @@ impl Connection {
       .into_inner();
     Ok((block, receipt))
   }
+
+  pub async fn read_view_by_index(
+    &self,
+    index: usize,
+  ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
+    let ReadViewByIndexResp { block, receipt } = self
+      .client
+      .clone()
+      .read_view_by_index(ReadViewByIndexReq {
+        index: index as u64,
+      })
+      .await
+      .map_err(|_err| EndpointError::UnableToConnectToCoordinator)?
+      .into_inner();
+    Ok((block, receipt))
+  }
 }
 
 pub struct EndpointState {
@@ -115,7 +119,7 @@ pub struct EndpointState {
 impl EndpointState {
   pub async fn new(hostname: String) -> Result<Self, EndpointError> {
     // make a connection to the coordinator
-    let mut conn = {
+    let conn = {
       let res = Connection::new(hostname).await;
 
       match res {
@@ -129,16 +133,8 @@ impl EndpointState {
     // initialize id and vs
     let (id, vs) = {
       let mut vs = VerifierState::default();
-      let req = tonic::Request::new(ReadViewByIndexReq {
-        index: 1, // the first entry on the view ledger starts at 1
-      });
 
-      let ReadViewByIndexResp { block, receipt } = conn
-        .client
-        .read_view_by_index(req)
-        .await
-        .unwrap()
-        .into_inner();
+      let (block, receipt) = conn.read_view_by_index(1usize).await.unwrap();
 
       let res = vs.apply_view_change(&block, &receipt);
       println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
@@ -155,42 +151,28 @@ impl EndpointState {
 
     Ok(EndpointState { conn, id, vs, sk })
   }
-}
 
-#[tonic::async_trait]
-impl Call for EndpointState {
-  async fn get_identity(
-    &self,
-    _req: Request<GetIdentityReq>,
-  ) -> Result<Response<GetIdentityResp>, Status> {
-    let resp = GetIdentityResp {
-      id: self.id.to_bytes(),
-      pk: self.sk.get_public_key().unwrap().to_bytes(),
-    };
-
-    Ok(Response::new(resp))
+  pub fn get_identity(&self) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
+    Ok((
+      self.id.to_bytes(),
+      self.sk.get_public_key().unwrap().to_bytes(),
+    ))
   }
 
-  async fn new_counter(
-    &self,
-    req: Request<NewCounterReq>,
-  ) -> Result<Response<NewCounterResp>, Status> {
-    // receive a request from the light client
-    let NewCounterReq { handle, tag } = req.into_inner();
-
+  pub async fn new_counter(&self, handle: &[u8], tag: &[u8]) -> Result<Vec<u8>, EndpointError> {
     // issue a request to the coordinator and receive a response
     let receipt = {
-      let res = self.conn.new_ledger(&handle, &tag).await;
+      let res = self.conn.new_ledger(handle, tag).await;
       if res.is_err() {
-        return Err(Status::aborted("Failed to create a new counter"));
+        return Err(EndpointError::FailedToCreateNewCounter);
       }
       res.unwrap()
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_new_ledger(&self.vs, handle.as_ref(), tag.as_ref(), &receipt);
+    let res = verify_new_ledger(&self.vs, handle, tag, &receipt);
     if res.is_err() {
-      return Err(Status::aborted("Failed to verify the new counter"));
+      return Err(EndpointError::FailedToVerifyNewCounter);
     }
 
     // sign a message that unequivocally identifies the counter and tag
@@ -206,46 +188,38 @@ impl Call for EndpointState {
     };
     let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
 
-    // respond to the light client
-    Ok(Response::new(NewCounterResp { signature }))
+    Ok(signature)
   }
 
-  async fn increment_counter(
+  pub async fn increment_counter(
     &self,
-    req: Request<IncrementCounterReq>,
-  ) -> Result<Response<IncrementCounterResp>, Status> {
-    // receive a request from the light client
-    let IncrementCounterReq {
-      handle,
-      tag,
-      expected_counter,
-    } = req.into_inner();
-
+    handle: &[u8],
+    tag: &[u8],
+    expected_counter: u64,
+  ) -> Result<Vec<u8>, EndpointError> {
     // convert u64 to usize, returning error
     let expected_height = {
       let res = usize::try_from(expected_counter);
       if res.is_err() {
-        return Err(Status::aborted(
-          "Failed to convert expected counter to usize",
-        ));
+        return Err(EndpointError::FailedToConvertCounter);
       }
       res.unwrap()
     };
 
     // issue a request to the coordinator and receive a response
     let receipt = {
-      let res = self.conn.append(&handle, &tag, expected_counter).await;
+      let res = self.conn.append(handle, tag, expected_counter).await;
 
       if res.is_err() {
-        return Err(Status::aborted("Failed to increment counter"));
+        return Err(EndpointError::FailedToIncrementCounter);
       }
       res.unwrap()
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_append(&self.vs, tag.as_ref(), expected_height, &receipt);
+    let res = verify_append(&self.vs, tag, expected_height, &receipt);
     if res.is_err() {
-      return Err(Status::aborted("Failed to verify the increment counter"));
+      return Err(EndpointError::FailedToVerifyIncrementedCounter);
     }
 
     // sign a message that unequivocally identifies the counter and tag
@@ -261,31 +235,28 @@ impl Call for EndpointState {
     };
     let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
 
-    // respond to the light client
-    Ok(Response::new(IncrementCounterResp { signature }))
+    Ok(signature)
   }
 
-  async fn read_counter(
+  pub async fn read_counter(
     &self,
-    req: Request<ReadCounterReq>,
-  ) -> Result<Response<ReadCounterResp>, Status> {
-    // receive a request from the light client
-    let ReadCounterReq { handle, nonce } = req.into_inner();
-
+    handle: &[u8],
+    nonce: &[u8],
+  ) -> Result<(Vec<u8>, u64, Vec<u8>), EndpointError> {
     // issue a request to the coordinator and receive a response
     let (block, receipt) = {
-      let res = self.conn.read_latest(&handle, &nonce).await;
+      let res = self.conn.read_latest(handle, nonce).await;
 
       if res.is_err() {
-        return Err(Status::aborted("Failed to read counter"));
+        return Err(EndpointError::FailedToReadCounter);
       }
       res.unwrap()
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_read_latest(&self.vs, block.as_ref(), &nonce, &receipt);
+    let res = verify_read_latest(&self.vs, block.as_ref(), nonce, &receipt);
     if res.is_err() {
-      return Err(Status::aborted("Failed to verify read counter"));
+      return Err(EndpointError::FaieldToVerifyReadCounter);
     }
 
     let (tag, counter) = res.unwrap();
@@ -305,62 +276,6 @@ impl Call for EndpointState {
     let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
 
     // respond to the light client
-    Ok(Response::new(ReadCounterResp {
-      tag,
-      counter: counter as u64,
-      signature,
-    }))
+    Ok((tag, counter as u64, signature))
   }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let (addr, coordinator_hostname) = {
-    let config = App::new("endpoint")
-      .arg(
-        Arg::with_name("coordinator")
-          .short("c")
-          .long("coordinator")
-          .help("The hostname of the coordinator")
-          .default_value("http://[::1]:8080"),
-      )
-      .arg(
-        Arg::with_name("host")
-          .short("t")
-          .long("host")
-          .help("The hostname to run the service on.")
-          .default_value("[::1]"),
-      )
-      .arg(
-        Arg::with_name("port")
-          .short("p")
-          .long("port")
-          .help("The port number to run the coordinator service on.")
-          .default_value("8081"),
-      );
-    let cli_matches = config.get_matches();
-    let hostname = cli_matches.value_of("host").unwrap();
-    let port_number = cli_matches.value_of("port").unwrap();
-    let addr = format!("{}:{}", hostname, port_number).parse()?;
-    let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
-
-    (addr, coordinator_hostname)
-  };
-
-  let endpoint_state = {
-    let res = EndpointState::new(coordinator_hostname.to_string()).await;
-    match res {
-      Ok(endpoint_state) => endpoint_state,
-      Err(e) => {
-        panic!("Endpoint Error: {:?}", e);
-      },
-    }
-  };
-
-  Server::builder()
-    .add_service(CallServer::new(endpoint_state))
-    .serve(addr)
-    .await?;
-
-  Ok(())
 }

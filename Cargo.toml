@@ -8,6 +8,7 @@ members = [
     "verifier",
     "bench",
     "endpoint",
+    "endpoint_grpc",
     "light_client",
 ]
 
