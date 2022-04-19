@@ -1,19 +1,19 @@
 use endpoint::EndpointState;
 
 use axum::{
-  body::Bytes,
   extract::Extension,
   http::StatusCode,
   response::IntoResponse,
   routing::{get, put},
-  Router,
+  Json, Router,
 };
+use serde_json::json;
 use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceBuilder;
 
 use clap::{App, Arg};
 
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
@@ -58,6 +58,7 @@ async fn main() {
 
   // Run our app with hyper
   let addr = SocketAddr::from(([127, 0, 0, 1], port));
+  println!("Running endpoint at {}", addr);
   axum::Server::bind(&addr)
     .serve(app.into_make_service())
     .await
@@ -120,203 +121,102 @@ struct ReadCounterResponse {
   pub signature: String,
 }
 
-static XML_DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
-
 async fn get_identity(Extension(state): Extension<Arc<EndpointState>>) -> impl IntoResponse {
   let (id, pk) = state.get_identity().unwrap();
   let resp = GetIdentityResponse {
-    id: base64::encode(id),
-    pk: base64::encode(pk),
+    id: base64_url::encode(&id),
+    pk: base64_url::encode(&pk),
   };
-  let xml_output = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&resp).unwrap()
-  );
-  axum::http::Response::builder()
-    .status(StatusCode::OK)
-    .header(axum::http::header::CONTENT_TYPE, "application/xml")
-    .body(axum::body::Body::from(xml_output))
-    .unwrap();
+  (StatusCode::OK, Json(json!(resp)))
 }
 
 async fn new_counter(
-  body: Bytes,
+  Json(req): Json<NewCounterRequest>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let body_str = String::from_utf8(body.to_vec()).unwrap();
-  let res = serde_xml_rs::de::from_str(&body_str);
+  let res = base64_url::decode(&req.handle);
   if res.is_err() {
-    let err_msg = "Failed to parse the xml input".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
-  }
-  let new_counter_req: NewCounterRequest = res.unwrap();
-
-  let res = base64::decode(&new_counter_req.handle);
-  if res.is_err() {
-    let err_msg = "Failed to decode the handle".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
-  let res = base64::decode(&new_counter_req.tag);
+  let res = base64_url::decode(&req.tag);
   if res.is_err() {
-    let err_msg = "Failed to decode the tag".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let tag = res.unwrap();
 
   let res = state.new_counter(&handle, &tag).await;
   if res.is_err() {
-    let err_msg = "Failed to create the new counter".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::CONFLICT)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::CONFLICT, Json(json!({})));
   }
   let signature = res.unwrap();
 
   let resp = NewCounterResponse {
-    signature: base64::encode(signature),
+    signature: base64_url::encode(&signature),
   };
-  let xml_output = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&resp).unwrap()
-  );
-  axum::http::Response::builder()
-    .status(StatusCode::OK)
-    .body(axum::body::Body::from(xml_output))
-    .unwrap()
+
+  (StatusCode::OK, Json(json!(resp)))
 }
 
 async fn read_counter(
-  body: Bytes,
+  Json(req): Json<ReadCounterRequest>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let body_str = String::from_utf8(body.to_vec()).unwrap();
-  let res = serde_xml_rs::de::from_str(&body_str);
+  let res = base64_url::decode(&req.handle);
   if res.is_err() {
-    let err_msg = "Failed to parse the xml input".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
-  }
-  let read_counter_req: ReadCounterRequest = res.unwrap();
-
-  let res = base64::decode(&read_counter_req.handle);
-  if res.is_err() {
-    let err_msg = "Failed to decode the handle".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
-  let res = base64::decode(&read_counter_req.nonce);
+  let res = base64_url::decode(&req.nonce);
   if res.is_err() {
-    let err_msg = "Failed to decode the nonce".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let nonce = res.unwrap();
 
   let res = state.read_counter(&handle, &nonce).await;
   if res.is_err() {
-    let err_msg = "Failed to read the counter".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::CONFLICT)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::CONFLICT, Json(json!({})));
   }
   let (tag, counter, signature) = res.unwrap();
 
   let resp = ReadCounterResponse {
-    tag: base64::encode(tag),
+    tag: base64_url::encode(&tag),
     counter,
-    signature: base64::encode(signature),
+    signature: base64_url::encode(&signature),
   };
-  let xml_output = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&resp).unwrap()
-  );
-  axum::http::Response::builder()
-    .status(StatusCode::OK)
-    .body(axum::body::Body::from(xml_output))
-    .unwrap()
+
+  (StatusCode::OK, Json(json!(resp)))
 }
 
 async fn increment_counter(
-  body: Bytes,
+  Json(req): Json<IncrementCounterRequest>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let body_str = String::from_utf8(body.to_vec()).unwrap();
-  let res = serde_xml_rs::de::from_str(&body_str);
+  let res = base64_url::decode(&req.handle);
   if res.is_err() {
-    let err_msg = "Failed to parse the xml input".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
-  }
-  let increment_counter_req: IncrementCounterRequest = res.unwrap();
-
-  let res = base64::decode(&increment_counter_req.handle);
-  if res.is_err() {
-    let err_msg = "Failed to decode the handle".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
-  let res = base64::decode(&increment_counter_req.tag);
+  let res = base64_url::decode(&req.tag);
   if res.is_err() {
-    let err_msg = "Failed to decode the tag".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::BAD_REQUEST)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let tag = res.unwrap();
 
   let res = state
-    .increment_counter(&handle, &tag, increment_counter_req.expected_counter)
+    .increment_counter(&handle, &tag, req.expected_counter)
     .await;
   if res.is_err() {
-    let err_msg = "Failed to increment the counter".to_string();
-    return axum::http::Response::builder()
-      .status(StatusCode::CONFLICT)
-      .body(axum::body::Body::from(err_msg))
-      .unwrap();
+    return (StatusCode::CONFLICT, Json(json!({})));
   }
   let signature = res.unwrap();
 
   let resp = IncrementCounterResponse {
-    signature: base64::encode(signature),
+    signature: base64_url::encode(&signature),
   };
-  let xml_output = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&resp).unwrap()
-  );
-  axum::http::Response::builder()
-    .status(StatusCode::OK)
-    .body(axum::body::Body::from(xml_output))
-    .unwrap()
+
+  (StatusCode::OK, Json(json!(resp)))
 }

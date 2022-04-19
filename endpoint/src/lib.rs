@@ -137,7 +137,6 @@ impl EndpointState {
       let (block, receipt) = conn.read_view_by_index(1usize).await.unwrap();
 
       let res = vs.apply_view_change(&block, &receipt);
-      println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
       assert!(res.is_ok());
 
       // the hash of the genesis block of the view ledger uniquely identifies a particular instance of NimbleLedger

@@ -1,6 +1,6 @@
 use clap::{App, Arg};
 
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 use rand::Rng;
 
@@ -65,8 +65,6 @@ struct ReadCounterResponse {
   pub signature: String,
 }
 
-static XML_DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
-
 #[tokio::main]
 async fn main() {
   let config = App::new("client").arg(
@@ -91,11 +89,9 @@ async fn main() {
   let resp = res.unwrap();
   assert!(resp.status() == reqwest::StatusCode::OK);
 
-  let get_identity_resp: GetIdentityResponse =
-    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
-
-  let id_bytes = base64::decode(get_identity_resp.id).unwrap();
-  let pk_bytes = base64::decode(get_identity_resp.pk).unwrap();
+  let get_identity_resp: GetIdentityResponse = resp.json().await.unwrap();
+  let id_bytes = base64_url::decode(&get_identity_resp.id).unwrap();
+  let pk_bytes = base64_url::decode(&get_identity_resp.pk).unwrap();
   let id = NimbleDigest::from_bytes(&id_bytes).unwrap();
   let pk = PublicKey::from_bytes(&pk_bytes).unwrap();
 
@@ -106,18 +102,13 @@ async fn main() {
   let tag_bytes: Vec<u8> = NimbleDigest::digest(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to_bytes();
   let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
   let new_counter_req = NewCounterRequest {
-    handle: base64::encode(handle_bytes),
-    tag: base64::encode(tag_bytes.clone()),
+    handle: base64_url::encode(&handle_bytes),
+    tag: base64_url::encode(&tag_bytes),
   };
-  let new_counter_req_body = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&new_counter_req).unwrap(),
-  );
   let new_counter_url = reqwest::Url::parse(&format!("{}/newcounter", endpoint_addr)).unwrap();
   let res = client
     .put(new_counter_url)
-    .body(new_counter_req_body)
+    .json(&new_counter_req)
     .send()
     .await;
   if res.is_err() {
@@ -127,9 +118,8 @@ async fn main() {
   let resp = res.unwrap();
   assert!(resp.status() == reqwest::StatusCode::OK);
 
-  let new_counter_resp: NewCounterResponse =
-    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
-  let signature = base64::decode(new_counter_resp.signature).unwrap();
+  let new_counter_resp: NewCounterResponse = resp.json().await.unwrap();
+  let signature = base64_url::decode(&new_counter_resp.signature).unwrap();
 
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
@@ -151,18 +141,13 @@ async fn main() {
   // Step 2: Read Latest with the Nonce generated
   let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
   let read_counter_req = ReadCounterRequest {
-    handle: base64::encode(handle_bytes),
-    nonce: base64::encode(nonce_bytes),
+    handle: base64_url::encode(&handle_bytes),
+    nonce: base64_url::encode(&nonce_bytes),
   };
-  let read_counter_req_body = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&read_counter_req).unwrap(),
-  );
   let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
   let res = client
     .get(read_counter_url)
-    .body(read_counter_req_body)
+    .json(&read_counter_req)
     .send()
     .await;
   if res.is_err() {
@@ -172,12 +157,10 @@ async fn main() {
   let resp = res.unwrap();
   assert!(resp.status() == reqwest::StatusCode::OK);
 
-  let read_counter_resp: ReadCounterResponse =
-    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
-
-  let tag = base64::decode(read_counter_resp.tag).unwrap();
+  let read_counter_resp: ReadCounterResponse = resp.json().await.unwrap();
+  let tag = base64_url::decode(&read_counter_resp.tag).unwrap();
   let counter = read_counter_resp.counter;
-  let signature = base64::decode(read_counter_resp.signature).unwrap();
+  let signature = base64_url::decode(&read_counter_resp.signature).unwrap();
 
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
@@ -206,21 +189,16 @@ async fn main() {
   for tag in [t1.clone(), t2.clone(), t3.clone()].iter() {
     expected_counter += 1;
     let increment_counter_req = IncrementCounterRequest {
-      handle: base64::encode(handle_bytes),
-      tag: base64::encode(tag.clone()),
+      handle: base64_url::encode(&handle_bytes),
+      tag: base64_url::encode(&tag),
       expected_counter: expected_counter as u64,
     };
-    let increment_counter_req_body = format!(
-      "{}{}",
-      XML_DECLARATION,
-      serde_xml_rs::ser::to_string(&increment_counter_req).unwrap(),
-    );
 
     let increment_counter_url =
       reqwest::Url::parse(&format!("{}/incrementcounter", endpoint_addr)).unwrap();
     let res = client
       .put(increment_counter_url)
-      .body(increment_counter_req_body)
+      .json(&increment_counter_req)
       .send()
       .await;
     if res.is_err() {
@@ -230,10 +208,8 @@ async fn main() {
     let resp = res.unwrap();
     assert!(resp.status() == reqwest::StatusCode::OK);
 
-    let increment_counter_resp: IncrementCounterResponse =
-      serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap())
-        .unwrap();
-    let signature = base64::decode(increment_counter_resp.signature).unwrap();
+    let increment_counter_resp: IncrementCounterResponse = resp.json().await.unwrap();
+    let signature = base64_url::decode(&increment_counter_resp.signature).unwrap();
 
     // verify a message that unequivocally identifies the counter and tag
     let msg = {
@@ -256,18 +232,13 @@ async fn main() {
   // Step 4: ReadCounter with the Nonce generated and check for new data
   let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
   let read_counter_req = ReadCounterRequest {
-    handle: base64::encode(handle_bytes),
-    nonce: base64::encode(nonce_bytes),
+    handle: base64_url::encode(&handle_bytes),
+    nonce: base64_url::encode(&nonce_bytes),
   };
-  let read_counter_req_body = format!(
-    "{}{}",
-    XML_DECLARATION,
-    serde_xml_rs::ser::to_string(&read_counter_req).unwrap(),
-  );
   let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
   let res = client
     .get(read_counter_url)
-    .body(read_counter_req_body)
+    .json(&read_counter_req)
     .send()
     .await;
   if res.is_err() {
@@ -277,14 +248,12 @@ async fn main() {
   let resp = res.unwrap();
   assert!(resp.status() == reqwest::StatusCode::OK);
 
-  let read_counter_resp: ReadCounterResponse =
-    serde_xml_rs::de::from_str(std::str::from_utf8(&resp.bytes().await.unwrap()).unwrap()).unwrap();
-
-  let tag = base64::decode(read_counter_resp.tag).unwrap();
+  let read_counter_resp: ReadCounterResponse = resp.json().await.unwrap();
+  let tag = base64_url::decode(&read_counter_resp.tag).unwrap();
   assert_eq!(tag, t3.clone());
   let counter = read_counter_resp.counter;
   assert_eq!(counter, expected_counter as u64);
-  let signature = base64::decode(read_counter_resp.signature).unwrap();
+  let signature = base64_url::decode(&read_counter_resp.signature).unwrap();
 
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
