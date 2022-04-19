@@ -216,7 +216,7 @@ impl EndpointState {
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_append(&self.vs, tag, expected_height, &receipt);
+    let res = verify_append(&self.vs, handle, tag, expected_height, &receipt);
     if res.is_err() {
       return Err(EndpointError::FailedToVerifyIncrementedCounter);
     }
@@ -253,7 +253,7 @@ impl EndpointState {
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_read_latest(&self.vs, block.as_ref(), nonce, &receipt);
+    let res = verify_read_latest(&self.vs, handle, block.as_ref(), nonce, &receipt);
     if res.is_err() {
       return Err(EndpointError::FaieldToVerifyReadCounter);
     }

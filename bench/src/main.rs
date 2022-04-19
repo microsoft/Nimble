@@ -310,7 +310,7 @@ async fn benchmark_append(
 
   for append_res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_append(vs, &block.to_vec(), 0, &append_res.receipt);
+    let _res = verify_append(vs, handle, &block.to_vec(), 0, &append_res.receipt);
   }
 
   let time_taken = seq_verification_start.stop();
@@ -425,7 +425,7 @@ async fn benchmark_read_latest(
 
   for res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_read_latest(vs, &res.block, &nonce, &res.receipt);
+    let _res = verify_read_latest(vs, handle, &res.block, &nonce, &res.receipt);
   }
 
   let time_taken = seq_verification_start.stop();

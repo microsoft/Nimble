@@ -97,11 +97,8 @@ impl EndorserState {
       // create a genesis metablock that embeds the current tail of the view/membership ledger
       let view = view_ledger_state.view_ledger_tail_hash;
       let metablock = MetaBlock::genesis(handle);
-      let message = view.digest_with(&metablock.hash());
-      let signature = self
-        .private_key
-        .sign(message.to_bytes().as_slice())
-        .unwrap();
+      let message = view.digest_with(&handle.digest_with(&metablock.hash()));
+      let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
       // check if the handle already exists, if so, return an error
       if let Ok(mut ledger_tail_map) = self.ledger_tail_map.write() {
@@ -136,7 +133,8 @@ impl EndorserState {
             if let Ok(metablock) = protected_metablock.read() {
               let view = view_ledger_state.view_ledger_tail_hash;
               let tail_hash = metablock.hash();
-              let message = view.digest_with(&tail_hash.digest_with_bytes(nonce));
+              let message =
+                view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce)));
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
               Ok(Receipt::new(
@@ -224,10 +222,8 @@ impl EndorserState {
               let new_metablock = MetaBlock::new(&metablock.hash(), block_hash, height_plus_one);
 
               let view = view_ledger_state.view_ledger_tail_hash;
-              let signature = self
-                .private_key
-                .sign(&view.digest_with(&new_metablock.hash()).to_bytes())
-                .unwrap();
+              let message = view.digest_with(&handle.digest_with(&new_metablock.hash()));
+              let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
               *metablock = new_metablock.clone();
               Ok(Receipt::new(
@@ -431,7 +427,7 @@ mod tests {
     );
     assert!(receipt
       .verify(
-        &genesis_tail_hash.to_bytes(),
+        &handle.digest_with(&genesis_tail_hash).to_bytes(),
         &[endorser_state.public_key.clone()],
       )
       .is_ok());
@@ -548,7 +544,7 @@ mod tests {
     let metadata = MetaBlock::new(&prev_tail, &block_hash_to_append, new_ledger_height);
 
     let endorser_tail_expectation = metadata.hash();
-    let message = endorser_tail_expectation;
+    let message = handle.digest_with(&endorser_tail_expectation);
     let tail_signature_verification =
       receipt.verify(&message.to_bytes(), &[endorser_state.public_key.clone()]);
 

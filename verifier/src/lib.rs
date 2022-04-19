@@ -158,7 +158,9 @@ pub fn verify_new_ledger(
   let genesis_metablock = MetaBlock::genesis(&genesis_block_hash);
   let prev = genesis_metablock.hash();
   let first_metablock = MetaBlock::new(&prev, &first_block_hash, 1usize);
-  let hash = first_metablock.hash().to_bytes();
+  let hash = NimbleDigest::digest(handle_bytes)
+    .digest_with(&first_metablock.hash())
+    .to_bytes();
 
   let res = receipt.verify(&hash, pk_vec);
 
@@ -172,6 +174,7 @@ pub fn verify_new_ledger(
 
 pub fn verify_read_latest(
   vs: &VerifierState,
+  handle_bytes: &[u8],
   block_bytes: &[u8],
   nonce_bytes: &[u8],
   receipt_bytes: &[u8],
@@ -195,10 +198,11 @@ pub fn verify_read_latest(
 
   let tail_hash_prime = receipt.get_metablock_hash();
   let hash_nonced_tail_hash_prime =
-    NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat()).to_bytes();
+    NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat());
+  let hash = NimbleDigest::digest(handle_bytes).digest_with(&hash_nonced_tail_hash_prime);
 
   // verify the receipt against the nonced tail hash
-  let res = receipt.verify(&hash_nonced_tail_hash_prime, pk_vec);
+  let res = receipt.verify(&hash.to_bytes(), pk_vec);
 
   if res.is_err() {
     eprintln!("receipt verify: {:?}", res);
@@ -215,6 +219,7 @@ pub fn verify_read_latest(
 
 pub fn verify_read_by_index(
   vs: &VerifierState,
+  handle_bytes: &[u8],
   block_bytes: &[u8],
   idx: usize,
   receipt_bytes: &[u8],
@@ -241,7 +246,8 @@ pub fn verify_read_by_index(
   }
 
   let tail_hash_prime = receipt.get_metablock_hash();
-  let res = receipt.verify(&tail_hash_prime.to_bytes(), pk_vec);
+  let message = NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime);
+  let res = receipt.verify(&message.to_bytes(), pk_vec);
 
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
@@ -252,6 +258,7 @@ pub fn verify_read_by_index(
 
 pub fn verify_append(
   vs: &VerifierState,
+  handle_bytes: &[u8],
   block_bytes: &[u8],
   expected_height: usize,
   receipt_bytes: &[u8],
@@ -283,7 +290,8 @@ pub fn verify_append(
   }
 
   let tail_hash_prime = receipt.get_metablock_hash();
-  let res = receipt.verify(&tail_hash_prime.to_bytes(), pk_vec);
+  let message = NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime);
+  let res = receipt.verify(&message.to_bytes(), pk_vec);
 
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)

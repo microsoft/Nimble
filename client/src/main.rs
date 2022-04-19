@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(&vs, &block, 0, &receipt);
+  let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+  let res = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
   println!("Read Latest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -147,7 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .await?
       .into_inner();
 
-    let res = verify_append(&vs, block_to_append.as_ref(), expected_height, &receipt);
+    let res = verify_append(
+      &vs,
+      &handle,
+      block_to_append.as_ref(),
+      expected_height,
+      &receipt,
+    );
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
   }
@@ -166,7 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b3.clone());
 
-  let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+  let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()
@@ -186,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b1.clone());
 
-  let res = verify_read_by_index(&vs, &block, 2, &receipt);
+  let res = verify_read_by_index(&vs, &handle, &block, 2, &receipt);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -204,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_append(&vs, message, 0, &receipt);
+  let res = verify_append(&vs, &handle, message, 0, &receipt);
   println!("Append verification no condition: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -222,7 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, message);
 
-  let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+  let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()

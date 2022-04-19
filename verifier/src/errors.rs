@@ -30,4 +30,6 @@ pub enum VerificationError {
   InvalidBlockHash,
   /// returned if the height does not match the expected height
   InvalidHeight,
+  /// returned if the supplied handle bytes cannot be deserialized
+  InvalidHandle,
 }

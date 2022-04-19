@@ -376,7 +376,7 @@ mod tests {
       block: block_bytes.to_vec(),
     });
     let NewLedgerResp { receipt } = server.new_ledger(request).await.unwrap().into_inner();
-    let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
+    let res = verify_new_ledger(&vs, &handle_bytes, block_bytes.as_ref(), &receipt);
     println!("NewLedger (WithAppData) : {:?}", res);
     assert!(res.is_ok());
 
@@ -390,7 +390,7 @@ mod tests {
 
     let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
 
-    let res = verify_read_by_index(&vs, &block, 0, &receipt);
+    let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
     println!("ReadByIndex: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -403,7 +403,7 @@ mod tests {
 
     let ReadLatestResp { block, receipt } = server.read_latest(req).await.unwrap().into_inner();
 
-    let res = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+    let res = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
     println!("Read Latest : {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -424,7 +424,13 @@ mod tests {
 
       let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
 
-      let res = verify_append(&vs, block_to_append.as_ref(), expected_height, &receipt);
+      let res = verify_append(
+        &vs,
+        &handle,
+        block_to_append.as_ref(),
+        expected_height,
+        &receipt,
+      );
       println!("Append verification: {:?} {:?}", block_to_append, res);
       assert!(res.is_ok());
     }
@@ -443,7 +449,7 @@ mod tests {
       .into_inner();
     assert_eq!(block, b3.clone());
 
-    let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -459,7 +465,7 @@ mod tests {
     let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
     assert_eq!(block, b1.clone());
 
-    let res = verify_read_by_index(&vs, &block, 2, &receipt);
+    let res = verify_read_by_index(&vs, &handle, &block, 2, &receipt);
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -513,7 +519,7 @@ mod tests {
 
     let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, message, 0, &receipt);
+    let res = verify_append(&vs, &handle, message, 0, &receipt);
     println!("Append verification no condition: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -531,7 +537,7 @@ mod tests {
       .into_inner();
     assert_eq!(block, message);
 
-    let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -642,7 +648,7 @@ mod tests {
       .into_inner();
     assert_eq!(block, message);
 
-    let is_latest_valid = verify_read_latest(&vs, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid = verify_read_latest(&vs, &new_handle, &block, nonce.as_ref(), &receipt);
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
@@ -656,7 +662,7 @@ mod tests {
 
     let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, message, 0, &receipt);
+    let res = verify_append(&vs, &new_handle, message, 0, &receipt);
     println!("Append verification no condition: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -728,8 +734,7 @@ mod tests {
       });
 
       let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-
-      let res = verify_append(&vs, message, 0, &receipt);
+      let res = verify_append(&vs, &new_handle, message, 0, &receipt);
       println!("Append verification no condition: {:?}", res.is_ok());
       assert!(res.is_ok());
 
@@ -742,8 +747,7 @@ mod tests {
       });
 
       let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-
-      let res = verify_append(&vs, message, 0, &receipt);
+      let res = verify_append(&vs, &new_handle2, message, 0, &receipt);
       println!("Append verification no condition: {:?}", res.is_ok());
       assert!(res.is_ok());
     }
