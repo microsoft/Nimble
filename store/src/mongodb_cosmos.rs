@@ -347,47 +347,29 @@ async fn attach_ledger_receipt_op(
 async fn create_ledger_op(
   handle: &Handle,
   genesis_block: &Block,
-  first_block: &Block,
   ledger: &Collection<DBEntry>,
   cache: &CacheMap,
 ) -> Result<(), LedgerStoreError> {
   // 1. Create the ledger entry that we will add to the brand new ledger
-  let init_data_ledger_entry = SerializedLedgerEntry {
+  let genesis_data_ledger_entry = SerializedLedgerEntry {
     block: genesis_block.to_bytes(),
     receipt: Receipt::default().to_bytes(),
   };
 
-  let first_data_ledger_entry = SerializedLedgerEntry {
-    block: first_block.to_bytes(),
-    receipt: Receipt::default().to_bytes(),
-  };
-
-  let bson_init_data_ledger_entry: Binary = bincode::serialize(&init_data_ledger_entry)
-    .expect("failed to serialize data ledger entry")
-    .to_bson_binary();
-
-  let bson_first_data_ledger_entry: Binary = bincode::serialize(&first_data_ledger_entry)
+  let bson_init_data_ledger_entry: Binary = bincode::serialize(&genesis_data_ledger_entry)
     .expect("failed to serialize data ledger entry")
     .to_bson_binary();
 
   // 2. init data entry
-  let init_entry = DBEntry {
+  let genesis_entry = DBEntry {
     index: 0,
     value: bson_init_data_ledger_entry,
   };
 
-  // 3. first data entry
-  let first_entry = DBEntry {
-    index: 1,
-    value: bson_first_data_ledger_entry,
-  };
+  ledger.insert_one(&genesis_entry, None).await?;
 
-  ledger
-    .insert_many(&vec![first_entry, init_entry], None)
-    .await?;
-
-  // Update the ledger's cache height with the the latest height (which is 1)
-  update_cache_entry(handle, cache, 1)?;
+  // Update the ledger's cache height with the the latest height (which is 0)
+  update_cache_entry(handle, cache, 0)?;
 
   Ok(())
 }
@@ -547,7 +529,6 @@ impl LedgerStore for MongoCosmosLedgerStore {
     &self,
     handle: &Handle,
     genesis_block: Block,
-    first_block: Block,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
@@ -556,7 +537,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        create_ledger_op(handle, &genesis_block, &first_block, &ledger, &self.cache).await,
+        create_ledger_op(handle, &genesis_block, &ledger, &self.cache).await,
         handle,
         &self.cache,
         &ledger,

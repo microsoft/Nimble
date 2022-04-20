@@ -33,7 +33,6 @@ pub trait LedgerStore {
     &self,
     handle: &NimbleDigest,
     genesis_block: Block,
-    first_block: Block,
   ) -> Result<(), LedgerStoreError>;
   async fn append_ledger(
     &self,
@@ -79,11 +78,10 @@ mod tests {
     ];
 
     let genesis_block = Block::new(&initial_value);
-    let first_block = Block::new(&initial_value);
     let handle = genesis_block.hash();
 
     state
-      .create_ledger(&handle, genesis_block, first_block)
+      .create_ledger(&handle, genesis_block)
       .await
       .expect("failed create ledger");
 

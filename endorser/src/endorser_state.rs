@@ -83,6 +83,7 @@ impl EndorserState {
   pub fn new_ledger(
     &self,
     handle: &NimbleDigest,
+    block_hash: &NimbleDigest,
     ignore_lock: bool,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
@@ -96,7 +97,7 @@ impl EndorserState {
 
       // create a genesis metablock that embeds the current tail of the view/membership ledger
       let view = view_ledger_state.view_ledger_tail_hash;
-      let metablock = MetaBlock::genesis(handle);
+      let metablock = MetaBlock::genesis(block_hash);
       let message = view.digest_with(&handle.digest_with(&metablock.hash()));
       let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
@@ -412,11 +413,19 @@ mod tests {
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
-    let res = endorser_state.new_ledger(&handle, false);
+
+    let block_hash = {
+      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let n = NimbleDigest::from_bytes(&t);
+      assert!(n.is_ok(), "This should not have occured");
+      n.unwrap()
+    };
+
+    let res = endorser_state.new_ledger(&handle, &block_hash, false);
     assert!(res.is_ok());
 
     let receipt = res.unwrap();
-    let genesis_tail_hash = MetaBlock::genesis(&handle).hash();
+    let genesis_tail_hash = MetaBlock::genesis(&block_hash).hash();
     assert_eq!(
       *receipt.get_view(),
       endorser_state
@@ -485,7 +494,8 @@ mod tests {
     // The coordinator sends the hashed contents of the block to the endorsers
     let block = rand::thread_rng().gen::<[u8; 32]>();
     let handle = NimbleDigest::from_bytes(&block).unwrap();
-    let res = endorser_state.new_ledger(&handle, false);
+    let block_hash = handle; // this need not be the case, but it does not matter for testing
+    let res = endorser_state.new_ledger(&handle, &block_hash, false);
     assert!(res.is_ok());
 
     // Fetch the value currently in the tail.

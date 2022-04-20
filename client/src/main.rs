@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
 
   let res = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
-  println!("Read Latest : {:?}", res.is_ok());
+  println!("ReadLatest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
   // Step 4: Append
@@ -132,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
   let blocks = vec![&b1, &b2, &b3].to_vec();
 
-  let mut expected_height: usize = 1;
+  let mut expected_height: usize = 0;
   for block_to_append in blocks {
     expected_height += 1;
     let req = tonic::Request::new(AppendReq {
@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
     handle: handle.clone(),
-    index: 2,
+    index: 1,
   });
 
   let ReadByIndexResp { block, receipt } = coordinator_connection
@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b1.clone());
 
-  let res = verify_read_by_index(&vs, &handle, &block, 2, &receipt);
+  let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 

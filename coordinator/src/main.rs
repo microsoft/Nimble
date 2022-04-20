@@ -413,7 +413,7 @@ mod tests {
     let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
     let blocks = vec![&b1, &b2, &b3].to_vec();
 
-    let mut expected_height = 1;
+    let mut expected_height = 0;
     for block_to_append in blocks {
       expected_height += 1;
       let req = tonic::Request::new(AppendReq {
@@ -459,13 +459,13 @@ mod tests {
     // Step 5: Read At Index
     let req = tonic::Request::new(ReadByIndexReq {
       handle: handle.clone(),
-      index: 2,
+      index: 1,
     });
 
     let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
     assert_eq!(block, b1.clone());
 
-    let res = verify_read_by_index(&vs, &handle, &block, 2, &receipt);
+    let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 

@@ -138,31 +138,27 @@ pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[u8],
 ) -> Result<(), VerificationError> {
-  let res = Receipt::from_bytes(receipt_bytes);
-  if res.is_err() {
-    return Err(VerificationError::InvalidReceipt);
-  }
-  let receipt = res.unwrap();
+  let receipt = {
+    let res = Receipt::from_bytes(receipt_bytes);
+    if res.is_err() {
+      return Err(VerificationError::InvalidReceipt);
+    }
+    res.unwrap()
+  };
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
   }
 
-  let view = receipt.get_view();
+  let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
+  let message = {
+    let genesis_metablock = MetaBlock::genesis(&NimbleDigest::digest(block_bytes));
+    NimbleDigest::digest(handle_bytes)
+      .digest_with(&genesis_metablock.hash())
+      .to_bytes()
+  };
 
-  let pk_vec = vs.get_pk_for_view(view)?;
-
-  let genesis_block_hash = NimbleDigest::digest(handle_bytes);
-  let first_block_hash = NimbleDigest::digest(block_bytes);
-
-  let genesis_metablock = MetaBlock::genesis(&genesis_block_hash);
-  let prev = genesis_metablock.hash();
-  let first_metablock = MetaBlock::new(&prev, &first_block_hash, 1usize);
-  let hash = NimbleDigest::digest(handle_bytes)
-    .digest_with(&first_metablock.hash())
-    .to_bytes();
-
-  let res = receipt.verify(&hash, pk_vec);
+  let res = receipt.verify(&message, pk_vec);
 
   if res.is_err() {
     eprintln!("receipt verification failed: {:?}", res);
@@ -178,12 +174,14 @@ pub fn verify_read_latest(
   block_bytes: &[u8],
   nonce_bytes: &[u8],
   receipt_bytes: &[u8],
-) -> Result<(Vec<u8>, usize), VerificationError> {
-  let res = Receipt::from_bytes(receipt_bytes);
-  if res.is_err() {
-    return Err(VerificationError::InvalidReceipt);
-  }
-  let receipt = res.unwrap();
+) -> Result<usize, VerificationError> {
+  let receipt = {
+    let res = Receipt::from_bytes(receipt_bytes);
+    if res.is_err() {
+      return Err(VerificationError::InvalidReceipt);
+    }
+    res.unwrap()
+  };
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -199,22 +197,17 @@ pub fn verify_read_latest(
   let tail_hash_prime = receipt.get_metablock_hash();
   let hash_nonced_tail_hash_prime =
     NimbleDigest::digest(&([tail_hash_prime.to_bytes(), nonce_bytes.to_vec()]).concat());
-  let hash = NimbleDigest::digest(handle_bytes).digest_with(&hash_nonced_tail_hash_prime);
+  let message = NimbleDigest::digest(handle_bytes).digest_with(&hash_nonced_tail_hash_prime);
 
   // verify the receipt against the nonced tail hash
-  let res = receipt.verify(&hash.to_bytes(), pk_vec);
+  let res = receipt.verify(&message.to_bytes(), pk_vec);
 
   if res.is_err() {
     eprintln!("receipt verify: {:?}", res);
     return Err(VerificationError::InvalidReceipt);
   }
 
-  let filtered_block_data = if receipt.get_height() == 0 {
-    vec![]
-  } else {
-    block_bytes.to_vec()
-  };
-  Ok((filtered_block_data, receipt.get_height()))
+  Ok(receipt.get_height())
 }
 
 pub fn verify_read_by_index(
@@ -224,11 +217,13 @@ pub fn verify_read_by_index(
   idx: usize,
   receipt_bytes: &[u8],
 ) -> Result<(), VerificationError> {
-  let res = Receipt::from_bytes(receipt_bytes);
-  if res.is_err() {
-    return Err(VerificationError::InvalidReceipt);
-  }
-  let receipt = res.unwrap();
+  let receipt = {
+    let res = Receipt::from_bytes(receipt_bytes);
+    if res.is_err() {
+      return Err(VerificationError::InvalidReceipt);
+    }
+    res.unwrap()
+  };
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -245,10 +240,12 @@ pub fn verify_read_by_index(
     return Err(VerificationError::InvalidBlockHash);
   }
 
-  let tail_hash_prime = receipt.get_metablock_hash();
-  let message = NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime);
-  let res = receipt.verify(&message.to_bytes(), pk_vec);
+  let message = {
+    let tail_hash_prime = receipt.get_metablock_hash();
+    NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime)
+  };
 
+  let res = receipt.verify(&message.to_bytes(), pk_vec);
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
@@ -262,12 +259,14 @@ pub fn verify_append(
   block_bytes: &[u8],
   expected_height: usize,
   receipt_bytes: &[u8],
-) -> Result<Vec<u8>, VerificationError> {
-  let res = Receipt::from_bytes(receipt_bytes);
-  if res.is_err() {
-    return Err(VerificationError::InvalidReceipt);
-  }
-  let receipt = res.unwrap();
+) -> Result<usize, VerificationError> {
+  let receipt = {
+    let res = Receipt::from_bytes(receipt_bytes);
+    if res.is_err() {
+      return Err(VerificationError::InvalidReceipt);
+    }
+    res.unwrap()
+  };
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -289,13 +288,15 @@ pub fn verify_append(
     return Err(VerificationError::InvalidHeight);
   }
 
-  let tail_hash_prime = receipt.get_metablock_hash();
-  let message = NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime);
+  let message = {
+    let tail_hash_prime = receipt.get_metablock_hash();
+    NimbleDigest::digest(handle_bytes).digest_with(&tail_hash_prime)
+  };
   let res = receipt.verify(&message.to_bytes(), pk_vec);
 
   if res.is_err() {
     Err(VerificationError::InvalidReceipt)
   } else {
-    Ok(tail_hash_prime.to_bytes())
+    Ok(receipt.get_height())
   }
 }

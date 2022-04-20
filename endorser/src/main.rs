@@ -58,17 +58,26 @@ impl EndorserCall for EndorserServiceState {
   ) -> Result<Response<NewLedgerResp>, Status> {
     let NewLedgerReq {
       handle,
+      block_hash,
       ignore_lock,
     } = req.into_inner();
     let handle = {
-      let handle_instance = NimbleDigest::from_bytes(&handle);
-      if handle_instance.is_err() {
+      let res = NimbleDigest::from_bytes(&handle);
+      if res.is_err() {
         return Err(Status::invalid_argument("Handle size is invalid"));
       }
-      handle_instance.unwrap()
+      res.unwrap()
     };
 
-    let res = self.state.new_ledger(&handle, ignore_lock);
+    let block_hash = {
+      let res = NimbleDigest::from_bytes(&block_hash);
+      if res.is_err() {
+        return Err(Status::invalid_argument("Block hash size is invalid"));
+      }
+      res.unwrap()
+    };
+
+    let res = self.state.new_ledger(&handle, &block_hash, ignore_lock);
 
     match res {
       Ok(receipt) => {

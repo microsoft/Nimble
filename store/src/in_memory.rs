@@ -38,16 +38,11 @@ impl LedgerStore for InMemoryLedgerStore {
     &self,
     handle: &NimbleDigest,
     genesis_block: Block,
-    first_block: Block,
   ) -> Result<(), LedgerStoreError> {
-    let init_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default());
-    let first_ledger_entry = LedgerEntry::new(first_block, Receipt::default());
+    let genesis_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default());
     if let Ok(mut ledgers_map) = self.ledgers.write() {
       if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
-        e.insert(Arc::new(RwLock::new(vec![
-          init_ledger_entry,
-          first_ledger_entry,
-        ])));
+        e.insert(Arc::new(RwLock::new(vec![genesis_ledger_entry])));
         Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))

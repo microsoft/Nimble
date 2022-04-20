@@ -258,7 +258,7 @@ impl EndpointState {
       return Err(EndpointError::FaieldToVerifyReadCounter);
     }
 
-    let (tag, counter) = res.unwrap();
+    let counter = res.unwrap();
 
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
@@ -266,7 +266,7 @@ impl EndpointState {
         "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
         self.id.to_bytes(),
         handle,
-        tag,
+        block,
         counter,
         nonce
       );
@@ -275,6 +275,6 @@ impl EndpointState {
     let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
 
     // respond to the light client
-    Ok((tag, counter as u64, signature))
+    Ok((block, counter as u64, signature))
   }
 }

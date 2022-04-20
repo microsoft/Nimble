@@ -23,7 +23,8 @@ message GetPublicKeyResp {
 
 message NewLedgerReq {
   bytes handle = 1;
-  bool ignore_lock = 2;
+  bytes block_hash = 2;
+  bool ignore_lock = 3;
 }
 
 message NewLedgerResp {
