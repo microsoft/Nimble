@@ -19,8 +19,6 @@ struct GetIdentityResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
   #[serde(rename = "Tag")]
   pub tag: String,
 }
@@ -33,8 +31,6 @@ struct NewCounterResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
   #[serde(rename = "Tag")]
   pub tag: String,
   #[serde(rename = "ExpectedCounter")]
@@ -45,14 +41,6 @@ struct IncrementCounterRequest {
 struct IncrementCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ReadCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
-  #[serde(rename = "Nonce")]
-  pub nonce: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,7 +67,7 @@ async fn main() {
   let client = reqwest::Client::new();
 
   // Step 0: Obtain the identity and public key of the instance
-  let get_identity_url = reqwest::Url::parse(&format!("{}/getidentity", endpoint_addr)).unwrap();
+  let get_identity_url = reqwest::Url::parse(&format!("{}/serviceid", endpoint_addr)).unwrap();
   let res = client.get(get_identity_url).send().await;
 
   if res.is_err() {
@@ -101,11 +89,12 @@ async fn main() {
   // Step 1: NewCounter Request
   let tag_bytes: Vec<u8> = NimbleDigest::digest(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to_bytes();
   let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let handle = base64_url::encode(&handle_bytes);
   let new_counter_req = NewCounterRequest {
-    handle: base64_url::encode(&handle_bytes),
     tag: base64_url::encode(&tag_bytes),
   };
-  let new_counter_url = reqwest::Url::parse(&format!("{}/newcounter", endpoint_addr)).unwrap();
+  let new_counter_url =
+    reqwest::Url::parse(&format!("{}/counters/{}", endpoint_addr, handle)).unwrap();
   let res = client
     .put(new_counter_url)
     .json(&new_counter_req)
@@ -140,16 +129,13 @@ async fn main() {
 
   // Step 2: Read Latest with the Nonce generated
   let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
-  let read_counter_req = ReadCounterRequest {
-    handle: base64_url::encode(&handle_bytes),
-    nonce: base64_url::encode(&nonce_bytes),
-  };
-  let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
-  let res = client
-    .get(read_counter_url)
-    .json(&read_counter_req)
-    .send()
-    .await;
+  let nonce = base64_url::encode(&nonce_bytes);
+  let read_counter_url = reqwest::Url::parse_with_params(
+    &format!("{}/counters/{}", endpoint_addr, handle),
+    &[("nonce", nonce)],
+  )
+  .unwrap();
+  let res = client.get(read_counter_url).send().await;
   if res.is_err() {
     eprintln!("read_counter failed: {:?}", res);
   }
@@ -189,15 +175,14 @@ async fn main() {
   for tag in [t1.clone(), t2.clone(), t3.clone()].iter() {
     expected_counter += 1;
     let increment_counter_req = IncrementCounterRequest {
-      handle: base64_url::encode(&handle_bytes),
       tag: base64_url::encode(&tag),
       expected_counter: expected_counter as u64,
     };
 
     let increment_counter_url =
-      reqwest::Url::parse(&format!("{}/incrementcounter", endpoint_addr)).unwrap();
+      reqwest::Url::parse(&format!("{}/counters/{}", endpoint_addr, handle)).unwrap();
     let res = client
-      .put(increment_counter_url)
+      .post(increment_counter_url)
       .json(&increment_counter_req)
       .send()
       .await;
@@ -231,16 +216,13 @@ async fn main() {
 
   // Step 4: ReadCounter with the Nonce generated and check for new data
   let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
-  let read_counter_req = ReadCounterRequest {
-    handle: base64_url::encode(&handle_bytes),
-    nonce: base64_url::encode(&nonce_bytes),
-  };
-  let read_counter_url = reqwest::Url::parse(&format!("{}/readcounter", endpoint_addr)).unwrap();
-  let res = client
-    .get(read_counter_url)
-    .json(&read_counter_req)
-    .send()
-    .await;
+  let nonce = base64_url::encode(&nonce_bytes);
+  let read_counter_url = reqwest::Url::parse_with_params(
+    &format!("{}/counters/{}", endpoint_addr, handle),
+    &[("nonce", nonce)],
+  )
+  .unwrap();
+  let res = client.get(read_counter_url).send().await;
   if res.is_err() {
     eprintln!("read_counter failed: {:?}", res);
   }

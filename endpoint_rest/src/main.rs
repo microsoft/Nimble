@@ -1,14 +1,14 @@
 use endpoint::EndpointState;
 
 use axum::{
-  extract::Extension,
+  extract::{Extension, Path, Query},
   http::StatusCode,
   response::IntoResponse,
-  routing::{get, put},
+  routing::get,
   Json, Router,
 };
 use serde_json::json;
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tower::ServiceBuilder;
 
 use clap::{App, Arg};
@@ -44,10 +44,8 @@ async fn main() {
 
   // Build our application by composing routes
   let app = Router::new()
-      .route("/getidentity", get(get_identity))
-      .route("/newcounter", put(new_counter))
-      .route("/incrementcounter", put(increment_counter))
-      .route("/readcounter", get(read_counter))
+      .route("/serviceid", get(get_identity))
+      .route("/counters/:handle", get(read_counter).put(new_counter).post(increment_counter))
       // Add middleware to all routes
       .layer(
           ServiceBuilder::new()
@@ -75,8 +73,6 @@ struct GetIdentityResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
   #[serde(rename = "Tag")]
   pub tag: String,
 }
@@ -89,8 +85,6 @@ struct NewCounterResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
   #[serde(rename = "Tag")]
   pub tag: String,
   #[serde(rename = "ExpectedCounter")]
@@ -101,14 +95,6 @@ struct IncrementCounterRequest {
 struct IncrementCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ReadCounterRequest {
-  #[serde(rename = "Handle")]
-  pub handle: String,
-  #[serde(rename = "Nonce")]
-  pub nonce: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -131,10 +117,11 @@ async fn get_identity(Extension(state): Extension<Arc<EndpointState>>) -> impl I
 }
 
 async fn new_counter(
+  Path(handle): Path<String>,
   Json(req): Json<NewCounterRequest>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let res = base64_url::decode(&req.handle);
+  let res = base64_url::decode(&handle);
   if res.is_err() {
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
@@ -160,16 +147,20 @@ async fn new_counter(
 }
 
 async fn read_counter(
-  Json(req): Json<ReadCounterRequest>,
+  Path(handle): Path<String>,
+  Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let res = base64_url::decode(&req.handle);
+  let res = base64_url::decode(&handle);
   if res.is_err() {
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
-  let res = base64_url::decode(&req.nonce);
+  if !params.contains_key("nonce") {
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let res = base64_url::decode(&params["nonce"]);
   if res.is_err() {
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
@@ -191,10 +182,11 @@ async fn read_counter(
 }
 
 async fn increment_counter(
+  Path(handle): Path<String>,
   Json(req): Json<IncrementCounterRequest>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-  let res = base64_url::decode(&req.handle);
+  let res = base64_url::decode(&handle);
   if res.is_err() {
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
