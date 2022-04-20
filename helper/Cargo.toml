@@ -1,0 +1,12 @@
+[package]
+name = "helper"
+version = "0.1.0"
+edition = "2018"
+authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-sudheeshs@microsoft.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+mongodb = "2.1.0"
+clap = "2.34.0"
+tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
