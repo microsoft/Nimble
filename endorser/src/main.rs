@@ -286,15 +286,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("endorser")
     .arg(
       Arg::with_name("host")
+        .short("t")
+        .long("host")
         .help("The hostname to run the Service On. Default: [::1]")
-        .default_value("[::1]")
-        .index(2),
+        .default_value("[::1]"),
     )
     .arg(
       Arg::with_name("port")
+        .short("p")
+        .long("port")
         .help("The port number to run the Service On. Default: 9096")
-        .default_value("9090")
-        .index(1),
+        .default_value("9090"),
     );
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();

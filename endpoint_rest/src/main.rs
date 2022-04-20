@@ -8,7 +8,12 @@ use axum::{
   Json, Router,
 };
 use serde_json::json;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+  collections::HashMap,
+  net::{IpAddr, SocketAddr},
+  str::FromStr,
+  sync::Arc,
+};
 use tower::ServiceBuilder;
 
 use clap::{App, Arg};
@@ -17,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-  let (port, coordinator_hostname) = {
+  let (ip_addr, port, coordinator_hostname) = {
     let config = App::new("endpoint")
       .arg(
         Arg::with_name("coordinator")
@@ -27,6 +32,13 @@ async fn main() {
           .default_value("http://[::1]:8080"),
       )
       .arg(
+        Arg::with_name("host")
+          .short("t")
+          .long("host")
+          .help("The hostname to run the service on.")
+          .default_value("::1"),
+      )
+      .arg(
         Arg::with_name("port")
           .short("p")
           .long("port")
@@ -34,10 +46,11 @@ async fn main() {
           .default_value("8082"),
       );
     let cli_matches = config.get_matches();
+    let addr = IpAddr::from_str(cli_matches.value_of("host").unwrap()).unwrap();
     let port_number: u16 = cli_matches.value_of("port").unwrap().parse().unwrap();
     let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
 
-    (port_number, coordinator_hostname)
+    (addr, port_number, coordinator_hostname)
   };
 
   let endpoint_state = Arc::new(EndpointState::new(coordinator_hostname).await.unwrap());
@@ -55,7 +68,7 @@ async fn main() {
       );
 
   // Run our app with hyper
-  let addr = SocketAddr::from(([127, 0, 0, 1], port));
+  let addr = SocketAddr::from((ip_addr, port));
   println!("Running endpoint at {}", addr);
   axum::Server::bind(&addr)
     .serve(app.into_make_service())
