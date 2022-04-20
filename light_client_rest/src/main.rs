@@ -171,7 +171,7 @@ async fn main() {
   let t2: Vec<u8> = NimbleDigest::digest("tag_example_2".as_bytes()).to_bytes();
   let t3: Vec<u8> = NimbleDigest::digest("tag_example_3".as_bytes()).to_bytes();
 
-  let mut expected_counter: usize = 1;
+  let mut expected_counter: usize = 0;
   for tag in [t1.clone(), t2.clone(), t3.clone()].iter() {
     expected_counter += 1;
     let increment_counter_req = IncrementCounterRequest {
