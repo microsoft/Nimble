@@ -207,10 +207,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
-  let endorser_hostnames = (0..str_vec.len())
-    .map(|i| str_vec[i].to_string())
+  let endorser_hostnames = str_vec
+    .iter()
+    .filter(|e| !e.is_empty())
+    .map(|e| e.to_string())
     .collect::<Vec<String>>();
-  println!("Endorser_hostnames: {:?}", endorser_hostnames);
 
   let mut ledger_store_args = HashMap::<String, String>::new();
   if let Some(x) = cli_matches.value_of("cosmosurl") {
@@ -222,8 +223,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = CoordinatorState::new(store, &ledger_store_args).await;
   assert!(res.is_ok());
   let coordinator = res.unwrap();
-  let res = coordinator.add_endorsers(&endorser_hostnames).await;
-  assert!(res.is_ok());
+
+  if !endorser_hostnames.is_empty() {
+    let res = coordinator.add_endorsers(&endorser_hostnames).await;
+    assert!(res.is_ok());
+  }
+  println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
+
   let server = CoordinatorServiceState::new(coordinator);
   println!("Running gRPC Coordinator Service at {:?}", addr);
 

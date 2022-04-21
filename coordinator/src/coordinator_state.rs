@@ -183,6 +183,16 @@ impl CoordinatorState {
       .collect::<Vec<Vec<u8>>>()
   }
 
+  pub fn get_endorser_uris(&self) -> Vec<String> {
+    self
+      .conn_map
+      .read()
+      .expect("Failed to get the read lock")
+      .iter()
+      .map(|(_pk, (_ec, hostname))| hostname.clone())
+      .collect::<Vec<String>>()
+  }
+
   fn get_endorser_hostnames(&self) -> EndorserHostnames {
     EndorserHostnames {
       pk_hostnames: self
