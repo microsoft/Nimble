@@ -6,7 +6,7 @@ use crate::{
 };
 use digest::Output;
 use generic_array::{typenum::U32, GenericArray};
-use itertools::{concat, Itertools};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -113,25 +113,6 @@ impl Block {
       block: bytes.to_vec(),
     }
   }
-
-  pub fn genesis(
-    service_nonce_bytes: &[u8],
-    client_nonce_bytes: &[u8],
-    app_bytes: &[u8],
-  ) -> Result<Self, VerificationError> {
-    let (nonce, client_nonce) = {
-      let nonce_res = Nonce::new(service_nonce_bytes);
-      let client_res = Nonce::new(client_nonce_bytes);
-      if nonce_res.is_err() || client_res.is_err() {
-        return Err(VerificationError::InvalidNonceSize);
-      }
-      (nonce_res.unwrap(), client_res.unwrap())
-    };
-
-    Ok(Block {
-      block: concat(vec![nonce.get(), client_nonce.get(), app_bytes.to_vec()]),
-    })
-  }
 }
 
 /// `MetaBlock` has three entries: (i) hash of the previous metadata,
@@ -158,13 +139,10 @@ impl MetaBlock {
   }
 
   pub fn genesis(block_hash: &NimbleDigest) -> Self {
-    // unwrap is okay here since it will not fail
-    let prev = NimbleDigest::from_bytes(&vec![0u8; NimbleDigest::num_bytes()]).unwrap();
-    let height = 0usize;
     MetaBlock {
-      prev,
+      prev: NimbleDigest::default(),
       block_hash: *block_hash,
-      height,
+      height: 0usize,
     }
   }
 
@@ -493,18 +471,13 @@ impl CustomSerde for MetaBlock {
       );
       Err(CustomSerdeError::IncorrectLength)
     } else {
-      // unwrap is okay to call here given the error check above
-      let prev = NimbleDigest::from_bytes(&bytes[0..digest_len]).unwrap();
-      let block_hash = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len]).unwrap();
-      let height = {
-        let res = bytes[2 * digest_len..].try_into();
-        if res.is_err() {
-          return Err(CustomSerdeError::InternalError);
-        }
-
-        u64::from_le_bytes(res.unwrap()) as usize
-      };
-
+      let prev = NimbleDigest::from_bytes(&bytes[0..digest_len])?;
+      let block_hash = NimbleDigest::from_bytes(&bytes[digest_len..2 * digest_len])?;
+      let height = u64::from_le_bytes(
+        bytes[2 * digest_len..]
+          .try_into()
+          .map_err(|_| CustomSerdeError::IncorrectLength)?,
+      ) as usize;
       Ok(MetaBlock {
         prev,
         block_hash,
@@ -531,8 +504,10 @@ impl CustomSerde for IdSig {
       );
       return Err(CustomSerdeError::IncorrectLength);
     }
-    let id = PublicKey::from_bytes(&bytes[0..PublicKey::num_bytes()]).unwrap();
-    let sig = Signature::from_bytes(&bytes[PublicKey::num_bytes()..]).unwrap();
+    let id = PublicKey::from_bytes(&bytes[0..PublicKey::num_bytes()])
+      .map_err(|_| CustomSerdeError::InternalError)?;
+    let sig = Signature::from_bytes(&bytes[PublicKey::num_bytes()..])
+      .map_err(|_| CustomSerdeError::InternalError)?;
 
     Ok(IdSig { id, sig })
   }
@@ -561,16 +536,15 @@ impl CustomSerde for Receipt {
       return Err(CustomSerdeError::IncorrectLength);
     }
 
-    let view = NimbleDigest::from_bytes(&bytes[0..NimbleDigest::num_bytes()].to_vec()).unwrap();
+    let view = NimbleDigest::from_bytes(&bytes[0..NimbleDigest::num_bytes()].to_vec())?;
     let metablock = MetaBlock::from_bytes(
       &bytes[NimbleDigest::num_bytes()..NimbleDigest::num_bytes() + MetaBlock::num_bytes()]
         .to_vec(),
-    )
-    .unwrap();
+    )?;
     let mut id_sigs = Vec::new();
     let mut pos = NimbleDigest::num_bytes() + MetaBlock::num_bytes();
     while pos < bytes.len() {
-      let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()].to_vec()).unwrap();
+      let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()].to_vec())?;
       id_sigs.push(id_sig);
       pos += IdSig::num_bytes();
     }

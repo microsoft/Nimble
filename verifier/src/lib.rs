@@ -39,12 +39,10 @@ impl VerifierState {
     receipt_bytes: &[u8],
   ) -> Result<(), VerificationError> {
     // parse the block to obtain the full list of the public keys for the proposed latest view
-    let res = bincode::deserialize(block_bytes);
-    if res.is_err() {
-      eprintln!("Failed to deserialize the view genesis block {:?}", res);
-      return Err(VerificationError::InvalidGenesisBlock);
-    }
-    let endorsers: EndorserHostnames = res.unwrap();
+    let endorsers: EndorserHostnames = bincode::deserialize(block_bytes).map_err(|e| {
+      eprintln!("Failed to deserialize the view genesis block {:?}", e);
+      VerificationError::InvalidGenesisBlock
+    })?;
     let mut pk_vec_for_proposed_latest_view = Vec::new();
     for idx in 0..endorsers.pk_hostnames.len() {
       pk_vec_for_proposed_latest_view
@@ -63,11 +61,8 @@ impl VerifierState {
       return Err(VerificationError::DuplicateIds);
     }
 
-    let res = Receipt::from_bytes(receipt_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidReceipt);
-    }
-    let receipt = res.unwrap();
+    let receipt =
+      Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
     // check if this is the first view change
     if self.latest_view == NimbleDigest::default() {
@@ -138,13 +133,8 @@ pub fn verify_new_ledger(
   block_bytes: &[u8],
   receipt_bytes: &[u8],
 ) -> Result<(), VerificationError> {
-  let receipt = {
-    let res = Receipt::from_bytes(receipt_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidReceipt);
-    }
-    res.unwrap()
-  };
+  let receipt =
+    Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -175,13 +165,8 @@ pub fn verify_read_latest(
   nonce_bytes: &[u8],
   receipt_bytes: &[u8],
 ) -> Result<usize, VerificationError> {
-  let receipt = {
-    let res = Receipt::from_bytes(receipt_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidReceipt);
-    }
-    res.unwrap()
-  };
+  let receipt =
+    Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -200,12 +185,10 @@ pub fn verify_read_latest(
   let message = NimbleDigest::digest(handle_bytes).digest_with(&hash_nonced_tail_hash_prime);
 
   // verify the receipt against the nonced tail hash
-  let res = receipt.verify(&message.to_bytes(), pk_vec);
-
-  if res.is_err() {
-    eprintln!("receipt verify: {:?}", res);
-    return Err(VerificationError::InvalidReceipt);
-  }
+  receipt.verify(&message.to_bytes(), pk_vec).map_err(|e| {
+    eprintln!("receipt verify: {:?}", e);
+    VerificationError::InvalidReceipt
+  })?;
 
   Ok(receipt.get_height())
 }
@@ -217,13 +200,8 @@ pub fn verify_read_by_index(
   idx: usize,
   receipt_bytes: &[u8],
 ) -> Result<(), VerificationError> {
-  let receipt = {
-    let res = Receipt::from_bytes(receipt_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidReceipt);
-    }
-    res.unwrap()
-  };
+  let receipt =
+    Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
@@ -260,13 +238,8 @@ pub fn verify_append(
   expected_height: usize,
   receipt_bytes: &[u8],
 ) -> Result<usize, VerificationError> {
-  let receipt = {
-    let res = Receipt::from_bytes(receipt_bytes);
-    if res.is_err() {
-      return Err(VerificationError::InvalidReceipt);
-    }
-    res.unwrap()
-  };
+  let receipt =
+    Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
   if receipt.get_id_sigs().len() < MIN_NUM_ENDORSERS {
     return Err(VerificationError::InsufficientReceipts);
