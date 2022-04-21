@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use ledger::{Block, Handle, NimbleDigest, Receipt};
 
+pub mod azure_pageblob;
 mod errors;
 pub mod in_memory;
 pub mod mongodb_cosmos;
@@ -66,7 +67,8 @@ pub trait LedgerStore {
 #[cfg(test)]
 mod tests {
   use crate::{
-    in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+    azure_pageblob::PageBlobLedgerStore, in_memory::InMemoryLedgerStore,
+    mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
   };
   use ledger::{Block, CustomSerde, NimbleHashTrait};
   use std::collections::HashMap;
@@ -139,6 +141,36 @@ mod tests {
     );
 
     let state = MongoCosmosLedgerStore::new(&args).await.unwrap();
+    check_store_creation_and_operations(&state).await;
+  }
+
+  #[tokio::test]
+  pub async fn check_azure_pageblob_store() {
+    if std::env::var_os("STORAGE_ACCOUNT").is_none()
+      || std::env::var_os("STORAGE_MASTER_KEY").is_none()
+    {
+      // The right env variables are not available so let's skip tests
+      return;
+    }
+
+    let mut args = HashMap::<String, String>::new();
+    args.insert(
+      String::from("STORAGE_ACCOUNT"),
+      std::env::var_os("STORAGE_ACCOUNT")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
+
+    args.insert(
+      String::from("STORAGE_MASTER_KEY"),
+      std::env::var_os("STORAGE_MASTER_KEY")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
+
+    let state = PageBlobLedgerStore::new(&args).await.unwrap();
     check_store_creation_and_operations(&state).await;
   }
 }

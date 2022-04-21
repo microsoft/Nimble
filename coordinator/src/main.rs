@@ -307,6 +307,27 @@ mod tests {
           .unwrap(),
       );
     }
+
+    if std::env::var_os("STORAGE_ACCOUNT").is_some() {
+      ledger_store_args.insert(
+        String::from("STORAGE_ACCOUNT"),
+        std::env::var_os("STORAGE_ACCOUNT")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("STORAGE_MASTER_KEY").is_some() {
+      ledger_store_args.insert(
+        String::from("STORAGE_MASTER_KEY"),
+        std::env::var_os("STORAGE_MASTER_KEY")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
     if std::env::var_os("NIMBLE_DB").is_some() {
       ledger_store_args.insert(
         String::from("NIMBLE_DB"),
@@ -476,7 +497,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 6: change the view by adding a new endorser
-    let endorser_args2 = endorser_args.clone() + " 9091";
+    let endorser_args2 = endorser_args.clone() + "-p 9091";
     let mut endorser2 = BoxChild {
       child: Command::new(endorser_cmd.clone())
         .args(endorser_args2.split_whitespace())
@@ -601,7 +622,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 10: add the third endorser
-    let endorser_args3 = endorser_args.clone() + " 9092";
+    let endorser_args3 = endorser_args.clone() + "-p 9092";
     let mut endorser3 = BoxChild {
       child: Command::new(endorser_cmd.clone())
         .args(endorser_args3.split_whitespace())

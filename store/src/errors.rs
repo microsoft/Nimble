@@ -38,6 +38,16 @@ pub enum StorageError {
   SerializationError,
   /// return if there was an error deserializing an entry
   DeserializationError,
+  /// return if the data is too big to be stored (e.g., PageBlob has 512-byte pages)
+  DataTooLarge,
+  /// return if an empty cache is updated without specifying a height
+  CacheMissingHeight,
+  /// return if there was a concurrent operation that preempted the current operation
+  ConcurrentOperation,
+  /// return if an error for which we do not have an error type is thrown
+  UnhandledError,
+  /// return if the name for the nimble database is not acceptable for the store
+  InvalidDBName,
 }
 
 use std::fmt::Display;
