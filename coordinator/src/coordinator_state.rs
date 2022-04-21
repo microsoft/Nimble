@@ -1118,10 +1118,6 @@ impl CoordinatorState {
     let ledger_entry = {
       let res = self.ledger_store.read_view_ledger_by_index(index).await;
       if res.is_err() {
-        eprintln!(
-          "Failed to read view by index from the ledger store {:?}",
-          res.unwrap_err()
-        );
         return Err(CoordinatorError::FailedToReadViewLedger);
       }
       res.unwrap()

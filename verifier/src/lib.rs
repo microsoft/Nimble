@@ -1,4 +1,4 @@
-mod errors;
+pub mod errors;
 
 use crate::errors::VerificationError;
 use ledger::{
@@ -22,6 +22,10 @@ pub struct VerifierState {
 impl VerifierState {
   pub fn new() -> Self {
     VerifierState::default()
+  }
+
+  pub fn get_view_ledger_height(&self) -> usize {
+    self.vk_map.len()
   }
 
   /// Allows obtaining the list of public keys of endorsers for a given view

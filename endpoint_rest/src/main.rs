@@ -136,18 +136,21 @@ async fn new_counter(
 ) -> impl IntoResponse {
   let res = base64_url::decode(&handle);
   if res.is_err() {
+    eprintln!("received a bad handle {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
   let res = base64_url::decode(&req.tag);
   if res.is_err() {
+    eprintln!("received a bad tag {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let tag = res.unwrap();
 
   let res = state.new_counter(&handle, &tag).await;
   if res.is_err() {
+    eprintln!("failed to create a new counter {:?}", res);
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let signature = res.unwrap();
@@ -166,21 +169,25 @@ async fn read_counter(
 ) -> impl IntoResponse {
   let res = base64_url::decode(&handle);
   if res.is_err() {
+    eprintln!("received a bad handle {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
   if !params.contains_key("nonce") {
+    eprintln!("missing a nonce");
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let res = base64_url::decode(&params["nonce"]);
   if res.is_err() {
+    eprintln!("received a bad nonce {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let nonce = res.unwrap();
 
   let res = state.read_counter(&handle, &nonce).await;
   if res.is_err() {
+    eprintln!("failed to read a counter {:?}", res);
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let (tag, counter, signature) = res.unwrap();
@@ -201,12 +208,14 @@ async fn increment_counter(
 ) -> impl IntoResponse {
   let res = base64_url::decode(&handle);
   if res.is_err() {
+    eprintln!("received a bad handle {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let handle = res.unwrap();
 
   let res = base64_url::decode(&req.tag);
   if res.is_err() {
+    eprintln!("received a bad tag {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let tag = res.unwrap();
@@ -215,6 +224,7 @@ async fn increment_counter(
     .increment_counter(&handle, &tag, req.expected_counter)
     .await;
   if res.is_err() {
+    eprintln!("failed to increment a counter {:?}", res);
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let signature = res.unwrap();

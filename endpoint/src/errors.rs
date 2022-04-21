@@ -18,4 +18,12 @@ pub enum EndpointError {
   FailedToReadCounter,
   /// returned if the endpoint fails to verify the read counter
   FaieldToVerifyReadCounter,
+  /// returned if the endpoint fails to read the view ledger
+  FailedToReadViewLedger,
+  /// returned if the endpoint fails to acquire the read lock
+  FailedToAcquireReadLock,
+  /// returned if the endpoint fails to acquire the write lock
+  FailedToAcquireWriteLock,
+  /// returned if the endpoint fails to apply view change
+  FailedToApplyViewChange,
 }

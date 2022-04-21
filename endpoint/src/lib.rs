@@ -18,8 +18,13 @@ use ledger::{
   signature::{PrivateKey, PrivateKeyTrait, PublicKeyTrait, SignatureTrait},
   Block, CustomSerde, NimbleDigest, NimbleHashTrait,
 };
-use std::convert::TryFrom;
-use verifier::{verify_append, verify_new_ledger, verify_read_latest, VerifierState};
+use std::{
+  convert::TryFrom,
+  sync::{Arc, RwLock},
+};
+use verifier::{
+  errors::VerificationError, verify_append, verify_new_ledger, verify_read_latest, VerifierState,
+};
 
 #[derive(Debug, Clone)]
 pub struct Connection {
@@ -48,7 +53,10 @@ impl Connection {
       .clone()
       .new_ledger(req)
       .await
-      .map_err(|_err| EndpointError::UnableToConnectToCoordinator)?
+      .map_err(|e| {
+        eprintln!("Failed to create a new ledger {:?}", e);
+        EndpointError::FailedToCreateNewCounter
+      })?
       .into_inner();
     Ok(receipt)
   }
@@ -69,7 +77,10 @@ impl Connection {
       .clone()
       .append(req)
       .await
-      .map_err(|_err| EndpointError::UnableToConnectToCoordinator)?
+      .map_err(|e| {
+        eprintln!("Failed to append to a ledger {:?}", e);
+        EndpointError::FailedToIncrementCounter
+      })?
       .into_inner();
     Ok(receipt)
   }
@@ -87,7 +98,10 @@ impl Connection {
         nonce: nonce.to_vec(),
       })
       .await
-      .map_err(|_err| EndpointError::UnableToConnectToCoordinator)?
+      .map_err(|e| {
+        eprintln!("Failed to read a ledger {:?}", e);
+        EndpointError::FailedToReadCounter
+      })?
       .into_inner();
     Ok((block, receipt))
   }
@@ -103,7 +117,7 @@ impl Connection {
         index: index as u64,
       })
       .await
-      .map_err(|_err| EndpointError::UnableToConnectToCoordinator)?
+      .map_err(|_e| EndpointError::FailedToReadViewLedger)?
       .into_inner();
     Ok((block, receipt))
   }
@@ -112,8 +126,8 @@ impl Connection {
 pub struct EndpointState {
   conn: Connection,
   id: NimbleDigest,
-  vs: VerifierState,
   sk: PrivateKey,
+  vs: Arc<RwLock<VerifierState>>,
 }
 
 impl EndpointState {
@@ -148,7 +162,12 @@ impl EndpointState {
     // produce a private key pair to sign responses
     let sk = PrivateKey::new();
 
-    Ok(EndpointState { conn, id, vs, sk })
+    Ok(EndpointState {
+      conn,
+      id,
+      sk,
+      vs: Arc::new(RwLock::new(vs)),
+    })
   }
 
   pub fn get_identity(&self) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
@@ -156,6 +175,35 @@ impl EndpointState {
       self.id.to_bytes(),
       self.sk.get_public_key().unwrap().to_bytes(),
     ))
+  }
+
+  async fn update_view(&self) -> Result<(), EndpointError> {
+    loop {
+      let mut idx = {
+        if let Ok(vs_rd) = self.vs.read() {
+          vs_rd.get_view_ledger_height()
+        } else {
+          return Err(EndpointError::FailedToAcquireReadLock);
+        }
+      };
+
+      idx += 1;
+      let res = self.conn.read_view_by_index(idx).await;
+      if res.is_err() {
+        break;
+      }
+
+      let (block, receipt) = res.unwrap();
+      if let Ok(mut vs_wr) = self.vs.write() {
+        let res = vs_wr.apply_view_change(&block, &receipt);
+        if res.is_err() {
+          return Err(EndpointError::FailedToApplyViewChange);
+        }
+      } else {
+        return Err(EndpointError::FailedToAcquireWriteLock);
+      }
+    }
+    Ok(())
   }
 
   pub async fn new_counter(&self, handle: &[u8], tag: &[u8]) -> Result<Vec<u8>, EndpointError> {
@@ -169,9 +217,33 @@ impl EndpointState {
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_new_ledger(&self.vs, handle, tag, &receipt);
+    let res = {
+      if let Ok(vs_rd) = self.vs.read() {
+        verify_new_ledger(&vs_rd, handle, tag, &receipt)
+      } else {
+        return Err(EndpointError::FailedToAcquireReadLock);
+      }
+    };
     if res.is_err() {
-      return Err(EndpointError::FailedToVerifyNewCounter);
+      if res.unwrap_err() != VerificationError::ViewNotFound {
+        return Err(EndpointError::FailedToVerifyNewCounter);
+      } else {
+        let res = self.update_view().await;
+        if res.is_err() {
+          return Err(EndpointError::FailedToVerifyNewCounter);
+        }
+        let res = {
+          if let Ok(vs_rd) = self.vs.read() {
+            verify_new_ledger(&vs_rd, handle, tag, &receipt)
+          } else {
+            return Err(EndpointError::FailedToAcquireReadLock);
+          }
+        };
+        if res.is_err() {
+          eprintln!("failed to create a new counter {:?}", res);
+          return Err(EndpointError::FailedToVerifyNewCounter);
+        }
+      }
     }
 
     // sign a message that unequivocally identifies the counter and tag
@@ -216,9 +288,33 @@ impl EndpointState {
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_append(&self.vs, handle, tag, expected_height, &receipt);
+    let res = {
+      if let Ok(vs_rd) = self.vs.read() {
+        verify_append(&vs_rd, handle, tag, expected_height, &receipt)
+      } else {
+        return Err(EndpointError::FailedToAcquireReadLock);
+      }
+    };
     if res.is_err() {
-      return Err(EndpointError::FailedToVerifyIncrementedCounter);
+      if res.unwrap_err() != VerificationError::ViewNotFound {
+        return Err(EndpointError::FailedToVerifyIncrementedCounter);
+      } else {
+        let res = self.update_view().await;
+        if res.is_err() {
+          return Err(EndpointError::FailedToVerifyIncrementedCounter);
+        }
+        let res = {
+          if let Ok(vs_rd) = self.vs.read() {
+            verify_append(&vs_rd, handle, tag, expected_height, &receipt)
+          } else {
+            return Err(EndpointError::FailedToAcquireReadLock);
+          }
+        };
+        if res.is_err() {
+          eprintln!("failed to increment a counter {:?}", res);
+          return Err(EndpointError::FailedToVerifyIncrementedCounter);
+        }
+      }
     }
 
     // sign a message that unequivocally identifies the counter and tag
@@ -253,12 +349,39 @@ impl EndpointState {
     };
 
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
-    let res = verify_read_latest(&self.vs, handle, block.as_ref(), nonce, &receipt);
-    if res.is_err() {
-      return Err(EndpointError::FaieldToVerifyReadCounter);
-    }
-
-    let counter = res.unwrap();
+    let res = {
+      if let Ok(vs_rd) = self.vs.read() {
+        verify_read_latest(&vs_rd, handle, block.as_ref(), nonce, &receipt)
+      } else {
+        return Err(EndpointError::FailedToAcquireReadLock);
+      }
+    };
+    let counter = {
+      if res.is_err() {
+        if res.unwrap_err() != VerificationError::ViewNotFound {
+          return Err(EndpointError::FaieldToVerifyReadCounter);
+        } else {
+          let res = self.update_view().await;
+          if res.is_err() {
+            return Err(EndpointError::FaieldToVerifyReadCounter);
+          }
+          let res = {
+            if let Ok(vs_rd) = self.vs.read() {
+              verify_read_latest(&vs_rd, handle, block.as_ref(), nonce, &receipt)
+            } else {
+              return Err(EndpointError::FailedToAcquireReadLock);
+            }
+          };
+          if res.is_err() {
+            return Err(EndpointError::FaieldToVerifyReadCounter);
+          } else {
+            res.unwrap()
+          }
+        }
+      } else {
+        res.unwrap()
+      }
+    };
 
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
