@@ -10,3 +10,4 @@ authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <t-su
 mongodb = "2.1.0"
 clap = "2.34.0"
 tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
+serde = "1.0"
