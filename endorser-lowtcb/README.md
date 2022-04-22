@@ -2,17 +2,18 @@
 
 ## Prerequisites
 
-### SGX Driver
+### Add Intel package server to the apt server list
 
-1. Disable the inbox driver by adding `GRUB_CMDLINE_LINUX_DEFAULT="nosgx"` to `/etc/default/grub` (and run `update-grub`).
-2. Follow the instructions [here](https://github.com/0xabu/linux-sgx-driver) to build the SGX driver from Andrew Baumann.
-3. Load the driver by running `sudo insmod isgx.ko` and unload it by running `sudo rmmod isgx`.
-4. `/dev` may be mounted with noexec. To enable exec, run `sudo mount -o remount,exec /dev`.
-5. On Azure ACC VM running Ubuntu 20.04 LTS Gen2, run `sudo rmmod intel_sgx` to unload the existing driver.
+1. `curl -sSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | sudo apt-key add -`
+2. `sudo apt-add-repository "deb [arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu $(lsb_release -sc) main"`
 
-### NimbleLedger
+### Install packages
 
-Clone and build [NimbleLedger](https://github.com/MSRSSP/NimbleLedger).
+`sudo apt-get install build-essential cmake nasm libssl-dev lib-sgxdcap-ql lib-sgxdcap-ql-dev`
+
+### Clone the crypto submodule in the NimbleLedger folder
+
+`git submodule update --init --recursive`
 
 ## Build NimbleEndorser
 
@@ -20,8 +21,9 @@ Clone and build [NimbleLedger](https://github.com/MSRSSP/NimbleLedger).
 2. `cd build`
 3. `cmake ..`
 4. `make`
-5. `cd ../enclave`
-6. `make`
+5. If grpc build fails, do `cd build/_deps/grpc-build; make`
+6. `cd ../enclave`
+7. `make`
 
 ## Test NimbleEndorser
 
