@@ -172,6 +172,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help("The COSMOS URL"),
     )
     .arg(
+      Arg::with_name("storage_account")
+        .short("a")
+        .long("storage_account")
+        .takes_value(true)
+        .help("The storage account name"),
+    )
+    .arg(
+      Arg::with_name("storage_master_key")
+        .short("k")
+        .long("storage_master_key")
+        .takes_value(true)
+        .help("The storage master key"),
+    )
+    .arg(
       Arg::with_name("store")
         .short("s")
         .long("store")
@@ -219,6 +233,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   if let Some(x) = cli_matches.value_of("nimbledb") {
     ledger_store_args.insert(String::from("NIMBLE_DB"), x.to_string());
+  }
+  if let Some(x) = cli_matches.value_of("storage_account") {
+    ledger_store_args.insert(String::from("STORAGE_ACCOUNT"), x.to_string());
+  }
+  if let Some(x) = cli_matches.value_of("storage_master_key") {
+    ledger_store_args.insert(String::from("STORAGE_MASTER_KEY"), x.to_string());
   }
   let res = CoordinatorState::new(store, &ledger_store_args).await;
   assert!(res.is_ok());
