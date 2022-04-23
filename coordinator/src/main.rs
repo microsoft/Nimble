@@ -517,7 +517,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 6: change the view by adding a new endorser
-    let endorser_args2 = endorser_args.clone() + "-p 9091";
+    let endorser_args2 = endorser_args.clone() + " -p 9091";
     let mut endorser2 = BoxChild {
       child: Command::new(endorser_cmd.clone())
         .args(endorser_args2.split_whitespace())
@@ -642,7 +642,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 10: add the third endorser
-    let endorser_args3 = endorser_args.clone() + "-p 9092";
+    let endorser_args3 = endorser_args.clone() + " -p 9092";
     let mut endorser3 = BoxChild {
       child: Command::new(endorser_cmd.clone())
         .args(endorser_args3.split_whitespace())
