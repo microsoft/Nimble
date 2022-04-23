@@ -88,6 +88,7 @@ impl EndorserCall for EndorserServiceState {
       },
       Err(error) => match error {
         EndorserError::LedgerExists => Err(Status::already_exists("Invalid ledgher height")),
+        EndorserError::IsLocked => Err(Status::cancelled("Endorser is locked")),
         _ => Err(Status::aborted("Failed to append")),
       },
     }
@@ -135,6 +136,7 @@ impl EndorserCall for EndorserServiceState {
         EndorserError::InvalidLedgerName => Err(Status::not_found("Ledger handle not found")),
         EndorserError::LedgerHeightOverflow => Err(Status::out_of_range("Ledger height overflow")),
         EndorserError::InvalidTailHeight => Err(Status::already_exists("Invalid ledgher height")),
+        EndorserError::IsLocked => Err(Status::cancelled("Endorser is locked")),
         _ => Err(Status::aborted("Failed to append")),
       },
     }
