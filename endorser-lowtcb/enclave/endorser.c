@@ -1,26 +1,16 @@
 #include <stddef.h>
 #include <string.h>
 #include <immintrin.h>
-#include "Hacl_Hash.h"
-#include "Hacl_Streaming_SHA2.h"
-#include "Hacl_P256.h"
-#include "shared.h"
-#include "enclave.h"
-#include "sgx_report.h"
+#include "../crypto/Hacl_Hash.h"
+#include "../crypto/Hacl_Streaming_SHA2.h"
+#include "../crypto/Hacl_P256.h"
+#include "../include/shared.h"
+#include "../include/enclave.h"
+#include <sgx_report.h>
 
 static unsigned char private_key[PRIVATE_KEY_SIZE_IN_BYTES];
 static unsigned char public_key[PUBLIC_KEY_SIZE_IN_BYTES];
 static unsigned char public_key_uncompressed[64];
-
-typedef struct _meta_block {
-  union {
-    unsigned char view[HASH_VALUE_SIZE_IN_BYTES];
-    unsigned char state[HASH_VALUE_SIZE_IN_BYTES];
-  };
-  unsigned char prev[HASH_VALUE_SIZE_IN_BYTES];
-  unsigned char cur[HASH_VALUE_SIZE_IN_BYTES];
-  unsigned long long height;
-} meta_block_t;
 
 static chain_t chains[MAX_NUM_CHAINS];
 static unsigned long long num_chains = 0;
@@ -29,8 +19,8 @@ unsigned char endorser_stack[0x4000];
 unsigned long long old_rsp;
 
 static digest_t zero_digest;
+static metablock_t view_ledger_tail_metablock;
 static digest_t view_ledger_tail_hash;
-static unsigned long long view_ledger_height;
 
 typedef enum _state {
   endorser_none = 0,
@@ -45,16 +35,6 @@ bool equal_32(const void *__s1, const void *__s2)
   unsigned long long *s1 = (unsigned long long *)__s1;
   unsigned long long *s2 = (unsigned long long *)__s2;
   return s1[0] == s2[0] && s1[1] == s2[1] && s1[2] == s2[2] && s1[3] == s2[3];
-}
-
-bool equal_96(const void *__s1, const void *__s2)
-{
-  unsigned char *s1 = (unsigned char *)__s1;
-  unsigned char *s2 = (unsigned char *)__s2;
-
-  return equal_32((const void *)&s1[0], (const void *)&s2[0])
-    && equal_32((const void *)&s1[32], (const void *)&s2[32])
-    && equal_32((const void *)&s1[64], (const void *)&s2[64]);
 }
 
 int memcmp_32(const void *__s1, const void *__s2)
@@ -103,7 +83,7 @@ void* memset(void *__s1, int __val, size_t __n)
   return __s1;
 }
 
-void calc_digest(unsigned char *input, unsigned long size, unsigned char *digest) {
+void calc_digest(unsigned char *input, unsigned long size, digest_t *digest) {
   Hacl_Streaming_SHA2_state_sha2_256 st;
   unsigned char buf[64];
   unsigned int block_state[8];
@@ -114,7 +94,23 @@ void calc_digest(unsigned char *input, unsigned long size, unsigned char *digest
 
   Hacl_Hash_Core_SHA2_init_256(st.block_state);
   Hacl_Streaming_SHA2_update_256(&st, input, size);
-  Hacl_Streaming_SHA2_finish_256(&st, digest);
+  Hacl_Streaming_SHA2_finish_256(&st, (unsigned char *)digest);
+}
+
+void digest_with_digest(digest_t *digest0, digest_t *digest1) {
+  digest_t digests[2];
+
+  memcpy(&digests[0], digest0, sizeof(digest_t));
+  memcpy(&digests[1], digest1, sizeof(digest_t));
+  calc_digest((unsigned char *)&digests[0], sizeof(digest_t) * 2, digest1);
+}
+
+void digest_with_nonce(digest_t *digest, nonce_t* nonce) {
+  unsigned char buf[sizeof(digest_t) + sizeof(nonce_t)];
+
+  memcpy(&buf[0], digest, sizeof(digest_t));
+  memcpy(&buf[sizeof(digest_t)], nonce, sizeof(nonce_t));
+  calc_digest(buf, sizeof(digest_t) + sizeof(nonce_t), digest);
 }
 
 void sign_digest(unsigned char *signature, unsigned char *digest) {
@@ -167,7 +163,7 @@ endorser_status_code start_endorser(sgx_target_info_t *sgx_target_info, sgx_repo
   memset(last_chain->handle.v, -1, HASH_VALUE_SIZE_IN_BYTES);
 
   // get the SGX report
-  calc_digest(public_key, PUBLIC_KEY_SIZE_IN_BYTES, report_data);
+  calc_digest(public_key, PUBLIC_KEY_SIZE_IN_BYTES, (digest_t *)report_data);
   memcpy(&target_info, sgx_target_info, sizeof(sgx_target_info_t));
   sgx_ereport(&target_info, report_data, &report);
   memcpy(sgx_report, &report, sizeof(sgx_report_t));
@@ -177,12 +173,21 @@ endorser_status_code start_endorser(sgx_target_info_t *sgx_target_info, sgx_repo
   return OK;
 }
 
-bool check_chain(chain_t* chain) {
-  if (chain->pos == 0 || chain->pos > num_chains)
+bool check_chain(chain_t* outer_chain) {
+  chain_t *inner_chain;
+
+  if (outer_chain->pos == 0 || outer_chain->pos > num_chains)
     return false;
 
-  _Static_assert(sizeof(chain_t) == 96);  
-  return equal_96(&chains[chain->pos], chain);
+  inner_chain = &chains[outer_chain->pos];
+  _Static_assert(HASH_VALUE_SIZE_IN_BYTES == 32);
+  return equal_32(&inner_chain->handle, &outer_chain->handle)
+    && equal_32(&inner_chain->metablock.prev, &outer_chain->metablock.prev)
+    && equal_32(&inner_chain->metablock.block_hash, &outer_chain->metablock.block_hash)
+    && inner_chain->metablock.height == outer_chain->metablock.height
+    && inner_chain->prev == outer_chain->prev
+    && inner_chain->pos == outer_chain->pos
+    && inner_chain->next == outer_chain->next;
 }
 
 bool insert_chain(chain_t* chain) {
@@ -205,106 +210,100 @@ bool insert_chain(chain_t* chain) {
   return true;
 }
 
-endorser_status_code create_ledger(chain_t* chain, signature_t* signature) {
+void calc_receipt(handle_t * handle, metablock_t *metablock, digest_t *hash, digest_t *view, nonce_t* nonce, receipt_t* receipt) {
+  digest_t digest;
+
+  // hash the metadata block and construct the message
+  memcpy(&digest, hash, sizeof(digest_t));
+  if (nonce != NULL)
+    digest_with_nonce(&digest, nonce);
+  if (handle != NULL)
+    digest_with_digest((digest_t*)handle, &digest);
+  digest_with_digest(view, &digest);
+
+  // sign the message
+  sign_digest(receipt->sig.v, digest.v);
+
+  // construct the receipt
+  memcpy(receipt->view.v, view->v, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(&receipt->metablock, metablock, sizeof(metablock_t));
+  memcpy(receipt->id.v, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
+}
+
+endorser_status_code create_ledger(chain_t* outer_chain, append_ledger_data_t* ledger_data, receipt_t* receipt) {
   // create the genesis metadata block
-  meta_block_t m;
   chain_t local_chain;
-  int i;
+  chain_t *chain;
+  digest_t digest;
 
   if (endorser_state != endorser_initialized)
     return UNAVAILABLE;
 
-  memcpy(&local_chain, chain, sizeof(chain_t));
-  memcpy(m.view, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memset(&m.prev, 0, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(m.cur, local_chain.handle.v, HASH_VALUE_SIZE_IN_BYTES);
-  m.height = 0;
-
-  // hash the metadata block
-  calc_digest((unsigned char *)&m, sizeof(meta_block_t), local_chain.digest.v);
-
+  memcpy(&local_chain, outer_chain, sizeof(chain_t));
   // pos, prev, next should be set up by the caller
-  local_chain.height = 0;
   if (!insert_chain(&local_chain))
     return INVALID_ARGUMENT;
 
-  // Produce an EdDSA Signature from HACL*
-  sign_digest(signature->v, local_chain.digest.v);
-  memcpy(chain->digest.v, local_chain.digest.v, HASH_VALUE_SIZE_IN_BYTES);
-  chain->height = local_chain.height;
+  chain = &chains[local_chain.pos];
 
+  memset(chain->metablock.prev.v, 0, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(chain->metablock.block_hash.v, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  chain->metablock.height = 0;
+  calc_digest((unsigned char *)&chain->metablock, sizeof(metablock_t), &chain->hash);
+  memcpy(outer_chain, chain, sizeof(chain_t));
+
+  calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, NULL, receipt);
   return OK;
 }
 
-endorser_status_code read_ledger(chain_t* chain, nonce_t* nonce, signature_t* signature) {
+endorser_status_code read_ledger(chain_t* outer_chain, nonce_t* nonce, receipt_t *receipt) {
   chain_t local_chain;
-  unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
-  unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
+  chain_t *chain;
 
   if (endorser_state != endorser_initialized)
     return UNAVAILABLE;
 
-  memcpy(&local_chain, chain, sizeof(chain_t));
+  memcpy(&local_chain, outer_chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
     return INVALID_ARGUMENT;
 
-  // combine the running hash and the nonce value
-  memcpy(tail_with_nonce, local_chain.digest.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(&tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES], nonce->v, NONCE_SIZE_IN_BYTES);
+  chain = &chains[local_chain.pos];
 
-  // compute a hash = Hash(hash, input), overwriting the running hash
-  calc_digest(tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, h_nonced_tail);
-
-  // produce an ECDSA signature
-  sign_digest(signature->v, h_nonced_tail);
-
+  calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, nonce, receipt);
   return OK;
 }
   
-endorser_status_code append_ledger(chain_t* chain, append_ledger_data_t* ledger_data, signature_t* signature) {
+endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* ledger_data, receipt_t *receipt) {
   chain_t local_chain;
-  meta_block_t m;
-  digest_t new_tail_hash;
+  chain_t *chain;
+  digest_t digest;
 
   if (endorser_state != endorser_initialized)
     return UNAVAILABLE;
 
-  memcpy(&local_chain, chain, sizeof(chain_t));
+  memcpy(&local_chain, outer_chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
     return INVALID_ARGUMENT;
 
+  chain = &chains[local_chain.pos];
+
   // check for integer overflow of height
-  if (local_chain.height == ULLONG_MAX)
+  if (chain->metablock.height == ULLONG_MAX)
     return OUT_OF_RANGE;
 
-  if (ledger_data->cond_updated_tail_height <= local_chain.height)
+  if (ledger_data->expected_height <= chain->metablock.height)
     return ALREADY_EXISTS;
 
-  if (ledger_data->cond_updated_tail_height > local_chain.height + 1)
+  if (ledger_data->expected_height > chain->metablock.height + 1)
     return FAILED_PRECONDITION;
 
-  // create the metadata block
-  memcpy(m.view, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(m.prev, local_chain.digest.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(m.cur, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  local_chain.height += 1;
-  m.height = local_chain.height;
+  memcpy(chain->metablock.prev.v, chain->hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(chain->metablock.block_hash.v, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  chain->metablock.height += 1;
+  calc_digest((unsigned char *)&chain->metablock, sizeof(metablock_t), &chain->hash);
+  memcpy(outer_chain, chain, sizeof(chain_t));
 
-  // hash the metadata block
-  calc_digest((unsigned char *)&m, sizeof(meta_block_t), new_tail_hash.v);
-
-  if (!equal_32(new_tail_hash.v, ledger_data->cond_updated_tail_hash.v))
-    return INVALID_ARGUMENT;
-
-  // Sign the contents
-  sign_digest(signature->v, new_tail_hash.v);
-
-  // store updated hash 
-  chain->height = local_chain.height;
-  memcpy(chain->digest.v, new_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(chains[chain->pos].digest.v, new_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  chains[chain->pos].height = chain->height;
-
+  calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, NULL, receipt);
   return OK;
 }
 
@@ -326,27 +325,7 @@ bool check_pointer(void *ptr, uint64_t size) {
   return false;
 }
 
-endorser_status_code read_view_ledger(nonce_t *nonce, signature_t *signature) {
-  unsigned char tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES];
-  unsigned char h_nonced_tail[HASH_VALUE_SIZE_IN_BYTES];
-
-  if (endorser_state != endorser_initialized)
-    return UNAVAILABLE;
-
-  // combine the running hash and the nonce value
-  memcpy(tail_with_nonce, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(&tail_with_nonce[HASH_VALUE_SIZE_IN_BYTES], nonce->v, NONCE_SIZE_IN_BYTES);
-
-  // compute a hash = Hash(hash, input), overwriting the running hash
-  calc_digest(tail_with_nonce, HASH_VALUE_SIZE_IN_BYTES + NONCE_SIZE_IN_BYTES, h_nonced_tail);
-
-  // produce an ECDSA signature
-  sign_digest(signature->v, h_nonced_tail);
-
-  return OK;
-}
-
-void hash_state(unsigned char *state_hash) {
+void hash_state(digest_t *state_hash) {
   Hacl_Streaming_SHA2_state_sha2_256 st;
   unsigned char buf[64];
   unsigned int block_state[8];
@@ -367,47 +346,45 @@ void hash_state(unsigned char *state_hash) {
   chain = &chains[0];
   for (i = 0; i < num_chains; i++) {
     chain = &chains[chain->next];
-    Hacl_Streaming_SHA2_update_256(&st, (unsigned char *)chain, offsetof(chain_t, pos));
+    Hacl_Streaming_SHA2_update_256(&st, chain->handle.v, sizeof(handle_t));
+    Hacl_Streaming_SHA2_update_256(&st, chain->hash.v, sizeof(digest_t));
+    Hacl_Streaming_SHA2_update_256(&st, (unsigned char*)&chain->metablock.height, sizeof(uint64_t));
   }
 
-  Hacl_Streaming_SHA2_finish_256(&st, state_hash);
+  Hacl_Streaming_SHA2_finish_256(&st, (unsigned char *)state_hash);
 
   return;
 }
 
-endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, signature_t *signature) {
-  meta_block_t m;
-  digest_t new_tail_hash;
+endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, receipt_t *receipt) {
+  digest_t state;
 
   if (endorser_state != endorser_initialized)
     return UNAVAILABLE;
 
-  hash_state(m.state);
+  hash_state(&state);
 
   // check for integer overflow of height
-  if (view_ledger_height == (unsigned long long)-1)
+  if (view_ledger_tail_metablock.height == ULLONG_MAX)
     return OUT_OF_RANGE;
 
-  memcpy(m.prev, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(m.cur, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  m.height = view_ledger_height + 1;
+  if (ledger_data->expected_height <= view_ledger_tail_metablock.height)
+    return ALREADY_EXISTS;
 
-  // compute a hash = Hash(hash, input), overwriting the running hash
-  calc_digest((unsigned char *)&m, sizeof(meta_block_t), new_tail_hash.v);
+  if (ledger_data->expected_height > view_ledger_tail_metablock.height + 1)
+    return FAILED_PRECONDITION;
 
-  if (!equal_32(new_tail_hash.v, ledger_data->cond_updated_tail_hash.v))
-    return INVALID_ARGUMENT;
+  // update the view ledger tail metablock
+  memcpy(view_ledger_tail_metablock.prev.v, view_ledger_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(view_ledger_tail_metablock.block_hash.v, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  view_ledger_tail_metablock.height += 1;
+  calc_digest((unsigned char *)&view_ledger_tail_metablock, sizeof(metablock_t), &view_ledger_tail_hash);
 
-  view_ledger_height = view_ledger_height + 1;
-  memcpy(view_ledger_tail_hash.v, new_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-
-  // produce an ECDSA signature
-  sign_digest(signature->v, view_ledger_tail_hash.v);
-
+  calc_receipt(NULL, &view_ledger_tail_metablock, &view_ledger_tail_hash, &state, NULL, receipt);
   return OK;
 }
 
-endorser_status_code init_endorser(init_endorser_data_t *data, signature_t *signature) {
+endorser_status_code init_endorser(init_endorser_data_t *data, receipt_t *receipt) {
   unsigned long long i;
   chain_t *chain;
   append_ledger_data_t ledger_data;
@@ -415,14 +392,14 @@ endorser_status_code init_endorser(init_endorser_data_t *data, signature_t *sign
   if (endorser_state != endorser_started)
     return UNAVAILABLE;
 
-  memcpy(view_ledger_tail_hash.v, data->view_tail.v, HASH_VALUE_SIZE_IN_BYTES);
-  view_ledger_height = data->view_height;
-
   if (!check_pointer(data->chains, sizeof(chain_t) * MAX_NUM_CHAINS))
     return INVALID_ARGUMENT;
 
   if (data->num_chains > MAX_NUM_CHAINS - 2)
     return INVALID_ARGUMENT;
+
+  memcpy(&view_ledger_tail_metablock, &data->view_tail_metablock, sizeof(metablock_t));
+  calc_digest((unsigned char *)&view_ledger_tail_metablock, sizeof(metablock_t), &view_ledger_tail_hash);
 
   memcpy(chains, data->chains, sizeof(chain_t) * (data->num_chains + 1));
   memcpy(&chains[MAX_NUM_CHAINS-1], &data->chains[MAX_NUM_CHAINS-1], sizeof(chain_t));
@@ -436,14 +413,21 @@ endorser_status_code init_endorser(init_endorser_data_t *data, signature_t *sign
           memcmp_32(chains[chain->prev].handle.v, chain->handle.v) >= 0 ||
           memcmp_32(chain->handle.v, chains[chain->next].handle.v) >= 0)
           return INVALID_ARGUMENT;
+      calc_digest((unsigned char *)&chain->metablock, sizeof(metablock_t), &chain->hash);
+      memcpy(&data->chains[i+1].hash, &chain->hash, sizeof(digest_t));
   }
   num_chains = data->num_chains;
 
   endorser_state = endorser_initialized;
 
-  memcpy(ledger_data.block_hash.v, data->view_block.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(ledger_data.cond_updated_tail_hash.v, data->cond_updated_tail_hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  return append_view_ledger(&ledger_data, signature);
+  memcpy(ledger_data.block_hash.v, data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  ledger_data.expected_height = data->expected_height;
+  return append_view_ledger(&ledger_data, receipt);
+}
+
+endorser_status_code read_view_tail(metablock_t *metablock) {
+  memcpy(metablock, &view_ledger_tail_metablock, sizeof(metablock_t));
+  return OK;
 }
 
 endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1, void *param2, void *param3) {
@@ -459,28 +443,28 @@ endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1,
       ret = get_pubkey((endorser_id_t *)param1);
     break;
   case init_endorser_call:
-    if (check_pointer(param1, sizeof(init_endorser_data_t)) && check_pointer(param2, sizeof(signature_t)))
-      ret = init_endorser((init_endorser_data_t *)param1, (signature_t *)param2);
+    if (check_pointer(param1, sizeof(init_endorser_data_t)) && check_pointer(param2, sizeof(receipt_t)))
+      ret = init_endorser((init_endorser_data_t *)param1, (receipt_t *)param2);
     break;
   case create_ledger_call:
-    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(signature_t)))
-      ret = create_ledger((chain_t *)param1, (signature_t *)param2);
+    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(append_ledger_data_t)) && check_pointer(param3, sizeof(receipt_t)))
+      ret = create_ledger((chain_t *)param1, (append_ledger_data_t *)param2, (receipt_t *)param3);
     break;
   case read_ledger_call:
-    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(nonce_t)) && check_pointer(param3, sizeof(signature_t)))
-      ret = read_ledger((chain_t *)param1, (nonce_t *)param2, (signature_t *)param3);
+    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(nonce_t)) && check_pointer(param3, sizeof(receipt_t)))
+      ret = read_ledger((chain_t *)param1, (nonce_t *)param2, (receipt_t *)param3);
     break;
   case append_ledger_call:
-    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(append_ledger_data_t)) && check_pointer(param3, sizeof(signature_t)))
-      ret = append_ledger((chain_t *)param1, (append_ledger_data_t *)param2, (signature_t *)param3);
-    break;
-  case read_view_ledger_call:
-    if (check_pointer(param1, sizeof(nonce_t)) && check_pointer(param2, sizeof(signature_t)))
-      ret = read_view_ledger((nonce_t *)param1, (signature_t *)param2);
+    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(append_ledger_data_t)) && check_pointer(param3, sizeof(receipt_t)))
+      ret = append_ledger((chain_t *)param1, (append_ledger_data_t *)param2, (receipt_t *)param3);
     break;
   case append_view_ledger_call:
-    if (check_pointer(param1, sizeof(append_ledger_data_t)) && check_pointer(param2, sizeof(signature_t)))
-      ret = append_view_ledger((append_ledger_data_t *)param1, (signature_t *)param2);
+    if (check_pointer(param1, sizeof(append_ledger_data_t)) && check_pointer(param2, sizeof(receipt_t)))
+      ret = append_view_ledger((append_ledger_data_t *)param1, (receipt_t *)param2);
+    break;
+  case read_view_tail_call:
+    if (check_pointer(param1, sizeof(metablock_t)))
+      ret = read_view_tail((metablock_t *)param1);
     break;
   default:
     break;

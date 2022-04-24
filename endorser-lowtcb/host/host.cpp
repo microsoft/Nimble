@@ -3,7 +3,7 @@
 #include <mutex>
 
 #include <string.h>
-#include "shared.h"
+#include "../include/shared.h"
 
 #include <grpcpp/grpcpp.h>
 #include "endorser.pb.h"
@@ -28,18 +28,22 @@ using endorser_proto::ReadLatestReq;
 using endorser_proto::ReadLatestResp;
 using endorser_proto::AppendReq;
 using endorser_proto::AppendResp;
-using endorser_proto::ReadLatestViewLedgerReq;
-using endorser_proto::ReadLatestViewLedgerResp;
 using endorser_proto::AppendViewLedgerReq;
 using endorser_proto::AppendViewLedgerResp;
 using endorser_proto::InitializeStateReq;
 using endorser_proto::InitializeStateResp;
 using endorser_proto::LedgerTailMapEntry;
+using endorser_proto::ReadLatestStateReq;
+using endorser_proto::ReadLatestStateResp;
+using endorser_proto::UnlockReq;
+using endorser_proto::UnlockResp;
 
 static map<handle_t, chain_t *> hash_chain_map;
 static chain_t chains[MAX_NUM_CHAINS];
 
 static mutex endorser_call_mutex;
+
+static bool endorser_locked = false;
 
 void print_hex(unsigned char* d, unsigned int len) {
   printf("0x");
@@ -50,7 +54,7 @@ void print_hex(unsigned char* d, unsigned int len) {
   cout << endl;
 }
 
-bool init_chain(handle_t *handle, const char *digest, unsigned long long height, chain_t *chain) {
+bool init_chain(handle_t *handle, metablock_t *metablock, chain_t *chain) {
     auto it = hash_chain_map.lower_bound(*handle);
 
     // handle exists
@@ -58,11 +62,10 @@ bool init_chain(handle_t *handle, const char *digest, unsigned long long height,
         return false;
 
     memcpy(chain->handle.v, handle->v, HASH_VALUE_SIZE_IN_BYTES);
-    if (digest)
-        memcpy(chain->digest.v, digest, HASH_VALUE_SIZE_IN_BYTES);
+    if (metablock)
+        memcpy(&chain->metablock, metablock, sizeof(metablock_t));
     else
-        memset(chain->digest.v, 0, HASH_VALUE_SIZE_IN_BYTES);
-    chain->height = height;
+        memset(&chain->metablock, 0, sizeof(metablock_t));
     chain->pos = hash_chain_map.size() - 1;
     chain->prev = it->second->prev;
     chain->next = it->second->pos;
@@ -102,9 +105,10 @@ static StatusCode call_endorser(
     endorser_call_t endorser_call,
     endorser_id_t *endorser_id,
     handle_t *handle,
-    signature_t *signature,
+    receipt_t *receipt,
     nonce_t *nonce,
-    append_ledger_data_t *ledger_data
+    append_ledger_data_t *ledger_data,
+    bool ignore_lock
 ) {
     chain_t chain;
     StatusCode status;
@@ -118,8 +122,10 @@ static StatusCode call_endorser(
         status = enclu_call(get_pubkey_call, endorser_id, NULL, NULL);
         break;
     case create_ledger_call:
-        if (init_chain(handle, NULL, 0, &chain)) {
-            status = enclu_call(create_ledger_call, &chain, signature, NULL);
+        if (endorser_locked && !ignore_lock) {
+            status = StatusCode::CANCELLED;
+        } else if (init_chain(handle, NULL, &chain)) {
+            status = enclu_call(create_ledger_call, &chain, ledger_data, receipt);
             if (status == StatusCode::OK)
                 insert_chain(&chain);
         } else {
@@ -128,7 +134,7 @@ static StatusCode call_endorser(
         break;
     case read_ledger_call:
         if (find_chain(handle, &chain)) {
-            status = enclu_call(read_ledger_call, &chain, nonce, signature);
+            status = enclu_call(read_ledger_call, &chain, nonce, receipt);
             if (status == StatusCode::OK)
                 update_chain(&chain);
         } else {
@@ -136,19 +142,18 @@ static StatusCode call_endorser(
         }
         break;
     case append_ledger_call:
-        if (find_chain(handle, &chain)) {
-            status = enclu_call(append_ledger_call, &chain, ledger_data, signature);
+        if (endorser_locked && !ignore_lock) {
+            status = StatusCode::CANCELLED;
+        } else if (find_chain(handle, &chain)) {
+            status = enclu_call(append_ledger_call, &chain, ledger_data, receipt);
             if (status == StatusCode::OK)
                 update_chain(&chain);
         } else {
             status = StatusCode::NOT_FOUND;
         }
         break;
-    case read_view_ledger_call:
-        status = enclu_call(read_view_ledger_call, nonce, signature, NULL);
-        break;
     case append_view_ledger_call:
-        status = enclu_call(append_view_ledger_call, ledger_data, signature, NULL);
+        status = enclu_call(append_view_ledger_call, ledger_data, receipt, NULL);
         break;
     default:
         status = StatusCode::INVALID_ARGUMENT;
@@ -197,19 +202,17 @@ int start_endorser() {
 }
 
 StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail_map,
-                  const char *view_block,
-                  const char *view_tail,
-                  unsigned long long view_height,
-                  const char *cond_updated_tail_hash,
-                  signature_t *signature) {
+                  const char *view_tail_metablock,
+                  const char *block_hash,
+                  unsigned long long expected_height,
+                  receipt_t *receipt) {
     static bool initialized = false;
     StatusCode status;
     init_endorser_data_t init_endorser_data;
 
-    memcpy(init_endorser_data.view_block.v, view_block, HASH_VALUE_SIZE_IN_BYTES);
-    memcpy(init_endorser_data.cond_updated_tail_hash.v, cond_updated_tail_hash, HASH_VALUE_SIZE_IN_BYTES);
-    memcpy(init_endorser_data.view_tail.v, view_tail, HASH_VALUE_SIZE_IN_BYTES);
-    init_endorser_data.view_height = view_height;
+    memcpy((char *)&init_endorser_data.view_tail_metablock, view_tail_metablock, sizeof(metablock_t));
+    memcpy(init_endorser_data.block_hash.v, block_hash, HASH_VALUE_SIZE_IN_BYTES);
+    init_endorser_data.expected_height = expected_height;
 
     endorser_call_mutex.lock();
 
@@ -221,8 +224,9 @@ StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail
 
     for (auto it = ledger_tail_map.begin(); it != ledger_tail_map.end(); it++) {
         chain_t chain;
+        metablock_t *metablock = (metablock_t *)it->metablock().c_str();
 
-        if (!init_chain((handle_t *)it->handle().c_str(), it->tail().c_str(), it->height(), &chain)) {
+        if (!init_chain((handle_t *)it->handle().c_str(), metablock, &chain)) {
             status = StatusCode::ALREADY_EXISTS;
             goto exit;
         }
@@ -232,11 +236,15 @@ StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail
 
     init_endorser_data.chains = &chains[0];
     init_endorser_data.num_chains = hash_chain_map.size() - 2;
-    status = enclu_call(init_endorser_call, &init_endorser_data, signature, NULL);
+    status = enclu_call(init_endorser_call, &init_endorser_data, receipt, NULL);
 
 exit:
     endorser_call_mutex.unlock();
     return status;
+}
+
+StatusCode read_endorser(bool to_lock) {
+    return StatusCode::OK;
 }
 
 class EndorserCallServiceImpl final: public EndorserCall::Service {
@@ -248,7 +256,8 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           NULL,
                                           NULL,
                                           NULL,
-                                          NULL);
+                                          NULL,
+                                          true);
         if (status != StatusCode::OK)
             return Status(status, "failed to get the endorser identity");
 
@@ -258,24 +267,35 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
     Status NewLedger(ServerContext *context, const NewLedgerReq* request, NewLedgerResp* reply) override {
         string h = request->handle();
+        string b_h = request->block_hash();
+        bool ignore_lock = request->ignore_lock();
+
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
         }
+        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
+        }
 
         handle_t handle;
+        append_ledger_data_t ledger_data;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        ledger_data.expected_height = 0;
+        ledger_data.ignore_lock = ignore_lock;
 
-        signature_t signature;
+        receipt_t receipt;
         StatusCode status = call_endorser(create_ledger_call,
                                           NULL,
                                           &handle,
-                                          &signature,
+                                          &receipt,
                                           NULL,
-                                          NULL);
+                                          &ledger_data,
+                                          ignore_lock);
         if (status != StatusCode::OK)
             return Status(status, "failed to create a ledger");
 
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;
     }
 
@@ -296,28 +316,32 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
 
         // Response data
-        signature_t signature;
+        receipt_t receipt;
         StatusCode status = call_endorser(read_ledger_call,
                                           NULL,
                                           &handle,
-                                          &signature,
+                                          &receipt,
                                           &nonce,
-                                          NULL);
+                                          NULL,
+                                          true);
         if (status != StatusCode::OK)
             return Status(status, "failed to read a ledger");
 
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;
     }
 
     Status Append(ServerContext *context, const AppendReq* request, AppendResp* reply) override {
         string h = request->handle();
         string b_h = request->block_hash();
-        string cond_h = request->cond_updated_tail_hash();
-        uint64_t cond_height = request->cond_updated_tail_height();
+        uint64_t expected_height = request->expected_height();
+        bool ignore_lock = request->ignore_lock();
 
-        if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES || cond_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
-            return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
+        if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
+        }
+        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
         }
 
         // Request data
@@ -325,90 +349,100 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         append_ledger_data_t ledger_data;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        memcpy(ledger_data.cond_updated_tail_hash.v, cond_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        ledger_data.cond_updated_tail_height = cond_height;
+        ledger_data.expected_height = expected_height;
+        ledger_data.ignore_lock = ignore_lock;
 
         // Response data
-        signature_t signature;
+        receipt_t receipt;
         StatusCode status = call_endorser(append_ledger_call,
                                           NULL,
                                           &handle,
-                                          &signature,
+                                          &receipt,
                                           NULL,
-                                          &ledger_data);
+                                          &ledger_data,
+                                          ignore_lock);
         if (status != StatusCode::OK)
             return Status(status, "failed to append to a ledger");
 
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
-        return Status::OK;
-    }
-
-    Status ReadLatestViewLedger(ServerContext *context, const ReadLatestViewLedgerReq* request, ReadLatestViewLedgerResp* reply) override {
-        string n = request->nonce();
-
-        if (n.size() != NONCE_SIZE_IN_BYTES) {
-            return Status(StatusCode::INVALID_ARGUMENT, "ReadLatestViewLedger: nonce size is invalid");
-        }
-
-        // Request data
-        nonce_t nonce;
-        memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
-
-        // Response data
-        signature_t signature;
-        StatusCode status = call_endorser(read_view_ledger_call,
-                                          NULL,
-                                          NULL,
-                                          &signature,
-                                          &nonce,
-                                          NULL);
-        if (status != StatusCode::OK)
-            return Status(status, "failed to read the view ledger");
-
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;
     }
 
     Status AppendViewLedger(ServerContext *context, const AppendViewLedgerReq* request, AppendViewLedgerResp* reply) override {
         string b_h = request->block_hash();
-        string cond_h = request->cond_updated_tail_hash();
+        uint64_t expected_height = request->expected_height();
 
-        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES || cond_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
-            return Status(StatusCode::INVALID_ARGUMENT, "InitViewLedger input size is invalid");
+        if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
         }
 
         // Request data
         append_ledger_data_t ledger_data;
         memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        memcpy(ledger_data.cond_updated_tail_hash.v, cond_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        ledger_data.expected_height = expected_height;
+        ledger_data.ignore_lock = true;
 
         // Response data
-        signature_t signature;
+        receipt_t receipt;
         StatusCode status = call_endorser(append_view_ledger_call,
                                           NULL,
                                           NULL,
-                                          &signature,
+                                          &receipt,
                                           NULL,
-                                          &ledger_data);
+                                          &ledger_data,
+                                          true);
         if (status != StatusCode::OK)
             return Status(status, "failed to append the view ledger");
 
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;
     }
 
     Status InitializeState(ServerContext *context, const InitializeStateReq *request, InitializeStateResp* reply) override {
-        signature_t signature;
+        receipt_t receipt;
         StatusCode status = init_endorser(request->ledger_tail_map(),
+                                          request->view_tail_metablock().c_str(),
                                           request->block_hash().c_str(),
-                                          request->view_ledger_tail().c_str(),
-                                          request->view_ledger_height(),
-                                          request->cond_updated_tail_hash().c_str(),
-                                          &signature);
+                                          request->expected_height(),
+                                          &receipt);
         if (status != StatusCode::OK)
             return Status(status, "failed to initialize the endorser state");
 
-        reply->set_signature(reinterpret_cast<const char*>(signature.v), SIGNATURE_SIZE_IN_BYTES);
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
+        return Status::OK;
+    }
+
+    Status ReadLatestState(ServerContext *context, const ReadLatestStateReq *request, ReadLatestStateResp *reply) override {
+        bool to_lock = request->to_lock();
+        metablock_t metablock;
+
+        endorser_call_mutex.lock();
+
+        if (to_lock)
+            endorser_locked = true;
+
+        StatusCode status = enclu_call(read_view_tail_call, &metablock, NULL, NULL);
+        if (status != StatusCode::OK) {
+            endorser_call_mutex.unlock();
+            return Status(status, "failed to read view tail metablock");
+        }
+        reply->set_view_tail_metablock(reinterpret_cast<const char*>(&metablock), sizeof(metablock_t));
+
+        for (unsigned long long pos = chains[0].next; pos != MAX_NUM_CHAINS-1; pos = chains[pos].next) {
+            chain_t *chain = &chains[pos];
+            auto entry = reply->add_ledger_tail_map();
+            entry->set_handle(reinterpret_cast<const char*>(chain->handle.v), HASH_VALUE_SIZE_IN_BYTES);
+            entry->set_metablock(reinterpret_cast<const char*>(&chain->metablock), sizeof(metablock_t));
+        }
+    
+        endorser_call_mutex.unlock();
+        return Status::OK;
+    }
+
+    Status Unlock(ServerContext *context, const UnlockReq *request, UnlockResp *reply) {
+        endorser_call_mutex.lock();
+        endorser_locked = false;
+        endorser_call_mutex.unlock();
         return Status::OK;
     }
 };
@@ -417,7 +451,7 @@ int launch_endorser(const char *endorser_elf_fname, const char *private_key_file
 
 int main(int argc, const char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "%s <endorser-elf> <private-key> [<port-number>]\n", argv[0]);
+        fprintf(stderr, "%s <endorser-elf> <private-key> [-p <port-number>]\n", argv[0]);
         return -1;
     }
 
@@ -448,7 +482,12 @@ int main(int argc, const char *argv[]) {
     {
         std::string server_address("0.0.0.0:");
         if (argc >= 4) {
-            server_address.append(argv[3]);
+            if (strcmp(argv[3], "-p") == 0 && argc >= 5) {
+                server_address.append(argv[4]);
+            } else {
+                fprintf(stderr, "%s <endorser-elf> <private-key> [-p <port-number>]\n", argv[0]);
+                return -1;
+            }
         } else {
             server_address.append("9090");
         }
