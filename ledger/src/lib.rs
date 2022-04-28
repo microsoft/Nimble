@@ -250,6 +250,8 @@ impl Receipt {
     {
       self.id_sigs.extend(receipt.get_id_sigs().clone());
     } else {
+      eprintln!("receipt1: {:?}", self);
+      eprintln!("receipt2: {:?}", receipt);
       return Err(VerificationError::InvalidReceipt);
     }
     Ok(())
