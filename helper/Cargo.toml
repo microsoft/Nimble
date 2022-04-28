@@ -11,3 +11,11 @@ mongodb = "2.1.0"
 clap = "2.34.0"
 tokio = { version = "1.14.0", features = ["macros", "rt-multi-thread"] }
 serde = "1.0"
+azure_core = { version = "0.2", git= "https://github.com/azure/azure-sdk-for-rust/", default-features=false }
+azure_data_tables = { version = "0.1.0", git = "https://github.com/azure/azure-sdk-for-rust" }
+azure_storage_blobs = { version = "0.1.0", git = "https://github.com/azure/azure-sdk-for-rust" }
+azure_storage = { version = "0.1", git = "https://github.com/azure/azure-sdk-for-rust", default-features=false, features=["account"] }
+bytes = "1.1"
+md5 = "0.7.0"
+http = "0.2.6"
+bincode = "1.3.3"
