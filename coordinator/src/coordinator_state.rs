@@ -252,8 +252,10 @@ impl CoordinatorState {
         continue;
       }
       if let Ok(mut conn_map_wr) = self.conn_map.write() {
-        pks.push(pk.clone());
-        conn_map_wr.insert(pk, (client, endorser));
+        conn_map_wr.entry(pk.clone()).or_insert_with(|| {
+          pks.push(pk);
+          (client, endorser)
+        });
       } else {
         eprintln!("Failed to acquire the write lock");
       }
@@ -796,6 +798,20 @@ impl CoordinatorState {
 
   pub async fn add_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     let existing_endorsers = self.get_endorser_pks();
+
+    // Connect to new endorsers
+    let res = self.connect_endorsers(hostnames).await;
+    if res.is_err() {
+      eprintln!("Failed to connect to endorsers {:?}", res);
+      return Err(CoordinatorError::FailedToConnectToEndorser);
+    }
+    let new_endorsers = res.unwrap();
+
+    if new_endorsers.is_empty() {
+      eprintln!("no new endorsers added!");
+      return Err(CoordinatorError::NoNewEndorsers);
+    }
+
     let ledger_view = {
       if existing_endorsers.is_empty() {
         LedgerView {
@@ -823,14 +839,6 @@ impl CoordinatorState {
         res.unwrap()
       }
     };
-
-    // Connect to endorsers
-    let res = self.connect_endorsers(hostnames).await;
-    if res.is_err() {
-      eprintln!("Failed to connect to endorsers {:?}", res);
-      return Err(CoordinatorError::FailedToConnectToEndorser);
-    }
-    let new_endorsers = res.unwrap();
 
     let endorser_pk_hostnames = self.get_endorser_hostnames();
     // Package the list of endorsers into a genesis block of the view ledger

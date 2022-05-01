@@ -1,7 +1,7 @@
 mod coordinator_state;
 mod errors;
 
-use crate::coordinator_state::CoordinatorState;
+use crate::{coordinator_state::CoordinatorState, errors::CoordinatorError};
 use ledger::CustomSerde;
 use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
@@ -246,7 +246,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   if !endorser_hostnames.is_empty() {
     let res = coordinator.add_endorsers(&endorser_hostnames).await;
-    assert!(res.is_ok());
+    assert!(
+      res.is_ok()
+        || (res.unwrap_err() == CoordinatorError::NoNewEndorsers
+          && !coordinator.get_endorser_pks().is_empty())
+    );
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 

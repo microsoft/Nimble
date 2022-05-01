@@ -48,4 +48,6 @@ pub enum CoordinatorError {
   FailedToSerde,
   /// returned if the provided nonce is invalid
   InvalidNonce,
+  /// returned if no new endorsers added
+  NoNewEndorsers,
 }
