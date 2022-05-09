@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use ledger::{Block, Handle, NimbleDigest, Receipt};
 
 pub mod azure_pageblob;
+pub mod azure_table;
 mod errors;
 pub mod in_memory;
 pub mod mongodb_cosmos;
@@ -46,7 +47,7 @@ pub trait LedgerStore {
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError>;
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError>;
   async fn read_ledger_by_index(
     &self,
     handle: &Handle,
@@ -58,7 +59,7 @@ pub trait LedgerStore {
     expected_height: Option<usize>,
   ) -> Result<usize, LedgerStoreError>;
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
-  async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError>;
+  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError>;
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError>; // only used for testing
@@ -67,8 +68,8 @@ pub trait LedgerStore {
 #[cfg(test)]
 mod tests {
   use crate::{
-    azure_pageblob::PageBlobLedgerStore, in_memory::InMemoryLedgerStore,
-    mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+    azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore,
+    in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
   };
   use ledger::{Block, CustomSerde, NimbleHashTrait};
   use std::collections::HashMap;
@@ -90,8 +91,8 @@ mod tests {
     let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
-    let current_data = res.unwrap();
-    assert_eq!(current_data.block.to_bytes(), initial_value);
+    let (current_block, _height) = res.unwrap();
+    assert_eq!(current_block.to_bytes(), initial_value);
 
     let new_value_appended: Vec<u8> = vec![
       2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
@@ -106,8 +107,8 @@ mod tests {
     let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
-    let current_tail = res.unwrap();
-    assert_eq!(current_tail.block.to_bytes(), new_value_appended);
+    let (current_block, _height) = res.unwrap();
+    assert_eq!(current_block.to_bytes(), new_value_appended);
 
     let res = state.read_ledger_by_index(&handle, 0).await;
     assert!(res.is_ok());
@@ -148,8 +149,14 @@ mod tests {
   pub async fn check_azure_pageblob_store() {
     if std::env::var_os("STORAGE_ACCOUNT").is_none()
       || std::env::var_os("STORAGE_MASTER_KEY").is_none()
+      || std::env::var_os("LEDGER_STORE").is_none()
     {
       // The right env variables are not available so let's skip tests
+      return;
+    }
+
+    if std::env::var_os("LEDGER_STORE").unwrap() != "pageblob" {
+      // The right env variable is not set so let's skip tests
       return;
     }
 
@@ -171,6 +178,42 @@ mod tests {
     );
 
     let state = PageBlobLedgerStore::new(&args).await.unwrap();
+    check_store_creation_and_operations(&state).await;
+  }
+
+  #[tokio::test]
+  pub async fn check_azure_table_store() {
+    if std::env::var_os("STORAGE_ACCOUNT").is_none()
+      || std::env::var_os("STORAGE_MASTER_KEY").is_none()
+      || std::env::var_os("LEDGER_STORE").is_none()
+    {
+      // The right env variables are not available so let's skip tests
+      return;
+    }
+
+    if std::env::var_os("LEDGER_STORE").unwrap() != "table" {
+      // The right env variable is not set so let's skip tests
+      return;
+    }
+
+    let mut args = HashMap::<String, String>::new();
+    args.insert(
+      String::from("STORAGE_ACCOUNT"),
+      std::env::var_os("STORAGE_ACCOUNT")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
+
+    args.insert(
+      String::from("STORAGE_MASTER_KEY"),
+      std::env::var_os("STORAGE_MASTER_KEY")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
+
+    let state = TableLedgerStore::new(&args).await.unwrap();
     check_store_creation_and_operations(&state).await;
   }
 }

@@ -10,8 +10,8 @@ use std::{
   sync::{Arc, RwLock},
 };
 use store::{
-  azure_pageblob::PageBlobLedgerStore, in_memory::InMemoryLedgerStore,
-  mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
+  azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore,
+  in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
 };
 use tokio::sync::mpsc;
 use tonic::{
@@ -127,6 +127,10 @@ impl CoordinatorState {
         ledger_store: Arc::new(Box::new(PageBlobLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
       },
+      "table" => CoordinatorState {
+        ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
+        conn_map: Arc::new(RwLock::new(HashMap::new())),
+      },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
@@ -139,9 +143,9 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToReadViewLedger);
     }
 
-    let view_ledger_tail = res.unwrap();
-    if view_ledger_tail.get_receipt().get_height() > 0 {
-      let res = bincode::deserialize(&view_ledger_tail.get_block().to_bytes());
+    let (view_ledger_tail, tail_height) = res.unwrap();
+    if tail_height > 0 {
+      let res = bincode::deserialize(&view_ledger_tail.to_bytes());
       if res.is_err() {
         eprintln!(
           "Failed to deserialize the view ledger tail's genesis block {:?}",
@@ -1075,7 +1079,7 @@ impl CoordinatorState {
 
     let handle = NimbleDigest::digest(handle_bytes);
 
-    let ledger_entry = {
+    let (ledger_block, _height) = {
       let res = self.ledger_store.read_ledger_tail(&handle).await;
       if res.is_err() {
         eprintln!(
@@ -1102,7 +1106,7 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    Ok((ledger_entry.block, receipt))
+    Ok((ledger_block, receipt))
   }
 
   pub async fn read_ledger_by_index(

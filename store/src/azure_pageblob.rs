@@ -13,6 +13,7 @@ use md5;
 use serde::{Deserialize, Serialize};
 use std::{
   collections::HashMap,
+  convert::TryFrom,
   fmt::Debug,
   sync::{Arc, RwLock},
   time::Duration,
@@ -41,6 +42,17 @@ macro_rules! checked_increment {
         ));
       },
       Some(e) => e,
+    }
+  };
+}
+
+macro_rules! checked_conversion {
+  ($x:expr, $type:tt) => {
+    match $type::try_from($x) {
+      Err(_) => {
+        return Err(LedgerStoreError::LedgerError(StorageError::IntegerOverflow));
+      },
+      Ok(v) => v,
     }
   };
 }
@@ -397,10 +409,10 @@ async fn read_ledger_op(
   req_idx: Option<usize>,
   ledger: &BlobClient,
   cache: &CacheMap,
-) -> Result<LedgerEntry, LedgerStoreError> {
-  let (cached_index, _) = get_cached_entry(handle, cache, ledger).await?;
+) -> Result<(LedgerEntry, usize), LedgerStoreError> {
+  let (cached_index, cached_etag) = get_cached_entry(handle, cache, ledger).await?;
 
-  let index = if req_idx.is_some() {
+  let mut index = if req_idx.is_some() {
     let req_idx = req_idx.unwrap() as u64;
 
     // Index requested is higher than cached index. Either the page does not exist or the cache is stale.
@@ -427,16 +439,29 @@ async fn read_ledger_op(
       req_idx
     }
   } else {
-    // No index was requested, so use cached index
+    // No index was requested, use the cache index (will be correct in common case)
     cached_index
   };
 
-  let (entry, _etag) = find_db_entry(ledger, index).await?;
+  let (mut entry, etag) = find_db_entry(ledger, index).await?;
 
-  // 2. Return ledger entry by deserializing its contents
-  Ok(LedgerEntry::new(
-    Block::from_bytes(&entry.block).unwrap(),
-    Receipt::from_bytes(&entry.receipt).unwrap(),
+  // 2. If we are reading the tail and the etags don't match, it means that our cache was stale
+  if req_idx.is_none() && cached_etag != etag {
+    // Get new height, fetch element, and update cache
+    let index_and_etag = find_ledger_height(ledger).await?;
+    index = index_and_etag.0;
+    let entry_and_etag = find_db_entry(ledger, index).await?;
+    entry = entry_and_etag.0;
+    update_cache_entry(handle, cache, Some(index), entry_and_etag.1)?;
+  }
+
+  // 3. Return ledger entry by deserializing its contents
+  Ok((
+    LedgerEntry::new(
+      Block::from_bytes(&entry.block).unwrap(),
+      Receipt::from_bytes(&entry.receipt).unwrap(),
+    ),
+    checked_conversion!(index, usize),
   ))
 }
 
@@ -688,11 +713,12 @@ impl LedgerStore for PageBlobLedgerStore {
     }
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError> {
+  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
     let client = self.client.clone();
 
     let ledger = client.as_blob_client(&hex::encode(&handle.to_bytes()));
-    read_ledger_op(handle, None, &ledger, &self.cache).await
+    let (ledger_entry, height) = read_ledger_op(handle, None, &ledger, &self.cache).await?;
+    Ok((ledger_entry.block, height))
   }
 
   async fn read_ledger_by_index(
@@ -704,10 +730,11 @@ impl LedgerStore for PageBlobLedgerStore {
 
     let ledger = client.as_blob_client(&hex::encode(&handle.to_bytes()));
 
-    read_ledger_op(handle, Some(index), &ledger, &self.cache).await
+    let (ledger_entry, _height) = read_ledger_op(handle, Some(index), &ledger, &self.cache).await?;
+    Ok(ledger_entry)
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
     self.read_ledger_tail(&self.view_handle).await
   }
 

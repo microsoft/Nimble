@@ -375,13 +375,11 @@ async fn create_ledger_op(
 }
 
 async fn read_ledger_op(
-  handle: &Handle,
   idx: Option<usize>,
   ledger: &Collection<DBEntry>,
-  cache: &CacheMap,
-) -> Result<LedgerEntry, LedgerStoreError> {
+) -> Result<(LedgerEntry, usize), LedgerStoreError> {
   let index = match idx {
-    None => get_cached_height(handle, cache, ledger).await?,
+    None => find_ledger_height(ledger).await?,
     Some(i) => {
       checked_conversion!(i, i64)
     },
@@ -417,7 +415,7 @@ async fn read_ledger_op(
     Receipt::from_bytes(&entry.receipt).unwrap(),
   );
 
-  Ok(res)
+  Ok((res, checked_conversion!(index, usize)))
 }
 
 async fn get_cached_height(
@@ -518,6 +516,23 @@ async fn find_ledger_height(ledger: &Collection<DBEntry>) -> Result<i64, LedgerS
   }
 }
 
+async fn loop_and_read(
+  handle: &Handle,
+  index: Option<usize>,
+  ledger: &Collection<DBEntry>,
+  cache: &CacheMap,
+) -> Result<(LedgerEntry, usize), LedgerStoreError> {
+  loop {
+    with_retry!(
+      read_ledger_op(index, ledger).await,
+      handle,
+      cache,
+      ledger,
+      false
+    );
+  }
+}
+
 const RETRY_SLEEP: u64 = 50; // ms
 const WRITE_CONFLICT_CODE: i32 = 112;
 const DUPLICATE_KEY_CODE: i32 = 11000;
@@ -589,21 +604,14 @@ impl LedgerStore for MongoCosmosLedgerStore {
     }
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<LedgerEntry, LedgerStoreError> {
+  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    loop {
-      with_retry!(
-        read_ledger_op(handle, None, &ledger, &self.cache).await,
-        handle,
-        &self.cache,
-        &ledger,
-        false
-      );
-    }
+    let (ledger_entry, height) = loop_and_read(handle, None, &ledger, &self.cache).await?;
+    Ok((ledger_entry.block, height))
   }
 
   async fn read_ledger_by_index(
@@ -616,18 +624,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    loop {
-      with_retry!(
-        read_ledger_op(handle, Some(index), &ledger, &self.cache).await,
-        handle,
-        &self.cache,
-        &ledger,
-        false
-      );
-    }
+    let (entry, _height) = loop_and_read(handle, Some(index), &ledger, &self.cache).await?;
+    Ok(entry)
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<LedgerEntry, LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
     self.read_ledger_tail(&self.view_handle).await
   }
 

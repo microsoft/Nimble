@@ -365,8 +365,7 @@ async fn perf_test_table(storage_name: &str, key: &str, dbname: &str) {
     let client = partition_client
       .as_entity_client(&i.to_string())
       .expect("should work");
-    let _response: GetEntityResponse<TableEntry> =
-      client.get().execute().await.expect("should work");
+    let _res: GetEntityResponse<TableEntry> = client.get().execute().await.expect("should work");
   }
 
   println!(
