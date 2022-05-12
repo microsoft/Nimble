@@ -11,6 +11,7 @@ use base64_url;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
 use serde::{Deserialize, Serialize};
 use std::{
+  cmp::Ordering,
   collections::HashMap,
   convert::TryFrom,
   fmt::Debug,
@@ -346,30 +347,44 @@ async fn append_ledger_op(
 
   // 2. If it is a conditional update, check if condition still holds
   if let Some(h) = expected_height {
-    let checked_h = checked_conversion!(h, i64);
+    let expected_height = checked_conversion!(h, i64);
 
-    if checked_h != height_plus_one {
-      // Either condition no longer holds or cache is stale for some reason
-      // Get latest height and double check
-      let height = find_ledger_height(ledger.clone(), handle).await?;
-      let height_plus_one = checked_increment!(height);
+    match expected_height.cmp(&height_plus_one) {
+      Ordering::Less => {
+        // Condition no longer holds. Cache may be stale but it doesn't matter
 
-      // Might as well update the cache
-      update_cache_entry(handle, cache, height)?;
-
-      // Condition no longer holds
-      if checked_h != height_plus_one {
         eprintln!(
           "Expected height {};  Height-plus-one: {}",
-          expected_height.unwrap(),
-          height_plus_one
+          expected_height, height_plus_one
         );
 
         return Err(LedgerStoreError::LedgerError(
           StorageError::IncorrectConditionalData,
         ));
-      }
-    }
+      },
+      Ordering::Greater => {
+        // Either condition does not hold or cache is stale for some reason
+        // Get latest height and double check
+        let height = find_ledger_height(ledger.clone(), handle).await?;
+        let height_plus_one = checked_increment!(height);
+
+        // Update the cache
+        update_cache_entry(handle, cache, height)?;
+
+        // Condition no longer holds
+        if expected_height != height_plus_one {
+          eprintln!(
+            "Expected height {};  Height-plus-one: {}",
+            expected_height, height_plus_one
+          );
+
+          return Err(LedgerStoreError::LedgerError(
+            StorageError::IncorrectConditionalData,
+          ));
+        }
+      },
+      Ordering::Equal => {}, // all is good
+    };
   }
 
   // 3. Construct the new entry we are going to append to the ledger
