@@ -420,11 +420,41 @@ async fn attach_ledger_receipt_op(
   // 1. Get the desired index.
   let index = receipt.get_height().to_string();
 
-  // 2. Update the row with the new receipt
+  // 2. Fetch the receipt at this index
+  let (entry, etag) = find_db_entry(ledger.clone(), handle, &index).await?;
+  let receipt_bytes = match base64_url::decode(&entry.receipt) {
+    Ok(v) => v,
+    Err(e) => {
+      eprintln!("Unable to decode entry in attach_ledger_receipt {:?}", e);
+      return Err(LedgerStoreError::LedgerError(
+        StorageError::DeserializationError,
+      ));
+    },
+  };
+
+  // 3. Append the receipt to the fetched receipt
+  let mut fetched_receipt = match Receipt::from_bytes(&receipt_bytes) {
+    Ok(r) => r,
+    Err(e) => {
+      eprintln!("Unable to decode receipt bytes in attach_ledger_op {:?}", e);
+      return Err(LedgerStoreError::LedgerError(
+        StorageError::DeserializationError,
+      ));
+    },
+  };
+
+  let res = fetched_receipt.append(receipt);
+  if res.is_err() {
+    return Err(LedgerStoreError::LedgerError(
+      StorageError::MismatchedReceipts,
+    ));
+  }
+
+  // 3. Update the row with the updated receipt
   let merge_entry = MergeDBEntry {
     handle: handle.to_owned(),
     row: index.clone(),
-    receipt: base64_url::encode(&receipt.to_bytes()),
+    receipt: base64_url::encode(&fetched_receipt.to_bytes()),
   };
 
   let partition_client = ledger.as_partition_key_client(handle);
@@ -436,11 +466,9 @@ async fn attach_ledger_receipt_op(
     },
   };
 
-  //XXX: WE ARE NOT PERFORMING ANY CHECKS (see the above condition being ANY).
-  //This could lead to the receipt being overwritten by another coordinator.
   let res = row_client
     .merge()
-    .execute(&merge_entry, &IfMatchCondition::Any)
+    .execute(&merge_entry, &IfMatchCondition::Etag(etag))
     .await;
 
   if let Err(err) = res {
@@ -507,32 +535,44 @@ async fn read_ledger_op(
 
   let (entry, _etag) = find_db_entry(ledger, handle, &index).await?;
 
-  let entry_bytes = match base64_url::decode(&entry.block) {
-    Ok(v) => v,
+  let ret_block = match base64_url::decode(&entry.block) {
+    Ok(v) => match Block::from_bytes(&v) {
+      Ok(b) => b,
+      Err(e) => {
+        eprintln!("Unable to decode block bytes in read_ledger_op {:?}", e);
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::DeserializationError,
+        ));
+      },
+    },
     Err(e) => {
-      eprintln!("Unable to decode entry in read_ledger_op {:?}", e);
+      eprintln!("Unable to decode entry.block in read_ledger_op {:?}", e);
       return Err(LedgerStoreError::LedgerError(
         StorageError::DeserializationError,
       ));
     },
   };
 
-  let receipt_bytes = match base64_url::decode(&entry.receipt) {
-    Ok(v) => v,
+  let ret_receipt = match base64_url::decode(&entry.receipt) {
+    Ok(v) => match Receipt::from_bytes(&v) {
+      Ok(r) => r,
+      Err(e) => {
+        eprintln!("Unable to decode receipt bytes in read_ledger_op {:?}", e);
+        return Err(LedgerStoreError::LedgerError(
+          StorageError::DeserializationError,
+        ));
+      },
+    },
     Err(e) => {
-      eprintln!("Unable to decode entry in read_ledger_op, {:?}", e);
+      eprintln!("Unable to decode entry.receipt in read_ledger_op, {:?}", e);
       return Err(LedgerStoreError::LedgerError(
         StorageError::DeserializationError,
       ));
     },
   };
 
-  // 2. Return ledger entry by deserializing its contents
   Ok((
-    LedgerEntry::new(
-      Block::from_bytes(&entry_bytes).unwrap(),
-      Receipt::from_bytes(&receipt_bytes).unwrap(),
-    ),
+    LedgerEntry::new(ret_block, ret_receipt),
     checked_conversion!(entry.height, usize),
   ))
 }
