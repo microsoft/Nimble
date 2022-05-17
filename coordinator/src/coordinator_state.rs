@@ -81,20 +81,22 @@ async fn update_endorser(
       receipt
     };
 
-    let res = Receipt::from_bytes(&receipt);
-    if res.is_ok() {
-      let receipt_rs = res.unwrap();
-      let res = ledger_store
-        .attach_ledger_receipt(&handle, &receipt_rs)
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to attach ledger receipt to the ledger store ({:?})",
-          res
-        );
+    if cfg!(feature = "receipts") {
+      let res = Receipt::from_bytes(&receipt);
+      if res.is_ok() {
+        let receipt_rs = res.unwrap();
+        let res = ledger_store
+          .attach_ledger_receipt(&handle, &receipt_rs)
+          .await;
+        if res.is_err() {
+          eprintln!(
+            "Failed to attach ledger receipt to the ledger store ({:?})",
+            res
+          );
+        }
+      } else {
+        eprintln!("Failed to parse a receipt ({:?})", res);
       }
-    } else {
-      eprintln!("Failed to parse a receipt ({:?})", res);
     }
   }
 
@@ -1271,17 +1273,19 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    // Store the receipt
-    let res = self
-      .ledger_store
-      .attach_ledger_receipt(&handle, &receipt)
-      .await;
-    if res.is_err() {
-      eprintln!(
-        "Failed to attach ledger receipt to the ledger store ({:?})",
-        res
-      );
-      return Err(CoordinatorError::FailedToAttachReceipt);
+    if cfg!(feature = "receipts") {
+      // Store the receipt
+      let res = self
+        .ledger_store
+        .attach_ledger_receipt(&handle, &receipt)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to attach ledger receipt to the ledger store ({:?})",
+          res
+        );
+        return Err(CoordinatorError::FailedToAttachReceipt);
+      }
     }
 
     Ok(receipt)
@@ -1333,16 +1337,18 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    let res = self
-      .ledger_store
-      .attach_ledger_receipt(&handle, &receipt)
-      .await;
-    if res.is_err() {
-      eprintln!(
-        "Failed to attach ledger receipt to the ledger store ({:?})",
-        res.unwrap_err()
-      );
-      return Err(CoordinatorError::FailedToAttachReceipt);
+    if cfg!(feature = "receipts") {
+      let res = self
+        .ledger_store
+        .attach_ledger_receipt(&handle, &receipt)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to attach ledger receipt to the ledger store ({:?})",
+          res.unwrap_err()
+        );
+        return Err(CoordinatorError::FailedToAttachReceipt);
+      }
     }
 
     Ok(receipt)
