@@ -46,8 +46,8 @@ public:
   endorser_status_code setup(endorser_id_t* endorser_id);
   endorser_status_code initialize_state(init_endorser_data_t *state, receipt_t* receipt);
   endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, receipt_t* receipt);
-  endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt);
-  endorser_status_code append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, receipt_t* receipt);
+  endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt);
+  endorser_status_code append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt);
   endorser_status_code append_view_ledger(digest_t* block_hash, uint64_t expected_height, receipt_t* receipt);
   endorser_status_code get_public_key(endorser_id_t* endorser_id);
   endorser_status_code get_ledger_tail_map_size(uint64_t* ledger_tail_map_size);

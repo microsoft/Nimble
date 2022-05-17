@@ -166,6 +166,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
         string h = request->handle();
         string n = request->nonce();
+        uint64_t expected_height = request->expected_height();
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
         }
@@ -182,14 +183,19 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         receipt_t receipt;
+        uint64_t current_height;
         endorser_call_mutex.lock();
-        result = read_latest(enclave, &ret, &handle, &nonce, &receipt);
+        result = read_latest(enclave, &ret, &handle, &nonce, expected_height, &current_height, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
-            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+            return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
+          if (ret == endorser_status_code::FAILED_PRECONDITION) {
+            return Status((StatusCode)ret, "Out of order", std::string((const char *)&current_height, sizeof(uint64_t)));
+          } else {
             return Status((StatusCode)ret, "enclave call to read_latest returned error");
+          }
         }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
@@ -218,18 +224,23 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         receipt_t receipt;
+        uint64_t current_height;
         endorser_call_mutex.lock();
         if (endorser_locked && !ignore_lock) {
           endorser_call_mutex.unlock();
           return Status(StatusCode::CANCELLED, "endorser is locked");
         }
-        result = append(enclave, &ret, &handle, &block_hash, expected_height, &receipt);
+        result = append(enclave, &ret, &handle, &block_hash, expected_height, &current_height, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
-            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+            return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
+          if (ret == endorser_status_code::FAILED_PRECONDITION) {
+            return Status((StatusCode)ret, "Out of order", std::string((const char *)&current_height, sizeof(uint64_t)));
+          } else {
             return Status((StatusCode)ret, "enclave call to append returned error");
+          }
         }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
@@ -258,7 +269,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         result = append_view_ledger(enclave, &ret, &block_hash, expected_height, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
-            return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+            return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
             return Status((StatusCode)ret, "enclave call to append returned error");
@@ -284,7 +295,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
         if (result != OE_OK) {
-          status = Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+          status = Status(StatusCode::INTERNAL, "enclave error");
           goto exit;
         }
         if (ret != endorser_status_code::OK) {
@@ -297,7 +308,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         }
         result = read_latest_state(enclave, &ret, ledger_tail_map_size, ledger_tail_map, &view_tail_metablock);
         if (result != OE_OK) {
-          status = Status(StatusCode::FAILED_PRECONDITION, "enclave error");
+          status = Status(StatusCode::INTERNAL, "enclave error");
           goto exit;
         }
         if (ret != endorser_status_code::OK) {

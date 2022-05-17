@@ -22,14 +22,16 @@ pub enum CoordinatorError {
   FailedToCallLedgerStore,
   /// returned if the endorser public key does not exist
   InvalidEndorserPublicKey,
+  /// returned if the endorser uri does not exist
+  InvalidEndorserUri,
   /// returned if the read lock cannot be acquired
   FailedToAcquireReadLock,
   /// returned if the write lock cannot be acquired
   FailedToAcquireWriteLock,
   /// returned if the call to read latest state fails
   FailedToReadLatestState,
-  /// returned if the cooordinator cannot assemble a receipt with a unique view
-  EndorsersInDifferentViews,
+  /// returned if the cooordinator cannot assemble a receipt
+  EndorsersNotInSync,
   /// returned if the returned receipt is invalid
   InvalidReceipt,
   /// returned if the call to unlock fails
@@ -50,4 +52,8 @@ pub enum CoordinatorError {
   InvalidNonce,
   /// returned if no new endorsers added
   NoNewEndorsers,
+  /// returned if a ledger or an entry already exists
+  LedgerAlreadyExists,
+  /// returned if hit unexpected error
+  UnexpectedError,
 }

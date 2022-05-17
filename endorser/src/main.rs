@@ -29,6 +29,38 @@ impl EndorserServiceState {
       state: EndorserState::new(),
     }
   }
+
+  fn process_error(
+    &self,
+    error: EndorserError,
+    handle: Option<&NimbleDigest>,
+    default_msg: impl Into<String>,
+  ) -> Status {
+    match error {
+      EndorserError::OutOfOrder => {
+        if let Some(h) = handle {
+          let height = self.state.get_height(h).unwrap();
+          Status::with_details(
+            Code::FailedPrecondition,
+            "Out of order",
+            bytes::Bytes::copy_from_slice(&(height as u64).to_le_bytes()),
+          )
+        } else {
+          Status::failed_precondition("View ledger height is out of order")
+        }
+      },
+      EndorserError::LedgerExists => Status::already_exists("Ledger exists"),
+      EndorserError::InvalidLedgerName => Status::not_found("Ledger handle not found"),
+      EndorserError::LedgerHeightOverflow => Status::out_of_range("Ledger height overflow"),
+      EndorserError::InvalidTailHeight => Status::invalid_argument("Invalid ledger height"),
+      EndorserError::AlreadyInitialized => {
+        Status::already_exists("Enodrser is already initialized")
+      },
+      EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
+      EndorserError::IsLocked => Status::cancelled("Endorser is locked"),
+      _ => Status::internal(default_msg),
+    }
+  }
 }
 
 impl Default for EndorserServiceState {
@@ -86,10 +118,13 @@ impl EndorserCall for EndorserServiceState {
         };
         Ok(Response::new(reply))
       },
-      Err(error) => match error {
-        EndorserError::LedgerExists => Err(Status::already_exists("Invalid ledgher height")),
-        EndorserError::IsLocked => Err(Status::cancelled("Endorser is locked")),
-        _ => Err(Status::aborted("Failed to append")),
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to create a new ledger due to an internal error",
+        );
+        Err(status)
       },
     }
   }
@@ -124,20 +159,13 @@ impl EndorserCall for EndorserServiceState {
         Ok(Response::new(reply))
       },
 
-      Err(error) => match error {
-        EndorserError::OutOfOrderAppend => {
-          let height = self.state.get_height(&handle).unwrap();
-          Err(Status::with_details(
-            Code::FailedPrecondition,
-            "Out of order append",
-            bytes::Bytes::copy_from_slice(&(height as u64).to_le_bytes()),
-          ))
-        },
-        EndorserError::InvalidLedgerName => Err(Status::not_found("Ledger handle not found")),
-        EndorserError::LedgerHeightOverflow => Err(Status::out_of_range("Ledger height overflow")),
-        EndorserError::InvalidTailHeight => Err(Status::already_exists("Invalid ledgher height")),
-        EndorserError::IsLocked => Err(Status::cancelled("Endorser is locked")),
-        _ => Err(Status::aborted("Failed to append")),
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          Some(&handle),
+          "Failed to append to a ledger due to an internal error",
+        );
+        Err(status)
       },
     }
   }
@@ -146,7 +174,11 @@ impl EndorserCall for EndorserServiceState {
     &self,
     request: Request<ReadLatestReq>,
   ) -> Result<Response<ReadLatestResp>, Status> {
-    let ReadLatestReq { handle, nonce } = request.into_inner();
+    let ReadLatestReq {
+      handle,
+      nonce,
+      expected_height,
+    } = request.into_inner();
     let handle = {
       let res = NimbleDigest::from_bytes(&handle);
       if res.is_err() {
@@ -154,7 +186,9 @@ impl EndorserCall for EndorserServiceState {
       }
       res.unwrap()
     };
-    let res = self.state.read_latest(&handle, &nonce);
+    let res = self
+      .state
+      .read_latest(&handle, &nonce, expected_height as usize);
 
     match res {
       Ok(receipt) => {
@@ -163,7 +197,14 @@ impl EndorserCall for EndorserServiceState {
         };
         Ok(Response::new(reply))
       },
-      Err(_) => Err(Status::aborted("Failed to process read_latest")),
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          Some(&handle),
+          "Failed to read a ledger due to an internal error",
+        );
+        Err(status)
+      },
     }
   }
 
@@ -193,8 +234,14 @@ impl EndorserCall for EndorserServiceState {
         };
         Ok(Response::new(reply))
       },
-
-      Err(_) => Err(Status::aborted("Failed to append_view_ledger")),
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to append to the view ledger due to an internal error",
+        );
+        Err(status)
+      },
     }
   }
 
@@ -233,7 +280,14 @@ impl EndorserCall for EndorserServiceState {
         };
         Ok(Response::new(reply))
       },
-      Err(_) => Err(Status::aborted("Failed to initialize the endorser state")),
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to initialize an endorser due to an internal error",
+        );
+        Err(status)
+      },
     }
   }
 
@@ -252,33 +306,49 @@ impl EndorserCall for EndorserServiceState {
 
     let res = self.state.read_latest_state();
 
-    if res.is_err() {
-      return Err(Status::aborted("Failed to read latest state"));
+    match res {
+      Ok(ledger_view) => {
+        let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
+          .ledger_tail_map
+          .iter()
+          .map(|(handle, metablock)| LedgerTailMapEntry {
+            handle: handle.to_bytes(),
+            metablock: metablock.to_bytes(),
+          })
+          .collect();
+        let reply = ReadLatestStateResp {
+          ledger_tail_map,
+          view_tail_metablock: ledger_view.view_tail_metablock.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to read the latest state of an endorser due to an internal error",
+        );
+        Err(status)
+      },
     }
-
-    let ledger_view = res.unwrap();
-    let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
-      .ledger_tail_map
-      .iter()
-      .map(|(handle, metablock)| LedgerTailMapEntry {
-        handle: handle.to_bytes(),
-        metablock: metablock.to_bytes(),
-      })
-      .collect();
-    let reply = ReadLatestStateResp {
-      ledger_tail_map,
-      view_tail_metablock: ledger_view.view_tail_metablock.to_bytes().to_vec(),
-    };
-    Ok(Response::new(reply))
   }
 
   async fn unlock(&self, _req: Request<UnlockReq>) -> Result<Response<UnlockResp>, Status> {
     let res = self.state.unlock();
-    if res.is_err() {
-      Err(Status::aborted("Failed to unlock"))
-    } else {
-      let reply = UnlockResp {};
-      Ok(Response::new(reply))
+
+    match res {
+      Ok(()) => {
+        let reply = UnlockResp {};
+        Ok(Response::new(reply))
+      },
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to unlock an endorser due to an internal error",
+        );
+        Err(status)
+      },
     }
   }
 }

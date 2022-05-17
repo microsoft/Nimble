@@ -79,6 +79,7 @@ typedef enum _endorser_status_code {
   FAILED_PRECONDITION = 9,
   ABORTED = 10,
   OUT_OF_RANGE = 11,
+  UNIMPLEMENTED = 12,
   INTERNAL = 13,
   UNAVAILABLE = 14,
 } endorser_status_code;

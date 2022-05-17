@@ -13,7 +13,7 @@ pub enum EndorserError {
   /// returned if the requested tail height is less than the expected height
   InvalidTailHeight,
   /// returned if the requested tail height is more than the expected height
-  OutOfOrderAppend,
+  OutOfOrder,
   /// returned if the endorser is locked
   IsLocked,
   /// returned if failed to acquire view ledger read lock

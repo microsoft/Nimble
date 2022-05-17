@@ -74,6 +74,12 @@ typedef struct _init_endorser_data {
   unsigned long long expected_height;
 } init_endorser_data_t;
 
+typedef struct _read_ledger_data {
+  digest_t block_hash;
+  nonce_t nonce;
+  unsigned long long expected_height;
+} read_ledger_data_t;
+
 typedef struct _append_ledger_data {
   digest_t block_hash;
   unsigned long long expected_height;
@@ -100,6 +106,7 @@ typedef enum _endorser_status_code {
   FAILED_PRECONDITION = 9,
   ABORTED = 10,
   OUT_OF_RANGE = 11,
+  UNIMPLEMENTED = 12,
   INTERNAL = 13,
   UNAVAILABLE = 14,
 } endorser_status_code;

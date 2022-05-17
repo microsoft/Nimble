@@ -237,7 +237,7 @@ endorser_status_code create_ledger(chain_t* outer_chain, append_ledger_data_t* l
   digest_t digest;
 
   if (endorser_state != endorser_initialized)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
   // pos, prev, next should be set up by the caller
@@ -256,12 +256,12 @@ endorser_status_code create_ledger(chain_t* outer_chain, append_ledger_data_t* l
   return OK;
 }
 
-endorser_status_code read_ledger(chain_t* outer_chain, nonce_t* nonce, receipt_t *receipt) {
+endorser_status_code read_ledger(chain_t* outer_chain, read_ledger_data_t* read_ledger_data, receipt_t *receipt) {
   chain_t local_chain;
   chain_t *chain;
 
   if (endorser_state != endorser_initialized)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
@@ -269,17 +269,23 @@ endorser_status_code read_ledger(chain_t* outer_chain, nonce_t* nonce, receipt_t
 
   chain = &chains[local_chain.pos];
 
-  calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, nonce, receipt);
+  if (read_ledger_data->expected_height < chain->metablock.height)
+    return INVALID_ARGUMENT;
+
+  if (read_ledger_data->expected_height > chain->metablock.height)
+    return FAILED_PRECONDITION;
+
+  calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, &read_ledger_data->nonce, receipt);
   return OK;
 }
   
-endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* ledger_data, receipt_t *receipt) {
+endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* append_ledger_data, receipt_t *receipt) {
   chain_t local_chain;
   chain_t *chain;
   digest_t digest;
 
   if (endorser_state != endorser_initialized)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
   if (!check_chain(&local_chain))
@@ -291,14 +297,14 @@ endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* l
   if (chain->metablock.height == ULLONG_MAX)
     return OUT_OF_RANGE;
 
-  if (ledger_data->expected_height <= chain->metablock.height)
+  if (append_ledger_data->expected_height <= chain->metablock.height)
     return ALREADY_EXISTS;
 
-  if (ledger_data->expected_height > chain->metablock.height + 1)
+  if (append_ledger_data->expected_height > chain->metablock.height + 1)
     return FAILED_PRECONDITION;
 
   memcpy(chain->metablock.prev.v, chain->hash.v, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(chain->metablock.block_hash.v, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(chain->metablock.block_hash.v, append_ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
   chain->metablock.height += 1;
   calc_digest((unsigned char *)&chain->metablock, sizeof(metablock_t), &chain->hash);
   memcpy(outer_chain, chain, sizeof(chain_t));
@@ -309,7 +315,7 @@ endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* l
 
 endorser_status_code get_pubkey(endorser_id_t* endorser_id) {
   if (endorser_state == endorser_none)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   memcpy(endorser_id->pk, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
   return OK;
@@ -360,7 +366,7 @@ endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, recei
   digest_t state;
 
   if (endorser_state != endorser_initialized)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   hash_state(&state);
 
@@ -390,7 +396,7 @@ endorser_status_code init_endorser(init_endorser_data_t *data, receipt_t *receip
   append_ledger_data_t ledger_data;
 
   if (endorser_state != endorser_started)
-    return UNAVAILABLE;
+    return UNIMPLEMENTED;
 
   if (!check_pointer(data->chains, sizeof(chain_t) * MAX_NUM_CHAINS))
     return INVALID_ARGUMENT;
@@ -451,8 +457,8 @@ endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1,
       ret = create_ledger((chain_t *)param1, (append_ledger_data_t *)param2, (receipt_t *)param3);
     break;
   case read_ledger_call:
-    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(nonce_t)) && check_pointer(param3, sizeof(receipt_t)))
-      ret = read_ledger((chain_t *)param1, (nonce_t *)param2, (receipt_t *)param3);
+    if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(read_ledger_data_t)) && check_pointer(param3, sizeof(receipt_t)))
+      ret = read_ledger((chain_t *)param1, (read_ledger_data_t *)param2, (receipt_t *)param3);
     break;
   case append_ledger_call:
     if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(append_ledger_data_t)) && check_pointer(param3, sizeof(receipt_t)))

@@ -16,7 +16,7 @@ use store::{
 use tokio::sync::mpsc;
 use tonic::{
   transport::{Channel, Endpoint},
-  Code,
+  Code, Status,
 };
 
 pub mod endorser_proto {
@@ -35,6 +35,8 @@ pub struct CoordinatorState {
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
+const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
+const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 async fn update_endorser(
   ledger_store: LedgerStoreRef,
@@ -43,55 +45,39 @@ async fn update_endorser(
   start: usize,
   end: usize,
   ignore_lock: bool,
-) -> Result<(), CoordinatorError> {
+) -> Result<(), Status> {
   for idx in start..=end {
     let ledger_entry = {
       let res = ledger_store.read_ledger_by_index(&handle, idx).await;
       if res.is_err() {
         eprintln!("Failed to read ledger by index {:?}", res);
-        return Err(CoordinatorError::FailedToReadLedger);
+        return Err(Status::aborted("Failed to read ledger by index"));
       }
       res.unwrap()
     };
 
     let receipt = if idx == 0 {
-      let res = endorser_client
+      let endorser_proto::NewLedgerResp { receipt } = endorser_client
         .new_ledger(tonic::Request::new(endorser_proto::NewLedgerReq {
           handle: handle.to_bytes(),
           block_hash: ledger_entry.get_block().hash().to_bytes(),
           ignore_lock,
         }))
-        .await;
+        .await?
+        .into_inner();
 
-      if res.is_err() {
-        let status = res.unwrap_err();
-        match status.code() {
-          Code::AlreadyExists => return Ok(()),
-          _ => {
-            return Err(CoordinatorError::FailedToCreateLedger);
-          },
-        }
-      }
-      let endorser_proto::NewLedgerResp { receipt } = res.unwrap().into_inner();
       receipt
     } else {
-      let res = endorser_client
+      let endorser_proto::AppendResp { receipt } = endorser_client
         .append(tonic::Request::new(endorser_proto::AppendReq {
           handle: handle.to_bytes(),
           block_hash: ledger_entry.get_receipt().get_block_hash().to_bytes(),
           expected_height: ledger_entry.get_receipt().get_height() as u64,
           ignore_lock,
         }))
-        .await;
+        .await?
+        .into_inner();
 
-      if res.is_err() {
-        let status = res.unwrap_err();
-        match status.code() {
-          Code::AlreadyExists => return Ok(()),
-          _ => return Err(CoordinatorError::FailedToAppendLedger),
-        }
-      }
-      let endorser_proto::AppendResp { receipt } = res.unwrap().into_inner();
       receipt
     };
 
@@ -107,10 +93,93 @@ async fn update_endorser(
           res
         );
       }
+    } else {
+      eprintln!("Failed to parse a receipt ({:?})", res);
     }
   }
 
   Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CoordinatorAction {
+  DoNothing,
+  IncrementReceipt,
+  UpdateEndorser,
+  RemoveEndorser,
+}
+
+fn process_error(
+  endorser: &str,
+  handle: Option<&NimbleDigest>,
+  status: &Status,
+) -> CoordinatorAction {
+  match status.code() {
+    Code::Aborted => {
+      eprintln!("operation aborted to due to ledger store");
+      CoordinatorAction::DoNothing
+    },
+    Code::AlreadyExists => {
+      if let Some(h) = handle {
+        eprintln!("ledger {:?} already exists in endorser {}", h, endorser);
+      } else {
+        eprintln!(
+          "the requested operation was already done in endorser {}",
+          endorser
+        );
+      }
+      CoordinatorAction::IncrementReceipt
+    },
+    Code::Cancelled => {
+      eprintln!("endorser {} is locked", endorser);
+      CoordinatorAction::DoNothing
+    },
+    Code::FailedPrecondition | Code::NotFound => {
+      if let Some(h) = handle {
+        eprintln!("ledger {:?} lags behind in endorser {}", h, endorser);
+      } else {
+        eprintln!("a ledger lags behind in endorser {}", endorser);
+      }
+      CoordinatorAction::UpdateEndorser
+    },
+    Code::InvalidArgument => {
+      if let Some(h) = handle {
+        eprintln!(
+          "the requested height for ledger {:?} in endorser {} is too small",
+          h, endorser
+        );
+      } else {
+        eprintln!(
+          "the requested height for a ledger in endorser {} is too small",
+          endorser
+        );
+      }
+      CoordinatorAction::DoNothing
+    },
+    Code::OutOfRange => {
+      if let Some(h) = handle {
+        eprintln!(
+          "the requested height for ledger {:?} in endorser {} is out of range",
+          h, endorser
+        );
+      } else {
+        eprintln!(
+          "the requested height for a ledger in endorser {} is out of range",
+          endorser
+        );
+      }
+      CoordinatorAction::DoNothing
+    },
+    Code::Unimplemented => {
+      eprintln!("endorser {} is not initialized", endorser);
+      CoordinatorAction::DoNothing
+    },
+    Code::Internal | Code::Unavailable | Code::Unknown => CoordinatorAction::RemoveEndorser,
+    _ => {
+      eprintln!("Unhandled status={:?}", status);
+      CoordinatorAction::DoNothing
+    },
+  }
 }
 
 impl CoordinatorState {
@@ -159,22 +228,20 @@ impl CoordinatorState {
         .map(|i| endorser_hostnames.pk_hostnames[i].1.clone())
         .collect::<Vec<String>>();
 
-      let res = coordinator.connect_endorsers(&hostnames).await;
-      if res.is_err() {
-        eprintln!("Failed to connect to endorsers {:?}", res);
-        return Err(CoordinatorError::FailedToConnectToEndorser);
-      }
+      println!("endorsers in the latest view: {:?}", hostnames);
+
+      let _pks = coordinator.connect_endorsers(&hostnames).await;
     }
     Ok(coordinator)
   }
 
-  fn get_endorser_client(&self, pk: &[u8]) -> Option<EndorserCallClient<Channel>> {
+  fn get_endorser_client(&self, pk: &[u8]) -> Option<(EndorserCallClient<Channel>, String)> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       if !conn_map_rd.contains_key(pk) {
         eprintln!("No endorser has this public key {:?}", pk);
         None
       } else {
-        Some(conn_map_rd[pk].0.clone())
+        Some((conn_map_rd[pk].0.clone(), conn_map_rd[pk].1.clone()))
       }
     } else {
       eprintln!("Failed to acquire read lock");
@@ -183,41 +250,44 @@ impl CoordinatorState {
   }
 
   pub fn get_endorser_pks(&self) -> Vec<Vec<u8>> {
-    self
-      .conn_map
-      .read()
-      .expect("Failed to get the read lock")
-      .iter()
-      .map(|(pk, (_ec, _hostname))| pk.clone())
-      .collect::<Vec<Vec<u8>>>()
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      conn_map_rd
+        .iter()
+        .map(|(pk, (_ec, _hostname))| pk.clone())
+        .collect::<Vec<Vec<u8>>>()
+    } else {
+      eprintln!("Failed to acquire read lock");
+      Vec::new()
+    }
   }
 
   pub fn get_endorser_uris(&self) -> Vec<String> {
-    self
-      .conn_map
-      .read()
-      .expect("Failed to get the read lock")
-      .iter()
-      .map(|(_pk, (_ec, hostname))| hostname.clone())
-      .collect::<Vec<String>>()
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      conn_map_rd
+        .iter()
+        .map(|(_pk, (_ec, hostname))| hostname.clone())
+        .collect::<Vec<String>>()
+    } else {
+      eprintln!("Failed to acquire read lock");
+      Vec::new()
+    }
   }
 
   fn get_endorser_hostnames(&self) -> EndorserHostnames {
     EndorserHostnames {
-      pk_hostnames: self
-        .conn_map
-        .read()
-        .expect("Failed to get the read lock")
-        .iter()
-        .map(|(pk, (_ec, hostname))| (pk.clone(), hostname.clone()))
-        .collect::<Vec<(Vec<u8>, String)>>(),
+      pk_hostnames: if let Ok(conn_map_rd) = self.conn_map.read() {
+        conn_map_rd
+          .iter()
+          .map(|(pk, (_ec, hostname))| (pk.clone(), hostname.clone()))
+          .collect::<Vec<(Vec<u8>, String)>>()
+      } else {
+        eprintln!("Failed to acquire read lock");
+        Vec::new()
+      },
     }
   }
 
-  async fn connect_endorsers(
-    &self,
-    hostnames: &[String],
-  ) -> Result<Vec<Vec<u8>>, CoordinatorError> {
+  async fn connect_endorsers(&self, hostnames: &[String]) -> Vec<Vec<u8>> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for hostname in hostnames {
       let tx = mpsc_tx.clone();
@@ -225,47 +295,95 @@ impl CoordinatorState {
 
       let _job = tokio::spawn(async move {
         let res = Endpoint::from_shared(endorser.to_string());
-        if res.is_err() {
-          eprintln!("Failed to resolve the endorser host name: {:?}", endorser);
-          return;
-        }
-        let endorser_endpoint = res.unwrap();
-        let channel = endorser_endpoint.connect_lazy();
-        let mut client = EndorserCallClient::new(channel);
+        if let Ok(endorser_endpoint) = res {
+          let endorser_endpoint = endorser_endpoint
+            .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
+          let endorser_endpoint =
+            endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+          let res = endorser_endpoint.connect().await;
+          if let Ok(channel) = res {
+            let mut client = EndorserCallClient::new(channel);
 
-        let req = tonic::Request::new(endorser_proto::GetPublicKeyReq {});
-        let res = client.get_public_key(req).await;
-        tx.send((endorser, client, res)).await.unwrap();
+            let req = tonic::Request::new(endorser_proto::GetPublicKeyReq {});
+            let res = client.get_public_key(req).await;
+            if let Ok(resp) = res {
+              let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
+              let _ = tx.send((endorser, Ok((client, pk)))).await;
+            } else {
+              eprintln!("Failed to retrieve the public key: {:?}", res);
+              let _ = tx
+                .send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey)))
+                .await;
+            }
+          } else {
+            eprintln!("Failed to connect to the endorser {}: {:?}", endorser, res);
+            let _ = tx
+              .send((endorser, Err(CoordinatorError::FailedToConnectToEndorser)))
+              .await;
+          }
+        } else {
+          eprintln!("Failed to resolve the endorser host name: {:?}", res);
+          let _ = tx
+            .send((endorser, Err(CoordinatorError::CannotResolveHostName)))
+            .await;
+        }
       });
     }
 
     drop(mpsc_tx);
 
     let mut pks = Vec::new();
-    while let Some((endorser, client, res)) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!(
-          "Failed to get the public key of an endorser: {:?}",
-          endorser
-        );
-        continue;
-      }
-      let endorser_proto::GetPublicKeyResp { pk } = res.unwrap().into_inner();
-      if PublicKey::from_bytes(&pk).is_err() {
-        eprintln!("Public key is invalid from endorser {:?}", endorser);
-        continue;
-      }
-      if let Ok(mut conn_map_wr) = self.conn_map.write() {
-        conn_map_wr.entry(pk.clone()).or_insert_with(|| {
-          pks.push(pk);
-          (client, endorser)
-        });
-      } else {
-        eprintln!("Failed to acquire the write lock");
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      if let Ok((client, pk)) = res {
+        if PublicKey::from_bytes(&pk).is_err() {
+          eprintln!("Public key is invalid from endorser {:?}", endorser);
+          continue;
+        }
+        if let Ok(mut conn_map_wr) = self.conn_map.write() {
+          conn_map_wr.entry(pk.clone()).or_insert_with(|| {
+            pks.push(pk);
+            (client, endorser)
+          });
+        } else {
+          eprintln!("Failed to acquire the write lock");
+        }
       }
     }
 
-    Ok(pks)
+    pks
+  }
+
+  async fn disconnect_endorser(&self, hostname: &str) -> Result<(), CoordinatorError> {
+    let pk = {
+      if let Ok(conn_map_rd) = self.conn_map.read() {
+        let res = conn_map_rd
+          .iter()
+          .find(|(_pk, (_client, uri))| *hostname == *uri);
+        if let Some((pk, (_client, _uri))) = res {
+          pk.clone()
+        } else {
+          eprintln!("Failed to find the endorser to disconnect {}", hostname);
+          return Err(CoordinatorError::InvalidEndorserUri);
+        }
+      } else {
+        return Err(CoordinatorError::FailedToAcquireReadLock);
+      }
+    };
+
+    if let Ok(mut conn_map_wr) = self.conn_map.write() {
+      let res = conn_map_wr.remove_entry(&pk);
+      if let Some((_pk, (client, _uri))) = res {
+        drop(client);
+        eprintln!("Removed endorser {}", hostname);
+        Ok(())
+      } else {
+        eprintln!("Failed to find the endorser to disconnect {}", hostname);
+        Err(CoordinatorError::InvalidEndorserUri)
+      }
+    } else {
+      eprintln!("Failed to acquire the write lock");
+      Err(CoordinatorError::FailedToAcquireWriteLock)
+    }
   }
 
   async fn endorser_initialize_state(
@@ -286,11 +404,9 @@ impl CoordinatorState {
 
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
 
       let tx = mpsc_tx.clone();
@@ -306,31 +422,38 @@ impl CoordinatorState {
             expected_height: expected_height as u64,
           }))
           .await;
-        tx.send(res).await.unwrap();
+        let _ = tx.send((endorser, res)).await;
       });
     }
 
     drop(mpsc_tx);
 
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to initialize endorser state");
-        continue;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(resp) => {
+          let endorser_proto::InitializeStateResp { receipt } = resp.into_inner();
+          let res = Receipt::from_bytes(&receipt);
+          match res {
+            Ok(receipt_rs) => receipts.push(receipt_rs),
+            Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
+          }
+        },
+        Err(status) => {
+          eprintln!(
+            "Failed to initialize the state of endorser {} (status={:?})",
+            endorser, status
+          );
+          if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            let _ = self.disconnect_endorser(&endorser).await;
+          }
+        },
       }
-      let endorser_proto::InitializeStateResp { receipt } = res.unwrap().into_inner();
-      let res = Receipt::from_bytes(&receipt);
-      if res.is_err() {
-        eprintln!("Failed to parse a receipt");
-        continue;
-      }
-      let receipt_rs = res.unwrap();
-      receipts.push(receipt_rs);
     }
 
     match Receipt::merge_receipts(&receipts) {
       Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
     }
   }
 
@@ -343,11 +466,9 @@ impl CoordinatorState {
   ) -> Result<Receipt, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
 
       let tx = mpsc_tx.clone();
@@ -362,7 +483,7 @@ impl CoordinatorState {
             ignore_lock,
           }))
           .await;
-        let _ = tx.send(res).await;
+        let _ = tx.send((endorser, res)).await;
       });
     }
 
@@ -370,27 +491,44 @@ impl CoordinatorState {
 
     let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to create a ledger in endorser");
-        continue;
+    let mut receipt_count: usize = 0;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(resp) => {
+          let endorser_proto::NewLedgerResp { receipt } = resp.into_inner();
+          let res = Receipt::from_bytes(&receipt);
+          match res {
+            Ok(receipt_rs) => {
+              receipts.push(receipt_rs);
+              receipt_count += 1;
+            },
+            Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
+          }
+        },
+        Err(status) => {
+          eprintln!(
+            "Failed to create a ledger {:?} in endorser {} (status={:?})",
+            ledger_handle, endorser, status
+          );
+          match process_error(&endorser, Some(ledger_handle), &status) {
+            CoordinatorAction::IncrementReceipt => {
+              receipt_count += 1;
+            },
+            CoordinatorAction::RemoveEndorser => {
+              let _ = self.disconnect_endorser(&endorser).await;
+            },
+            _ => {},
+          }
+        },
       }
-      let endorser_proto::NewLedgerResp { receipt } = res.unwrap().into_inner();
-      let res = Receipt::from_bytes(&receipt);
-      if res.is_err() {
-        eprintln!("Failed to parse a receipt");
-        continue;
-      }
-      let receipt_rs = res.unwrap();
-      receipts.push(receipt_rs);
-      if receipts.len() == quorum_size {
+      if receipt_count == quorum_size {
         break;
       }
     }
 
     match Receipt::merge_receipts(&receipts) {
       Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
     }
   }
 
@@ -400,81 +538,98 @@ impl CoordinatorState {
     ledger_handle: &Handle,
     block_hash: &NimbleDigest,
     expected_height: usize,
-    ignore_lock: bool,
   ) -> Result<Receipt, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
+
       let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
       let block = *block_hash;
       let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .append(tonic::Request::new(endorser_proto::AppendReq {
-            handle: handle.to_bytes(),
-            block_hash: block.to_bytes(),
-            expected_height: expected_height as u64,
-            ignore_lock,
-          }))
-          .await;
-        if let Ok(resp) = res {
-          let endorser_proto::AppendResp { receipt } = resp.into_inner();
-          let res = Receipt::from_bytes(&receipt);
-          if let Ok(receipt_rs) = res {
-            let _ = tx.send(receipt_rs).await;
-          } else {
-            eprintln!("Failed to parse a receipt");
-          }
-        } else {
-          let status = res.unwrap_err();
-          if status.code() == Code::NotFound || status.code() == Code::FailedPrecondition {
-            let height_to_start = {
-              if status.code() == Code::NotFound {
-                0
-              } else {
-                let bytes = status.details();
-                let ledger_height = u64::from_le_bytes(bytes[0..].try_into().unwrap()) as usize;
-                ledger_height.checked_add(1).unwrap()
-              }
-            };
-            let height_to_end = expected_height - 1;
-            let res = update_endorser(
-              ledger_store,
-              endorser_client.clone(),
-              handle,
-              height_to_start,
-              height_to_end,
-              ignore_lock,
-            )
+        loop {
+          let res = endorser_client
+            .append(tonic::Request::new(endorser_proto::AppendReq {
+              handle: handle.to_bytes(),
+              block_hash: block.to_bytes(),
+              expected_height: expected_height as u64,
+              ignore_lock: false,
+            }))
             .await;
-            if res.is_ok() {
-              let res = endorser_client
-                .append(tonic::Request::new(endorser_proto::AppendReq {
-                  handle: handle.to_bytes(),
-                  block_hash: block.to_bytes(),
-                  expected_height: expected_height as u64,
-                  ignore_lock,
-                }))
+          match res {
+            Ok(resp) => {
+              let endorser_proto::AppendResp { receipt } = resp.into_inner();
+              let _ = tx.send((endorser, Ok(receipt))).await;
+              break;
+            },
+            Err(status) => match process_error(&endorser, Some(&handle), &status) {
+              CoordinatorAction::UpdateEndorser => {
+                let height_to_start = {
+                  if status.code() == Code::NotFound {
+                    0
+                  } else {
+                    let bytes = status.details();
+                    let ledger_height = u64::from_le_bytes(bytes[0..].try_into().unwrap()) as usize;
+                    ledger_height.checked_add(1).unwrap()
+                  }
+                };
+                let height_to_end = expected_height - 1;
+                let res = update_endorser(
+                  ledger_store.clone(),
+                  endorser_client.clone(),
+                  handle,
+                  height_to_start,
+                  height_to_end,
+                  false,
+                )
                 .await;
-              if let Ok(resp) = res {
-                let endorser_proto::AppendResp { receipt } = resp.into_inner();
-                let res = Receipt::from_bytes(&receipt);
-                if let Ok(receipt_rs) = res {
-                  let _ = tx.send(receipt_rs).await;
-                } else {
-                  eprintln!("Failed to parse a receipt");
+                match res {
+                  Ok(_resp) => {
+                    continue;
+                  },
+                  Err(status) => match process_error(&endorser, Some(&handle), &status) {
+                    CoordinatorAction::RemoveEndorser => {
+                      let _ = tx
+                        .send((endorser, Err(CoordinatorError::UnexpectedError)))
+                        .await;
+                      break;
+                    },
+                    CoordinatorAction::IncrementReceipt => {
+                      continue;
+                    },
+                    _ => {
+                      let _ = tx
+                        .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
+                        .await;
+                      break;
+                    },
+                  },
                 }
-              }
-            }
-          } else {
-            eprintln!("Failed to append to a ledger status={:?}", status);
+              },
+              CoordinatorAction::RemoveEndorser => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::UnexpectedError)))
+                  .await;
+                break;
+              },
+              CoordinatorAction::IncrementReceipt => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::LedgerAlreadyExists)))
+                  .await;
+                break;
+              },
+              _ => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
+                  .await;
+                break;
+              },
+            },
           }
         }
       });
@@ -484,16 +639,36 @@ impl CoordinatorState {
 
     let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(receipt) = mpsc_rx.recv().await {
-      receipts.push(receipt);
-      if receipts.len() == quorum_size {
+    let mut receipt_count = 0;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(receipt) => match Receipt::from_bytes(&receipt) {
+          Ok(receipt_rs) => {
+            receipts.push(receipt_rs);
+            receipt_count += 1;
+          },
+          Err(error) => {
+            eprintln!("Failed to parse a receipt (err={:?}", error);
+          },
+        },
+        Err(error) => match error {
+          CoordinatorError::LedgerAlreadyExists => {
+            receipt_count += 1;
+          },
+          CoordinatorError::UnexpectedError => {
+            let _ = self.disconnect_endorser(&endorser).await;
+          },
+          _ => {},
+        },
+      }
+      if receipt_count == quorum_size {
         break;
       }
     }
 
     match Receipt::merge_receipts(&receipts) {
       Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
     }
   }
 
@@ -502,28 +677,100 @@ impl CoordinatorState {
     endorsers: &[Vec<u8>],
     ledger_handle: &Handle,
     client_nonce: &Nonce,
+    expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
-      let tx = mpsc_tx.clone();
 
+      let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
       let nonce = *client_nonce;
+      let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .read_latest(tonic::Request::new(endorser_proto::ReadLatestReq {
-            handle: handle.to_bytes(),
-            nonce: nonce.get(),
-          }))
-          .await;
-        let _ = tx.send(res).await;
+        loop {
+          let res = endorser_client
+            .read_latest(tonic::Request::new(endorser_proto::ReadLatestReq {
+              handle: handle.to_bytes(),
+              nonce: nonce.get(),
+              expected_height: expected_height as u64,
+            }))
+            .await;
+          match res {
+            Ok(resp) => {
+              let endorser_proto::ReadLatestResp { receipt } = resp.into_inner();
+              let _ = tx.send((endorser, Ok(receipt))).await;
+              break;
+            },
+            Err(status) => match process_error(&endorser, Some(&handle), &status) {
+              CoordinatorAction::UpdateEndorser => {
+                let height_to_start = {
+                  if status.code() == Code::NotFound {
+                    0
+                  } else {
+                    let bytes = status.details();
+                    let ledger_height = u64::from_le_bytes(bytes[0..].try_into().unwrap()) as usize;
+                    ledger_height.checked_add(1).unwrap()
+                  }
+                };
+                let height_to_end = expected_height;
+                let res = update_endorser(
+                  ledger_store.clone(),
+                  endorser_client.clone(),
+                  handle,
+                  height_to_start,
+                  height_to_end,
+                  false,
+                )
+                .await;
+                match res {
+                  Ok(_resp) => {
+                    continue;
+                  },
+                  Err(status) => match process_error(&endorser, Some(&handle), &status) {
+                    CoordinatorAction::RemoveEndorser => {
+                      let _ = tx
+                        .send((endorser, Err(CoordinatorError::UnexpectedError)))
+                        .await;
+                      break;
+                    },
+                    CoordinatorAction::IncrementReceipt => {
+                      continue;
+                    },
+                    _ => {
+                      let _ = tx
+                        .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
+                        .await;
+                      break;
+                    },
+                  },
+                }
+              },
+              CoordinatorAction::RemoveEndorser => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::UnexpectedError)))
+                  .await;
+                break;
+              },
+              CoordinatorAction::IncrementReceipt => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::LedgerAlreadyExists)))
+                  .await;
+                break;
+              },
+              _ => {
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
+                  .await;
+                break;
+              },
+            },
+          }
+        }
       });
     }
 
@@ -531,27 +778,36 @@ impl CoordinatorState {
 
     let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to read the ledger tail of an endorser");
-        continue;
+    let mut receipt_count = 0;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(receipt) => match Receipt::from_bytes(&receipt) {
+          Ok(receipt_rs) => {
+            receipts.push(receipt_rs);
+            receipt_count += 1;
+          },
+          Err(error) => {
+            eprintln!("Failed to parse a receipt (err={:?}", error);
+          },
+        },
+        Err(error) => match error {
+          CoordinatorError::LedgerAlreadyExists => {
+            receipt_count += 1;
+          },
+          CoordinatorError::UnexpectedError => {
+            let _ = self.disconnect_endorser(&endorser).await;
+          },
+          _ => {},
+        },
       }
-      let endorser_proto::ReadLatestResp { receipt } = res.unwrap().into_inner();
-      let res = Receipt::from_bytes(&receipt);
-      if res.is_err() {
-        eprintln!("Failed to parse a receipt");
-        continue;
-      }
-      let receipt_rs = res.unwrap();
-      receipts.push(receipt_rs);
-      if receipts.len() == quorum_size {
+      if receipt_count == quorum_size {
         break;
       }
     }
 
     match Receipt::merge_receipts(&receipts) {
       Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
     }
   }
 
@@ -564,14 +820,12 @@ impl CoordinatorState {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
-      let tx = mpsc_tx.clone();
 
+      let tx = mpsc_tx.clone();
       let block = *block_hash;
       let _job = tokio::spawn(async move {
         let res = endorser_client
@@ -580,35 +834,38 @@ impl CoordinatorState {
             expected_height: expected_height as u64,
           }))
           .await;
-        let _ = tx.send(res).await;
+        let _ = tx.send((endorser, res)).await;
       });
     }
 
     drop(mpsc_tx);
 
-    let quorum_size = (endorsers.len() / 2) + 1;
     let mut receipts: Vec<Receipt> = Vec::new();
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to append to the view ledger of an endorser");
-        continue;
-      }
-      let endorser_proto::AppendViewLedgerResp { receipt } = res.unwrap().into_inner();
-      let res = Receipt::from_bytes(&receipt);
-      if res.is_err() {
-        eprintln!("Failed to parse a receipt");
-        continue;
-      }
-      let receipt_rs = res.unwrap();
-      receipts.push(receipt_rs);
-      if receipts.len() == quorum_size {
-        break;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(resp) => {
+          let endorser_proto::AppendViewLedgerResp { receipt } = resp.into_inner();
+          let res = Receipt::from_bytes(&receipt);
+          match res {
+            Ok(receipt_rs) => receipts.push(receipt_rs),
+            Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
+          }
+        },
+        Err(status) => {
+          eprintln!(
+            "Failed to append view ledger to endorser {} (status={:?})",
+            endorser, status
+          );
+          if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            let _ = self.disconnect_endorser(&endorser).await;
+          }
+        },
       }
     }
 
     match Receipt::merge_receipts(&receipts) {
       Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersInDifferentViews),
+      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
     }
   }
 
@@ -620,14 +877,12 @@ impl CoordinatorState {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
-      let tx = mpsc_tx.clone();
 
+      let tx = mpsc_tx.clone();
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
         let res = endorser_client
@@ -635,36 +890,45 @@ impl CoordinatorState {
             to_lock,
           }))
           .await;
-        tx.send((pk_bytes, res)).await.unwrap();
+        tx.send((endorser, pk_bytes, res)).await.unwrap();
       });
     }
 
     drop(mpsc_tx);
 
     let mut ledger_views = Vec::new();
-    while let Some((pk, res)) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to read latest state of an endorser");
-        continue;
+    while let Some((endorser, pk, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(resp) => {
+          let endorser_proto::ReadLatestStateResp {
+            ledger_tail_map,
+            view_tail_metablock,
+          } = resp.into_inner();
+          let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
+            .into_iter()
+            .map(|e| {
+              (
+                NimbleDigest::from_bytes(&e.handle).unwrap(),
+                MetaBlock::from_bytes(&e.metablock).unwrap(),
+              )
+            })
+            .collect();
+          let ledger_view = LedgerView {
+            view_tail_metablock: MetaBlock::from_bytes(&view_tail_metablock).unwrap(),
+            ledger_tail_map: ledger_tail_map_rs,
+          };
+          ledger_views.push((PublicKey::from_bytes(&pk).unwrap(), ledger_view));
+        },
+        Err(status) => {
+          eprintln!(
+            "Failed to read the latest state of endorser {} (status={:?})",
+            endorser, status
+          );
+          if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            let _ = self.disconnect_endorser(&endorser).await;
+          }
+        },
       }
-      let endorser_proto::ReadLatestStateResp {
-        ledger_tail_map,
-        view_tail_metablock,
-      } = res.unwrap().into_inner();
-      let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
-        .into_iter()
-        .map(|e| {
-          (
-            NimbleDigest::from_bytes(&e.handle).unwrap(),
-            MetaBlock::from_bytes(&e.metablock).unwrap(),
-          )
-        })
-        .collect();
-      let ledger_view = LedgerView {
-        view_tail_metablock: MetaBlock::from_bytes(&view_tail_metablock).unwrap(),
-        ledger_tail_map: ledger_tail_map_rs,
-      };
-      ledger_views.push((PublicKey::from_bytes(&pk).unwrap(), ledger_view));
     }
 
     Ok(ledger_views)
@@ -674,31 +938,31 @@ impl CoordinatorState {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let mut endorser_client = match self.get_endorser_client(pk) {
-        Some(client) => client,
-        None => {
-          continue;
-        },
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
       };
+
       let tx = mpsc_tx.clone();
       let _job = tokio::spawn(async move {
         let res = endorser_client
           .unlock(tonic::Request::new(endorser_proto::UnlockReq {}))
           .await;
-        if res.is_err() {
-          eprintln!("Failed to unlock an endorser");
-          return;
-        }
-        tx.send(res).await.unwrap();
+        let _ = tx.send((endorser, res)).await;
       });
     }
 
     drop(mpsc_tx);
 
-    while let Some(res) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("Failed to unlock an endorser");
-        continue;
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(_resp) => {},
+        Err(status) => {
+          eprintln!("Failed to unlock endorser {}", endorser);
+          if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            let _ = self.disconnect_endorser(&endorser).await;
+          }
+        },
       }
     }
 
@@ -745,11 +1009,14 @@ impl CoordinatorState {
       }
     }
 
-    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(32);
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     // Update endorsers to the max cut
     for (pk, ledger_view) in ledger_views {
-      let client = self.get_endorser_client(&pk.to_bytes()).unwrap();
+      let (client, endorser) = match self.get_endorser_client(&pk.to_bytes()) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
+      };
 
       for (handle, metablock) in max_cut.ledger_tail_map.iter() {
         if ledger_view.ledger_tail_map.contains_key(handle)
@@ -771,9 +1038,9 @@ impl CoordinatorState {
 
         let ledger_store = self.ledger_store.clone();
         let endorser_client = client.clone();
+        let endorser_uri = endorser.clone();
         let ledger_handle = *handle;
         let tx = mpsc_tx.clone();
-        let pk_bytes = pk.to_bytes();
         let _job = tokio::spawn(async move {
           let res = update_endorser(
             ledger_store,
@@ -784,16 +1051,39 @@ impl CoordinatorState {
             true,
           )
           .await;
-          tx.send((pk_bytes, res)).await.unwrap();
+          let _ = tx.send((endorser_uri, res)).await;
         });
       }
     }
 
     drop(mpsc_tx);
 
-    while let Some((pk_bytes, res)) = mpsc_rx.recv().await {
-      if res.is_err() {
-        eprintln!("failed to update endorser pk={:?} res={:?}", pk_bytes, res);
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      if let Err(status) = res {
+        match status.code() {
+          Code::Aborted => eprintln!("LEDGER_STORE error!"),
+          Code::AlreadyExists => {},
+          Code::Internal | Code::Unavailable | Code::Unknown => {
+            // disconnect endorser
+            eprintln!(
+              "endorser {} became unavailable due to {:?}",
+              endorser, status
+            );
+            let res = self.disconnect_endorser(&endorser).await;
+            if let Err(error) = res {
+              eprintln!(
+                "Failed to remove endorser {} from the cohort (err={:?}",
+                endorser, error
+              );
+            } else {
+              eprintln!("Removed endorser {} from the cohort", endorser);
+            }
+          },
+          _ => eprintln!(
+            "Failed to update endorser {} with an unknown status {:?}",
+            endorser, status
+          ),
+        }
       }
     }
 
@@ -803,14 +1093,9 @@ impl CoordinatorState {
   pub async fn add_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     let existing_endorsers = self.get_endorser_pks();
 
+    println!("{}", line!());
     // Connect to new endorsers
-    let res = self.connect_endorsers(hostnames).await;
-    if res.is_err() {
-      eprintln!("Failed to connect to endorsers {:?}", res);
-      return Err(CoordinatorError::FailedToConnectToEndorser);
-    }
-    let new_endorsers = res.unwrap();
-
+    let new_endorsers = self.connect_endorsers(hostnames).await;
     if new_endorsers.is_empty() {
       eprintln!("no new endorsers added!");
       return Err(CoordinatorError::NoNewEndorsers);
@@ -1039,7 +1324,7 @@ impl CoordinatorState {
         None => self.get_endorser_pks(),
       };
       let res = self
-        .endorser_append_ledger(&endorsers, &handle, &hash_of_block, actual_height, false)
+        .endorser_append_ledger(&endorsers, &handle, &hash_of_block, actual_height)
         .await;
       if res.is_err() {
         eprintln!("Failed to append to the ledger in endorsers {:?}", res);
@@ -1079,7 +1364,7 @@ impl CoordinatorState {
 
     let handle = NimbleDigest::digest(handle_bytes);
 
-    let (ledger_block, _height) = {
+    let (ledger_block, height) = {
       let res = self.ledger_store.read_ledger_tail(&handle).await;
       if res.is_err() {
         eprintln!(
@@ -1094,7 +1379,7 @@ impl CoordinatorState {
     let receipt = {
       let endorsers = self.get_endorser_pks();
       let res = self
-        .endorser_read_ledger_tail(&endorsers, &handle, &nonce)
+        .endorser_read_ledger_tail(&endorsers, &handle, &nonce, height)
         .await;
       if res.is_err() {
         eprintln!(

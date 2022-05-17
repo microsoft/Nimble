@@ -17,12 +17,12 @@ endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, receipt_
   return dispatcher.new_ledger(handle, block_hash, receipt);
 }
 
-endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt) {
-  return dispatcher.read_latest(handle, nonce, receipt);
+endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
+  return dispatcher.read_latest(handle, nonce, expected_height, current_height, receipt);
 }
 
-endorser_status_code append(handle_t* handle, digest_t* block_hash, uint64_t expected_height, receipt_t* receipt) {
-  return dispatcher.append(handle, block_hash, expected_height, receipt);
+endorser_status_code append(handle_t* handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
+  return dispatcher.append(handle, block_hash, expected_height, current_height, receipt);
 }
 
 endorser_status_code append_view_ledger(digest_t* block_hash, uint64_t expected_height, receipt_t* receipt) {

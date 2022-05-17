@@ -1,7 +1,7 @@
 mod coordinator_state;
 mod errors;
 
-use crate::{coordinator_state::CoordinatorState, errors::CoordinatorError};
+use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::collections::HashMap;
 use tonic::{transport::Server, Request, Response, Status};
@@ -245,12 +245,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator = res.unwrap();
 
   if !endorser_hostnames.is_empty() {
-    let res = coordinator.add_endorsers(&endorser_hostnames).await;
-    assert!(
-      res.is_ok()
-        || (res.unwrap_err() == CoordinatorError::NoNewEndorsers
-          && !coordinator.get_endorser_pks().is_empty())
-    );
+    let _ = coordinator.add_endorsers(&endorser_hostnames).await;
+  }
+  if coordinator.get_endorser_pks().is_empty() {
+    panic!("No endorsers are available!");
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
@@ -645,6 +643,23 @@ mod tests {
     println!("append_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
+    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let latest_state_query = tonic::Request::new(ReadLatestReq {
+      handle: new_handle2.clone(),
+      nonce: nonce.to_vec(),
+    });
+
+    let ReadLatestResp { block, receipt } = server
+      .read_latest(latest_state_query)
+      .await
+      .unwrap()
+      .into_inner();
+    assert_eq!(block, message2);
+
+    let is_latest_valid = verify_read_latest(&vs, &new_handle2, &block, nonce.as_ref(), &receipt);
+    println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
+    assert!(is_latest_valid.is_ok());
+
     // Step 10: add the third endorser
     let endorser_args3 = endorser_args.clone() + " -p 9092";
     let mut endorser3 = BoxChild {
@@ -661,7 +676,7 @@ mod tests {
       if buflen == 0 {
         break;
       }
-      if endorser2_output.contains("listening on") {
+      if endorser3_output.contains("listening on") {
         break;
       }
     }

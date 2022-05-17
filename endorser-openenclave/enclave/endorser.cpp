@@ -108,7 +108,7 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
   // check if the endorser is already initialized 
   // and return an error if the endorser is already initialized
   if (this->is_initialized) {
-    ret = endorser_status_code::ABORTED;
+    ret = endorser_status_code::ALREADY_EXISTS;
     goto exit;
   }
 
@@ -121,7 +121,7 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
     // check if the handle already exists
     if (this->ledger_tail_map.find(*handle) != this->ledger_tail_map.end()) {
       TRACE_ENCLAVE("[Enclave] initialize_state:: Handle already exists %d",(int) this->ledger_tail_map.count(*handle));
-      ret = endorser_status_code::ALREADY_EXISTS;
+      ret = endorser_status_code::INVALID_ARGUMENT;
       goto exit;
     }
  
@@ -148,7 +148,7 @@ endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *bl
 
   // check if the state is initialized
   if (!is_initialized) {
-    ret = endorser_status_code::UNAVAILABLE;
+    ret = endorser_status_code::UNIMPLEMENTED;
     goto exit;
   }
 
@@ -180,13 +180,13 @@ exit:
   return ret;
 }
   
-endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt) {
+endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
   // check if the state is initialized
   if (!is_initialized) {
-    ret = endorser_status_code::UNAVAILABLE;
+    ret = endorser_status_code::UNIMPLEMENTED;
   } else {
     // check if the handle exists, exit if there is no handle found to read
     auto it = this->ledger_tail_map.find(*handle);
@@ -194,10 +194,22 @@ endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* no
       ret = endorser_status_code::NOT_FOUND;
       TRACE_ENCLAVE("[Read Latest] Exited at the handle existence check. Requested Handle does not exist\n");
     } else {
-      res = calc_receipt(handle, &it->second.first, &it->second.second, &this->view_ledger_tail_hash, nonce, this->eckey, this->public_key, receipt);
-      if (res == 0) {
-        ret = endorser_status_code::INTERNAL;
-	      TRACE_ENCLAVE("Error producing a signature");
+      metablock_t *metablock = &it->second.first;
+      digest_t *metablock_hash = &it->second.second;
+      *current_height = metablock->height;
+
+      if (expected_height < metablock->height) {
+        ret = endorser_status_code::INVALID_ARGUMENT;
+        TRACE_ENCLAVE("The expected tail height is too small");
+      } else if (expected_height > metablock->height) {
+        ret = endorser_status_code::FAILED_PRECONDITION;
+        TRACE_ENCLAVE("The expected tail height is out of order");
+      } else {
+        res = calc_receipt(handle, metablock, metablock_hash, &this->view_ledger_tail_hash, nonce, this->eckey, this->public_key, receipt);
+        if (res == 0) {
+          ret = endorser_status_code::INTERNAL;
+          TRACE_ENCLAVE("Error producing a signature");
+        }
       }
     }
   }
@@ -205,7 +217,7 @@ endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* no
   return ret;
 }
   
-endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, receipt_t* receipt) {
+endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
@@ -214,7 +226,7 @@ endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_
  
   // check if the state is initialized
   if (!is_initialized) {
-    ret = endorser_status_code::UNAVAILABLE;
+    ret = endorser_status_code::UNIMPLEMENTED;
   } else {
     // check if the handle exists
     auto it = this->ledger_tail_map.find(*handle);
@@ -227,6 +239,7 @@ endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_
     // obtain the current value of the current tail and height
     metablock_t *metablock = &it->second.first;
     digest_t *metablock_hash = &it->second.second;
+    *current_height = metablock->height;
 
     // check for integer overflow of height
     if (metablock->height == ULLONG_MAX) {
@@ -296,7 +309,7 @@ endorser_status_code ecall_dispatcher::append_view_ledger(digest_t* block_hash, 
  
   // check if the state is initialized
   if (!is_initialized) {
-    ret = endorser_status_code::UNAVAILABLE;
+    ret = endorser_status_code::UNIMPLEMENTED;
     goto exit;
   } 
   

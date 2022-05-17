@@ -34,6 +34,7 @@ message NewLedgerResp {
 message ReadLatestReq {
   bytes handle = 1;
   bytes nonce = 2;
+  uint64 expected_height = 3;
 }
 
 message ReadLatestResp {

@@ -106,8 +106,8 @@ static StatusCode call_endorser(
     endorser_id_t *endorser_id,
     handle_t *handle,
     receipt_t *receipt,
-    nonce_t *nonce,
-    append_ledger_data_t *ledger_data,
+    read_ledger_data_t *read_ledger_data,
+    append_ledger_data_t *append_ledger_data,
     bool ignore_lock
 ) {
     chain_t chain;
@@ -125,7 +125,7 @@ static StatusCode call_endorser(
         if (endorser_locked && !ignore_lock) {
             status = StatusCode::CANCELLED;
         } else if (init_chain(handle, NULL, &chain)) {
-            status = enclu_call(create_ledger_call, &chain, ledger_data, receipt);
+            status = enclu_call(create_ledger_call, &chain, append_ledger_data, receipt);
             if (status == StatusCode::OK)
                 insert_chain(&chain);
         } else {
@@ -134,7 +134,7 @@ static StatusCode call_endorser(
         break;
     case read_ledger_call:
         if (find_chain(handle, &chain)) {
-            status = enclu_call(read_ledger_call, &chain, nonce, receipt);
+            status = enclu_call(read_ledger_call, &chain, read_ledger_data, receipt);
             if (status == StatusCode::OK)
                 update_chain(&chain);
         } else {
@@ -145,7 +145,7 @@ static StatusCode call_endorser(
         if (endorser_locked && !ignore_lock) {
             status = StatusCode::CANCELLED;
         } else if (find_chain(handle, &chain)) {
-            status = enclu_call(append_ledger_call, &chain, ledger_data, receipt);
+            status = enclu_call(append_ledger_call, &chain, append_ledger_data, receipt);
             if (status == StatusCode::OK)
                 update_chain(&chain);
         } else {
@@ -153,7 +153,7 @@ static StatusCode call_endorser(
         }
         break;
     case append_view_ledger_call:
-        status = enclu_call(append_view_ledger_call, ledger_data, receipt, NULL);
+        status = enclu_call(append_view_ledger_call, append_ledger_data, receipt, NULL);
         break;
     default:
         status = StatusCode::INVALID_ARGUMENT;
@@ -217,7 +217,7 @@ StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail
     endorser_call_mutex.lock();
 
     if (initialized) {
-        status = StatusCode::ABORTED;
+        status = StatusCode::ALREADY_EXISTS;
         goto exit;
     }
     initialized = true;
@@ -227,7 +227,7 @@ StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail
         metablock_t *metablock = (metablock_t *)it->metablock().c_str();
 
         if (!init_chain((handle_t *)it->handle().c_str(), metablock, &chain)) {
-            status = StatusCode::ALREADY_EXISTS;
+            status = StatusCode::INVALID_ARGUMENT;
             goto exit;
         }
 
@@ -243,8 +243,16 @@ exit:
     return status;
 }
 
-StatusCode read_endorser(bool to_lock) {
-    return StatusCode::OK;
+uint64_t get_height(handle_t* handle) {
+    chain_t chain;
+
+    if (find_chain(handle, &chain)) {
+        return chain.metablock.height;
+    } else {
+        // this shouldn't happen!
+        assert(0);
+        return 0;
+    }
 }
 
 class EndorserCallServiceImpl final: public EndorserCall::Service {
@@ -302,6 +310,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
         string h = request->handle();
         string n = request->nonce();
+        uint64_t expected_height = request->expected_height();
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
         }
@@ -311,9 +320,11 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Request data
         handle_t handle;
-        nonce_t nonce;
+        read_ledger_data_t read_ledger_data;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
+        memcpy(read_ledger_data.block_hash.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        memcpy(read_ledger_data.nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
+        read_ledger_data.expected_height = expected_height;
 
         // Response data
         receipt_t receipt;
@@ -321,11 +332,17 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           NULL,
                                           &handle,
                                           &receipt,
-                                          &nonce,
+                                          &read_ledger_data,
                                           NULL,
                                           true);
-        if (status != StatusCode::OK)
-            return Status(status, "failed to read a ledger");
+        if (status != StatusCode::OK) {
+            if (status == StatusCode::FAILED_PRECONDITION) {
+                uint64_t height = get_height(&handle);
+                return Status(status, "Out of order", std::string((const char *)&height, sizeof(uint64_t)));
+            } else {
+                return Status(status, "failed to read a ledger");
+            }
+        }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;
@@ -346,11 +363,11 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Request data
         handle_t handle;
-        append_ledger_data_t ledger_data;
+        append_ledger_data_t append_ledger_data;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
-        ledger_data.expected_height = expected_height;
-        ledger_data.ignore_lock = ignore_lock;
+        memcpy(append_ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
+        append_ledger_data.expected_height = expected_height;
+        append_ledger_data.ignore_lock = ignore_lock;
 
         // Response data
         receipt_t receipt;
@@ -359,10 +376,16 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           &handle,
                                           &receipt,
                                           NULL,
-                                          &ledger_data,
+                                          &append_ledger_data,
                                           ignore_lock);
-        if (status != StatusCode::OK)
-            return Status(status, "failed to append to a ledger");
+        if (status != StatusCode::OK) {
+            if (status == StatusCode::FAILED_PRECONDITION) {
+                uint64_t height = get_height(&handle);
+                return Status(status, "Out of order", std::string((const char *)&height, sizeof(uint64_t)));
+            } else {
+                return Status(status, "failed to append to a ledger");
+            }
+        }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
         return Status::OK;

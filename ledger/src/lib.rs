@@ -239,6 +239,17 @@ impl Receipt {
     &self.metablock
   }
 
+  fn extend_id_sigs(&mut self, id_sigs: &[IdSig]) {
+    for new_id_sig in id_sigs {
+      let id_sig = self.id_sigs.iter().find(|existing_id_sig| {
+        existing_id_sig.get_id().to_bytes() == new_id_sig.get_id().to_bytes()
+      });
+      if id_sig.is_none() {
+        self.id_sigs.push(new_id_sig.clone());
+      }
+    }
+  }
+
   pub fn append(&mut self, receipt: &Receipt) -> Result<(), VerificationError> {
     if self.get_metablock_hash() == MetaBlock::default().hash() {
       assert!(self.id_sigs.is_empty());
@@ -248,7 +259,7 @@ impl Receipt {
     } else if self.view == *receipt.get_view()
       && self.get_metablock_hash() == receipt.get_metablock_hash()
     {
-      self.id_sigs.extend(receipt.get_id_sigs().clone());
+      self.extend_id_sigs(receipt.get_id_sigs());
     } else {
       eprintln!("receipt1: {:?}", self);
       eprintln!("receipt2: {:?}", receipt);
