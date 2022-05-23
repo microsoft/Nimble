@@ -12,6 +12,7 @@ service EndorserCall {
   rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
   rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
   rpc Unlock(UnlockReq) returns (UnlockResp);
+  rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
 }
 
 message GetPublicKeyReq {
@@ -94,4 +95,12 @@ message UnlockReq {
 }
 
 message UnlockResp {
+}
+
+message ReadLatestViewLedgerReq {
+
+}
+
+message ReadLatestViewLedgerResp {
+  bytes view_tail_metablock = 1; // the view ledger tail's metablock
 }

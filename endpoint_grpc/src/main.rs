@@ -145,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let endpoint_grpc_state = EndpointGrpcState::new(coordinator_hostname.to_string()).await;
 
+  println!("Running endpoint at {}", addr);
   Server::builder()
     .add_service(CallServer::new(endpoint_grpc_state))
     .serve(addr)

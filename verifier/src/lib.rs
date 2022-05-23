@@ -68,6 +68,19 @@ impl VerifierState {
     let receipt =
       Receipt::from_bytes(receipt_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
 
+    // only use pks in the receipt
+    let id_sigs = receipt.get_id_sigs();
+    pk_vec_for_proposed_latest_view = pk_vec_for_proposed_latest_view
+      .iter()
+      .filter(|pk| {
+        let id_sig = id_sigs
+          .iter()
+          .find(|id_sig| id_sig.get_id().to_bytes() == pk.to_bytes());
+        id_sig.is_some()
+      })
+      .cloned()
+      .collect::<Vec<PublicKey>>();
+
     // check if this is the first view change
     if self.latest_view == NimbleDigest::default() {
       // check that the metablock is well formed

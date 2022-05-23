@@ -3,7 +3,7 @@ mod errors;
 
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod coordinator_proto {
@@ -17,12 +17,23 @@ use coordinator_proto::{
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 
+use axum::{
+  extract::{Extension, Path},
+  http::StatusCode,
+  response::IntoResponse,
+  routing::get,
+  Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tower::ServiceBuilder;
+
 pub struct CoordinatorServiceState {
-  state: CoordinatorState,
+  state: Arc<CoordinatorState>,
 }
 
 impl CoordinatorServiceState {
-  pub fn new(coordinator: CoordinatorState) -> Self {
+  pub fn new(coordinator: Arc<CoordinatorState>) -> Self {
     CoordinatorServiceState { state: coordinator }
   }
 
@@ -154,6 +165,152 @@ impl Call for CoordinatorServiceState {
   }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct EndorserOpResponse {
+  #[serde(rename = "PublicKey")]
+  pub pk: String,
+}
+
+async fn get_endorser(
+  Path(uri): Path<String>,
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+  let res = base64_url::decode(&uri);
+  if res.is_err() {
+    eprintln!("received a bad endorser uri {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri = res.unwrap();
+
+  let res = std::str::from_utf8(&endorser_uri);
+  if res.is_err() {
+    eprintln!(
+      "cannot convert the endorser uri {:?} to string {:?}",
+      endorser_uri, res
+    );
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri_str = res.unwrap();
+
+  let res = state.get_endorser_pk(endorser_uri_str);
+  match res {
+    None => {
+      eprintln!(
+        "failed to delete the endorser {} ({:?})",
+        endorser_uri_str, res
+      );
+      (StatusCode::BAD_REQUEST, Json(json!({})))
+    },
+    Some(pk) => {
+      let resp = EndorserOpResponse {
+        pk: base64_url::encode(&pk),
+      };
+      (StatusCode::OK, Json(json!(resp)))
+    },
+  }
+}
+
+async fn new_endorser(
+  Path(uri): Path<String>,
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+  let res = base64_url::decode(&uri);
+  if res.is_err() {
+    eprintln!("received a bad endorser uri {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri = res.unwrap();
+
+  let res = String::from_utf8(endorser_uri.clone());
+  if res.is_err() {
+    eprintln!(
+      "cannot convert the endorser uri {:?} to string {:?}",
+      endorser_uri, res
+    );
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri_string = res.unwrap();
+
+  let res = state.add_endorsers(&[endorser_uri_string]).await;
+  if res.is_err() {
+    eprintln!("failed to add the endorser ({:?})", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+
+  let res = std::str::from_utf8(&endorser_uri);
+  if res.is_err() {
+    eprintln!(
+      "cannot convert the endorser uri {:?} to string {:?}",
+      endorser_uri, res
+    );
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri_str = res.unwrap();
+  let res = state.get_endorser_pk(endorser_uri_str);
+  match res {
+    None => {
+      eprintln!(
+        "failed to add the endorser {} ({:?})",
+        endorser_uri_str, res
+      );
+      (StatusCode::BAD_REQUEST, Json(json!({})))
+    },
+    Some(pk) => {
+      let resp = EndorserOpResponse {
+        pk: base64_url::encode(&pk),
+      };
+      (StatusCode::OK, Json(json!(resp)))
+    },
+  }
+}
+
+async fn delete_endorser(
+  Path(uri): Path<String>,
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+  let res = base64_url::decode(&uri);
+  if res.is_err() {
+    eprintln!("received a bad endorser uri {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri = res.unwrap();
+
+  let res = std::str::from_utf8(&endorser_uri);
+  if res.is_err() {
+    eprintln!(
+      "cannot convert the endorser uri {:?} to string {:?}",
+      endorser_uri, res
+    );
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorser_uri_str = res.unwrap();
+
+  let res = state.get_endorser_pk(endorser_uri_str);
+  let resp = match res {
+    None => {
+      eprintln!(
+        "failed to find the endorser {} ({:?})",
+        endorser_uri_str, res
+      );
+      return (StatusCode::BAD_REQUEST, Json(json!({})));
+    },
+    Some(pk) => EndorserOpResponse {
+      pk: base64_url::encode(&pk),
+    },
+  };
+
+  let res = state.disconnect_endorser(endorser_uri_str).await;
+  if res.is_err() {
+    eprintln!(
+      "failed to delete the endorser {} ({:?})",
+      endorser_uri_str, res
+    );
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+
+  (StatusCode::OK, Json(json!(resp)))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
@@ -207,6 +364,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .default_value("8080"),
     )
     .arg(
+      Arg::with_name("ctrl")
+        .short("r")
+        .long("ctrl")
+        .help("The port number to run the coordinator control service on.")
+        .default_value("8090"),
+    )
+    .arg(
       Arg::with_name("endorser")
         .short("e")
         .long("endorser")
@@ -218,6 +382,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
   let port_number = cli_matches.value_of("port").unwrap();
+  let ctrl_port = cli_matches.value_of("ctrl").unwrap();
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
@@ -252,9 +417,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
-  let server = CoordinatorServiceState::new(coordinator);
-  println!("Running gRPC Coordinator Service at {:?}", addr);
+  let coordinator_ref = Arc::new(coordinator);
 
+  let server = CoordinatorServiceState::new(coordinator_ref.clone());
+
+  // Start the REST server for management
+  let control_server = Router::new()
+      .route("/endorsers/:uri", get(get_endorser).put(new_endorser).delete(delete_endorser))
+      // Add middleware to all routes
+      .layer(
+          ServiceBuilder::new()
+              // Handle errors from middleware
+              .layer(Extension(coordinator_ref.clone()))
+              .into_inner(),
+      );
+
+  let ctrl_addr = format!("{}:{}", hostname, ctrl_port).parse()?;
+  let _job = tokio::spawn(async move {
+    println!("Running control service at {}", ctrl_addr);
+    let _res = axum::Server::bind(&ctrl_addr)
+      .serve(control_server.into_make_service())
+      .await;
+  });
+
+  println!("Running gRPC Coordinator Service at {:?}", addr);
   Server::builder()
     .add_service(CallServer::new(server))
     .serve(addr)
@@ -277,6 +463,7 @@ mod tests {
     collections::HashMap,
     io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
+    sync::Arc,
   };
   use verifier::{
     verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest, VerifierState,
@@ -382,9 +569,11 @@ mod tests {
     }
 
     // Create the coordinator
-    let coordinator = CoordinatorState::new(&store, &ledger_store_args)
-      .await
-      .unwrap();
+    let coordinator = Arc::new(
+      CoordinatorState::new(&store, &ledger_store_args)
+        .await
+        .unwrap(),
+    );
 
     let res = coordinator
       .add_endorsers(&["http://[::1]:9090".to_string()])
@@ -432,16 +621,19 @@ mod tests {
     let handle = handle_bytes.to_vec();
 
     // Step 2: Read At Index
-    let req = tonic::Request::new(ReadByIndexReq {
-      handle: handle.clone(),
-      index: 0,
-    });
+    if cfg!(feature = "receipts") {
+      let req = tonic::Request::new(ReadByIndexReq {
+        handle: handle.clone(),
+        index: 0,
+      });
 
-    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
+      let ReadByIndexResp { block, receipt } =
+        server.read_by_index(req).await.unwrap().into_inner();
 
-    let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
-    println!("ReadByIndex: {:?}", res.is_ok());
-    assert!(res.is_ok());
+      let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
+      println!("ReadByIndex: {:?}", res.is_ok());
+      assert!(res.is_ok());
+    }
 
     // Step 3: Read Latest with the Nonce generated
     let nonce = rand::thread_rng().gen::<[u8; 16]>();
@@ -506,17 +698,20 @@ mod tests {
     assert!(is_latest_valid.is_ok());
 
     // Step 5: Read At Index
-    let req = tonic::Request::new(ReadByIndexReq {
-      handle: handle.clone(),
-      index: 1,
-    });
+    if cfg!(feature = "receipts") {
+      let req = tonic::Request::new(ReadByIndexReq {
+        handle: handle.clone(),
+        index: 1,
+      });
 
-    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
-    assert_eq!(block, b1.clone());
+      let ReadByIndexResp { block, receipt } =
+        server.read_by_index(req).await.unwrap().into_inner();
+      assert_eq!(block, b1.clone());
 
-    let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
-    println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
-    assert!(res.is_ok());
+      let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
+      println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
+      assert!(res.is_ok());
+    }
 
     // Step 6: change the view by adding a new endorser
     let endorser_args2 = endorser_args.clone() + " -p 9091";
@@ -784,9 +979,11 @@ mod tests {
       assert!(res.is_ok());
 
       // Step 13: start a new coordinator
-      let coordinator2 = CoordinatorState::new(&store, &ledger_store_args)
-        .await
-        .unwrap();
+      let coordinator2 = Arc::new(
+        CoordinatorState::new(&store, &ledger_store_args)
+          .await
+          .unwrap(),
+      );
 
       let server2 = CoordinatorServiceState::new(coordinator2);
       println!("Started a new coordinator");

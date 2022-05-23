@@ -13,6 +13,7 @@ members = [
     "light_client_grpc",
     "light_client_rest",
     "helper",
+    "coordinator_ctrl",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

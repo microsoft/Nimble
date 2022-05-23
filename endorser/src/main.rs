@@ -15,8 +15,8 @@ use endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
   GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp, UnlockReq,
-  UnlockResp,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
+  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp, UnlockReq, UnlockResp,
 };
 
 pub struct EndorserServiceState {
@@ -142,6 +142,10 @@ impl EndorserCall for EndorserServiceState {
 
     if handle_instance.is_err() || block_hash_instance.is_err() {
       return Err(Status::invalid_argument("Invalid input sizes"));
+    }
+
+    if expected_height == 0 {
+      return Err(Status::invalid_argument("Invalid expected height"));
     }
 
     let handle = handle_instance.unwrap();
@@ -347,6 +351,26 @@ impl EndorserCall for EndorserServiceState {
           None,
           "Failed to unlock an endorser due to an internal error",
         );
+        Err(status)
+      },
+    }
+  }
+
+  async fn read_latest_view_ledger(
+    &self,
+    _req: Request<ReadLatestViewLedgerReq>,
+  ) -> Result<Response<ReadLatestViewLedgerResp>, Status> {
+    let res = self.state.read_latest_view_ledger();
+
+    match res {
+      Ok(view_tail_metablock) => {
+        let reply = ReadLatestViewLedgerResp {
+          view_tail_metablock: view_tail_metablock.to_bytes(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(error) => {
+        let status = self.process_error(error, None, "Failed to read the view ledger");
         Err(status)
       },
     }

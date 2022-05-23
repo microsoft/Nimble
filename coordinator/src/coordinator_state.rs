@@ -29,9 +29,12 @@ type EndorserConnMap = HashMap<Vec<u8>, (EndorserCallClient<Channel>, String)>;
 
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
 
+type QuorumSizeMap = HashMap<NimbleDigest, usize>;
+
 pub struct CoordinatorState {
   ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
+  quorum_size: Arc<RwLock<QuorumSizeMap>>,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
@@ -71,8 +74,8 @@ async fn update_endorser(
       let endorser_proto::AppendResp { receipt } = endorser_client
         .append(tonic::Request::new(endorser_proto::AppendReq {
           handle: handle.to_bytes(),
-          block_hash: ledger_entry.get_receipt().get_block_hash().to_bytes(),
-          expected_height: ledger_entry.get_receipt().get_height() as u64,
+          block_hash: ledger_entry.get_block().hash().to_bytes(),
+          expected_height: idx as u64,
           ignore_lock,
         }))
         .await?
@@ -172,11 +175,11 @@ fn process_error(
       }
       CoordinatorAction::DoNothing
     },
-    Code::Unimplemented => {
-      eprintln!("endorser {} is not initialized", endorser);
-      CoordinatorAction::DoNothing
-    },
-    Code::Internal | Code::Unavailable | Code::Unknown => CoordinatorAction::RemoveEndorser,
+    Code::Internal
+    | Code::Unavailable
+    | Code::Unknown
+    | Code::ResourceExhausted
+    | Code::Unimplemented => CoordinatorAction::RemoveEndorser,
     _ => {
       eprintln!("Unhandled status={:?}", status);
       CoordinatorAction::DoNothing
@@ -193,18 +196,22 @@ impl CoordinatorState {
       "mongodb_cosmos" => CoordinatorState {
         ledger_store: Arc::new(Box::new(MongoCosmosLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
+        quorum_size: Arc::new(RwLock::new(HashMap::new())),
       },
       "pageblob" => CoordinatorState {
         ledger_store: Arc::new(Box::new(PageBlobLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
+        quorum_size: Arc::new(RwLock::new(HashMap::new())),
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
+        quorum_size: Arc::new(RwLock::new(HashMap::new())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
+        quorum_size: Arc::new(RwLock::new(HashMap::new())),
       },
     };
 
@@ -232,7 +239,39 @@ impl CoordinatorState {
 
       println!("endorsers in the latest view: {:?}", hostnames);
 
-      let _pks = coordinator.connect_endorsers(&hostnames).await;
+      // Read the latest view's receipt
+      let res = coordinator
+        .ledger_store
+        .read_view_ledger_by_index(tail_height)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to read the view ledger at index {} ({:?})",
+          tail_height, res
+        );
+        return Err(CoordinatorError::FailedToReadViewLedger);
+      }
+      let view_ledger_entry = res.unwrap();
+      let view_tail_hash = view_ledger_entry.get_receipt().get_metablock_hash();
+      // TODO: support failure recovery in the middle of a view change
+      assert!(view_tail_hash != NimbleDigest::default());
+
+      let pks = coordinator.connect_endorsers(&hostnames).await;
+
+      // Remove endorsers that don't have the latest view
+      let res = coordinator.filter_endorsers(&pks, &view_tail_hash).await;
+      if let Err(error) = res {
+        eprintln!(
+          "Failed to filter the endorsers with the latest view {:?}",
+          error
+        );
+        return Err(error);
+      }
+
+      // Update the quorum size map
+      coordinator
+        .set_quorum_size(view_tail_hash, hostnames.len() / 2 + 1)
+        .await;
     }
     Ok(coordinator)
   }
@@ -287,6 +326,29 @@ impl CoordinatorState {
         Vec::new()
       },
     }
+  }
+
+  pub fn get_endorser_pk(&self, hostname: &str) -> Option<Vec<u8>> {
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      for (pk, (_client, uri)) in conn_map_rd.iter() {
+        if uri == hostname {
+          return Some(pk.clone());
+        }
+      }
+    }
+    None
+  }
+
+  async fn set_quorum_size(&self, view_hash: NimbleDigest, quorum_size: usize) {
+    self
+      .quorum_size
+      .write()
+      .unwrap()
+      .insert(view_hash, quorum_size);
+  }
+
+  async fn get_quorum_size(&self, view_hash: &NimbleDigest) -> usize {
+    self.quorum_size.read().unwrap()[view_hash]
   }
 
   async fn connect_endorsers(&self, hostnames: &[String]) -> Vec<Vec<u8>> {
@@ -355,7 +417,7 @@ impl CoordinatorState {
     pks
   }
 
-  async fn disconnect_endorser(&self, hostname: &str) -> Result<(), CoordinatorError> {
+  pub async fn disconnect_endorser(&self, hostname: &str) -> Result<(), CoordinatorError> {
     let pk = {
       if let Ok(conn_map_rd) = self.conn_map.read() {
         let res = conn_map_rd
@@ -386,6 +448,71 @@ impl CoordinatorState {
       eprintln!("Failed to acquire the write lock");
       Err(CoordinatorError::FailedToAcquireWriteLock)
     }
+  }
+
+  async fn filter_endorsers(
+    &self,
+    endorsers: &[Vec<u8>],
+    view_tail_hash: &NimbleDigest,
+  ) -> Result<(), CoordinatorError> {
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+    for pk in endorsers {
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
+      };
+
+      let tx = mpsc_tx.clone();
+      let _job = tokio::spawn(async move {
+        let res = endorser_client
+          .read_latest_view_ledger(tonic::Request::new(
+            endorser_proto::ReadLatestViewLedgerReq {},
+          ))
+          .await;
+        let _ = tx.send((endorser, res)).await;
+      });
+    }
+
+    drop(mpsc_tx);
+
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      let mut to_keep = false;
+      match res {
+        Ok(resp) => {
+          let endorser_proto::ReadLatestViewLedgerResp {
+            view_tail_metablock,
+          } = resp.into_inner();
+          let res = MetaBlock::from_bytes(&view_tail_metablock);
+          match res {
+            Ok(metablock) => {
+              if metablock.hash() == *view_tail_hash {
+                to_keep = true;
+              } else {
+                eprintln!(
+                  "view_tail_hash={:?}, metablock_hash={:?}",
+                  view_tail_hash,
+                  metablock.hash()
+                );
+              }
+            },
+            Err(error) => {
+              eprintln!("Failed to parse the metablock {:?}", error);
+            },
+          }
+        },
+        Err(status) => {
+          eprintln!("Failed to get the view tail metablock {:?}", status);
+          if CoordinatorAction::RemoveEndorser != process_error(&endorser, None, &status) {
+            to_keep = true;
+          }
+        },
+      }
+      if !to_keep {
+        let _ = self.disconnect_endorser(&endorser).await;
+      }
+    }
+
+    Ok(())
   }
 
   async fn endorser_initialize_state(
@@ -447,6 +574,10 @@ impl CoordinatorState {
             endorser, status
           );
           if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            eprintln!(
+              "initialize_state from endorser {} received unexpected error {:?}",
+              endorser, status
+            );
             let _ = self.disconnect_endorser(&endorser).await;
           }
         },
@@ -491,7 +622,7 @@ impl CoordinatorState {
 
     drop(mpsc_tx);
 
-    let quorum_size = (endorsers.len() / 2) + 1;
+    let mut quorum_size = 0;
     let mut receipts: Vec<Receipt> = Vec::new();
     let mut receipt_count: usize = 0;
     while let Some((endorser, res)) = mpsc_rx.recv().await {
@@ -501,6 +632,9 @@ impl CoordinatorState {
           let res = Receipt::from_bytes(&receipt);
           match res {
             Ok(receipt_rs) => {
+              if quorum_size == 0 {
+                quorum_size = self.get_quorum_size(receipt_rs.get_view()).await;
+              }
               receipts.push(receipt_rs);
               receipt_count += 1;
             },
@@ -517,6 +651,10 @@ impl CoordinatorState {
               receipt_count += 1;
             },
             CoordinatorAction::RemoveEndorser => {
+              eprintln!(
+                "create_ledger from endorser {} received unexpected error {:?}",
+                endorser, status
+              );
               let _ = self.disconnect_endorser(&endorser).await;
             },
             _ => {},
@@ -639,13 +777,16 @@ impl CoordinatorState {
 
     drop(mpsc_tx);
 
-    let quorum_size = (endorsers.len() / 2) + 1;
+    let mut quorum_size = 0;
     let mut receipts: Vec<Receipt> = Vec::new();
     let mut receipt_count = 0;
     while let Some((endorser, res)) = mpsc_rx.recv().await {
       match res {
         Ok(receipt) => match Receipt::from_bytes(&receipt) {
           Ok(receipt_rs) => {
+            if quorum_size == 0 {
+              quorum_size = self.get_quorum_size(receipt_rs.get_view()).await;
+            }
             receipts.push(receipt_rs);
             receipt_count += 1;
           },
@@ -658,6 +799,10 @@ impl CoordinatorState {
             receipt_count += 1;
           },
           CoordinatorError::UnexpectedError => {
+            eprintln!(
+              "append_ledger from endorser {} received unexpected error {:?}",
+              endorser, error
+            );
             let _ = self.disconnect_endorser(&endorser).await;
           },
           _ => {},
@@ -778,13 +923,16 @@ impl CoordinatorState {
 
     drop(mpsc_tx);
 
-    let quorum_size = (endorsers.len() / 2) + 1;
+    let mut quorum_size = 0;
     let mut receipts: Vec<Receipt> = Vec::new();
     let mut receipt_count = 0;
     while let Some((endorser, res)) = mpsc_rx.recv().await {
       match res {
         Ok(receipt) => match Receipt::from_bytes(&receipt) {
           Ok(receipt_rs) => {
+            if quorum_size == 0 {
+              quorum_size = self.get_quorum_size(receipt_rs.get_view()).await;
+            }
             receipts.push(receipt_rs);
             receipt_count += 1;
           },
@@ -797,6 +945,10 @@ impl CoordinatorState {
             receipt_count += 1;
           },
           CoordinatorError::UnexpectedError => {
+            eprintln!(
+              "read_ledger from endorser {} received unexpected error {:?}",
+              endorser, error
+            );
             let _ = self.disconnect_endorser(&endorser).await;
           },
           _ => {},
@@ -1095,11 +1247,9 @@ impl CoordinatorState {
   pub async fn add_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     let existing_endorsers = self.get_endorser_pks();
 
-    println!("{}", line!());
     // Connect to new endorsers
     let new_endorsers = self.connect_endorsers(hostnames).await;
     if new_endorsers.is_empty() {
-      eprintln!("no new endorsers added!");
       return Err(CoordinatorError::NoNewEndorsers);
     }
 
@@ -1214,6 +1364,14 @@ impl CoordinatorState {
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
+
+    // Update quorum size
+    self
+      .set_quorum_size(
+        receipt.get_metablock_hash(),
+        endorser_pk_hostnames.pk_hostnames.len() / 2 + 1,
+      )
+      .await;
 
     let res = self.unlock_endorsers(&existing_endorsers).await;
     if res.is_err() {

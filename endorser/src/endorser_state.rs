@@ -224,7 +224,6 @@ impl EndorserState {
                 res.unwrap()
               };
 
-              assert!(expected_height != 0);
               if expected_height < height_plus_one {
                 return Err(EndorserError::LedgerExists);
               }
@@ -375,6 +374,14 @@ impl EndorserState {
       Ok(())
     } else {
       Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
+    }
+  }
+
+  pub fn read_latest_view_ledger(&self) -> Result<MetaBlock, EndorserError> {
+    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
+      Ok(view_ledger_state.view_ledger_tail_metablock.clone())
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
     }
   }
 }

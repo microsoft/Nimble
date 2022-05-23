@@ -104,11 +104,8 @@ pub struct Block {
   block: Vec<u8>,
 }
 
-const MAX_BLOCK_SIZE: usize = 256;
-
 impl Block {
   pub fn new(bytes: &[u8]) -> Self {
-    assert!(bytes.len() <= MAX_BLOCK_SIZE);
     Block {
       block: bytes.to_vec(),
     }
@@ -328,7 +325,7 @@ impl Receipt {
     &self,
     msg: &[u8],
     pk_vec_existing: &[PublicKey],
-    pk_vec_proposed: &[PublicKey],
+    _pk_vec_proposed: &[PublicKey],
   ) -> Result<(), VerificationError> {
     // check if the provided public keys in the receipt are unique
     let unique_ids = {
@@ -358,32 +355,6 @@ impl Receipt {
 
     // check if we have the simple majority
     if num_sigs_from_pk_vec_existing < pk_vec_existing.len() / 2 + 1 {
-      return Err(VerificationError::InsufficientQuorum);
-    }
-
-    let pk_vec_proposed_but_not_in_existing = {
-      // compute the set difference between pk_vec_proposed and pk_vec_existing
-      let mut diff = HashSet::new();
-      for pk in pk_vec_proposed {
-        diff.insert(pk.to_bytes());
-      }
-      for pk in pk_vec_existing {
-        diff.remove(&pk.to_bytes());
-      }
-      diff
-    };
-
-    // check that we have a signature from every public key in pk_vec_proposed_but_not_in_existing
-    let mut num_sigs_from_pk_vec_proposed_but_not_in_existing = 0;
-    for pk in &pk_vec_proposed_but_not_in_existing {
-      if self.id_sigs.iter().any(|x| x.get_id().to_bytes() == *pk) {
-        num_sigs_from_pk_vec_proposed_but_not_in_existing += 1;
-      }
-    }
-
-    if num_sigs_from_pk_vec_proposed_but_not_in_existing
-      != pk_vec_proposed_but_not_in_existing.len()
-    {
       return Err(VerificationError::InsufficientQuorum);
     }
 

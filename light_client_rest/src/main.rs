@@ -58,7 +58,7 @@ async fn main() {
   let config = App::new("client").arg(
     Arg::with_name("endpoint")
       .help("The hostname of the endpoint")
-      .default_value("http://127.0.0.1:8082")
+      .default_value("http://[::1]:8082")
       .index(1),
   );
   let cli_matches = config.get_matches();
