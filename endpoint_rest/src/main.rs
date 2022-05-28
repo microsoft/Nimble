@@ -7,6 +7,7 @@ use axum::{
   routing::get,
   Json, Router,
 };
+use axum_server::tls_rustls::RustlsConfig;
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 use tower::ServiceBuilder;
@@ -38,12 +39,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("port")
         .help("The port number to run the coordinator service on.")
         .default_value("8082"),
+    )
+    .arg(
+      Arg::with_name("cert")
+        .short("e")
+        .long("cert")
+        .takes_value(true)
+        .help("The certificate to run tls"),
+    )
+    .arg(
+      Arg::with_name("key")
+        .short("k")
+        .long("key")
+        .takes_value(true)
+        .help("The key to run tls"),
     );
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
   let port_num = cli_matches.value_of("port").unwrap();
   let addr = format!("{}:{}", hostname, port_num).parse()?;
   let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
+  let cert = cli_matches.value_of("cert");
+  let key = cli_matches.value_of("key");
 
   let endpoint_state = Arc::new(EndpointState::new(coordinator_hostname).await.unwrap());
 
@@ -61,11 +78,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Run our app with hyper
   println!("Running endpoint at {}", addr);
-  axum::Server::bind(&addr)
-    .serve(app.into_make_service())
-    .await
-    .unwrap();
+  if let Some(c) = cert {
+    if let Some(k) = key {
+      let config = RustlsConfig::from_pem_file(c, k).await.unwrap();
 
+      axum_server::bind_rustls(addr, config)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+    } else {
+      panic!("cert and key must be provided together!");
+    }
+  } else {
+    axum::Server::bind(&addr)
+      .serve(app.into_make_service())
+      .await
+      .unwrap();
+  }
   Ok(())
 }
 

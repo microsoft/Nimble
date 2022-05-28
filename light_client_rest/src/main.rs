@@ -64,7 +64,12 @@ async fn main() {
   let cli_matches = config.get_matches();
   let endpoint_addr = cli_matches.value_of("endpoint").unwrap();
 
-  let client = reqwest::Client::new();
+  let client = reqwest::ClientBuilder::new()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .use_rustls_tls()
+    .build()
+    .unwrap();
 
   // Step 0: Obtain the identity and public key of the instance
   let get_identity_url = reqwest::Url::parse(&format!("{}/serviceid", endpoint_addr)).unwrap();
