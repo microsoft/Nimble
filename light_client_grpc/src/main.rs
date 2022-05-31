@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       id.to_bytes(),
       handle_bytes,
       tag_bytes,
-      1_usize
+      0_usize
     );
     NimbleDigest::digest(s.as_bytes())
   };

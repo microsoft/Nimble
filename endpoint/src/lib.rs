@@ -253,7 +253,7 @@ impl EndpointState {
         self.id.to_bytes(),
         handle,
         tag,
-        1_usize
+        0_usize
       );
       NimbleDigest::digest(s.as_bytes())
     };
