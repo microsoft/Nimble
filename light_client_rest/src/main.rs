@@ -118,11 +118,11 @@ async fn main() {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "NewCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
-      id.to_bytes(),
-      handle_bytes,
-      tag_bytes,
-      0_usize
+      "{}.{}.{}.{}",
+      base64_url::encode(&id.to_bytes()),
+      base64_url::encode(&handle_bytes),
+      base64_url::encode(&0_u64.to_le_bytes()),
+      base64_url::encode(&tag_bytes),
     );
     NimbleDigest::digest(s.as_bytes())
   };
@@ -156,12 +156,12 @@ async fn main() {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
-      id.to_bytes(),
-      handle_bytes,
-      tag,
-      counter,
-      nonce_bytes,
+      "{}.{}.{}.{}.{}",
+      base64_url::encode(&id.to_bytes()),
+      base64_url::encode(&handle_bytes),
+      base64_url::encode(&counter.to_le_bytes()),
+      base64_url::encode(&tag),
+      base64_url::encode(&nonce_bytes),
     );
     NimbleDigest::digest(s.as_bytes())
   };
@@ -204,11 +204,11 @@ async fn main() {
     // verify a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "IncrementCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
-        id.to_bytes(),
-        handle_bytes,
-        tag,
-        expected_counter
+        "{}.{}.{}.{}",
+        base64_url::encode(&id.to_bytes()),
+        base64_url::encode(&handle_bytes),
+        base64_url::encode(&(expected_counter as u64).to_le_bytes()),
+        base64_url::encode(&tag),
       );
       NimbleDigest::digest(s.as_bytes())
     };
@@ -245,12 +245,12 @@ async fn main() {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
-      id.to_bytes(),
-      handle_bytes,
-      tag,
-      counter,
-      nonce_bytes,
+      "{}.{}.{}.{}.{}",
+      base64_url::encode(&id.to_bytes()),
+      base64_url::encode(&handle_bytes),
+      base64_url::encode(&counter.to_le_bytes()),
+      base64_url::encode(&tag),
+      base64_url::encode(&nonce_bytes),
     );
     NimbleDigest::digest(s.as_bytes())
   };

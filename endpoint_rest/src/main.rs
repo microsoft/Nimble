@@ -53,6 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("key")
         .takes_value(true)
         .help("The key to run tls"),
+    )
+    .arg(
+      Arg::with_name("pem")
+        .short("m")
+        .long("pem")
+        .takes_value(true)
+        .help("The ECDSA prime256v1 private key pem file"),
     );
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
@@ -61,8 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
   let cert = cli_matches.value_of("cert");
   let key = cli_matches.value_of("key");
+  let pem = cli_matches
+    .value_of("pem")
+    .map(|p| std::fs::read_to_string(p).expect("Failed to read the private key pem file"));
 
-  let endpoint_state = Arc::new(EndpointState::new(coordinator_hostname).await.unwrap());
+  let endpoint_state = Arc::new(EndpointState::new(coordinator_hostname, pem).await.unwrap());
 
   // Build our application by composing routes
   let app = Router::new()

@@ -131,7 +131,7 @@ pub struct EndpointState {
 }
 
 impl EndpointState {
-  pub async fn new(hostname: String) -> Result<Self, EndpointError> {
+  pub async fn new(hostname: String, pem_opt: Option<String>) -> Result<Self, EndpointError> {
     // make a connection to the coordinator
     let conn = {
       let res = Connection::new(hostname).await;
@@ -160,7 +160,15 @@ impl EndpointState {
     };
 
     // produce a private key pair to sign responses
-    let sk = PrivateKey::new();
+    let sk = if let Some(pem) = pem_opt {
+      let res = PrivateKey::from_pem(pem.as_bytes());
+      if let Err(error) = res {
+        panic!("Endpoint Error: {:?}", error);
+      }
+      res.unwrap()
+    } else {
+      PrivateKey::new()
+    };
 
     Ok(EndpointState {
       conn,
@@ -249,11 +257,11 @@ impl EndpointState {
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "NewCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
-        self.id.to_bytes(),
-        handle,
-        tag,
-        0_usize
+        "{}.{}.{}.{}",
+        base64_url::encode(&self.id.to_bytes()),
+        base64_url::encode(handle),
+        base64_url::encode(&0_u64.to_le_bytes()),
+        base64_url::encode(tag),
       );
       NimbleDigest::digest(s.as_bytes())
     };
@@ -320,11 +328,11 @@ impl EndpointState {
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "IncrementCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}",
-        self.id.to_bytes(),
-        handle,
-        tag,
-        expected_height
+        "{}.{}.{}.{}",
+        base64_url::encode(&self.id.to_bytes()),
+        base64_url::encode(handle),
+        base64_url::encode(&expected_height.to_le_bytes()),
+        base64_url::encode(tag),
       );
       NimbleDigest::digest(s.as_bytes())
     };
@@ -386,12 +394,12 @@ impl EndpointState {
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "ReadCounter id: {:?}, handle = {:?}, tag = {:?}, counter = {:?}, nonce = {:?}",
-        self.id.to_bytes(),
-        handle,
-        block,
-        counter,
-        nonce
+        "{}.{}.{}.{}.{}",
+        base64_url::encode(&self.id.to_bytes()),
+        base64_url::encode(handle),
+        base64_url::encode(&(counter as u64).to_le_bytes()),
+        base64_url::encode(&block),
+        base64_url::encode(nonce),
       );
       NimbleDigest::digest(s.as_bytes())
     };

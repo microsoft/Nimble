@@ -16,6 +16,8 @@ pub enum CryptoError {
   InvalidSignature,
   /// returned if there's an error when signing
   SignatureGenerationError,
+  /// returned if the private key pem is invalid
+  InvalidPrivateKeyPem,
 }
 
 pub trait PublicKeyTrait {
@@ -126,6 +128,17 @@ impl PrivateKeyTrait for PrivateKey {
       res.unwrap()
     };
     Ok(Signature { sig })
+  }
+}
+
+impl PrivateKey {
+  pub fn from_pem(pem: &[u8]) -> Result<PrivateKey, CryptoError> {
+    let res = EcKey::private_key_from_pem(pem);
+    if res.is_err() {
+      return Err(CryptoError::InvalidPrivateKeyPem);
+    }
+    let key = res.unwrap();
+    Ok(PrivateKey { key })
   }
 }
 

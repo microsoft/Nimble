@@ -17,9 +17,9 @@ pub struct EndpointGrpcState {
 }
 
 impl EndpointGrpcState {
-  async fn new(coordinator_endpoint_address: String) -> Self {
+  async fn new(coordinator_endpoint_address: String, pem: Option<String>) -> Self {
     EndpointGrpcState {
-      state: EndpointState::new(coordinator_endpoint_address)
+      state: EndpointState::new(coordinator_endpoint_address, pem)
         .await
         .unwrap(),
     }
@@ -111,39 +111,45 @@ impl Call for EndpointGrpcState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-  let (addr, coordinator_hostname) = {
-    let config = App::new("endpoint")
-      .arg(
-        Arg::with_name("coordinator")
-          .short("c")
-          .long("coordinator")
-          .help("The hostname of the coordinator")
-          .default_value("http://[::1]:8080"),
-      )
-      .arg(
-        Arg::with_name("host")
-          .short("t")
-          .long("host")
-          .help("The hostname to run the service on.")
-          .default_value("[::1]"),
-      )
-      .arg(
-        Arg::with_name("port")
-          .short("p")
-          .long("port")
-          .help("The port number to run the coordinator service on.")
-          .default_value("8081"),
-      );
-    let cli_matches = config.get_matches();
-    let hostname = cli_matches.value_of("host").unwrap();
-    let port_number = cli_matches.value_of("port").unwrap();
-    let addr = format!("{}:{}", hostname, port_number).parse()?;
-    let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
+  let config = App::new("endpoint")
+    .arg(
+      Arg::with_name("coordinator")
+        .short("c")
+        .long("coordinator")
+        .help("The hostname of the coordinator")
+        .default_value("http://[::1]:8080"),
+    )
+    .arg(
+      Arg::with_name("host")
+        .short("t")
+        .long("host")
+        .help("The hostname to run the service on.")
+        .default_value("[::1]"),
+    )
+    .arg(
+      Arg::with_name("port")
+        .short("p")
+        .long("port")
+        .help("The port number to run the coordinator service on.")
+        .default_value("8081"),
+    )
+    .arg(
+      Arg::with_name("pem")
+        .short("m")
+        .long("pem")
+        .takes_value(true)
+        .help("The ECDSA prime256v1 private key pem file"),
+    );
+  let cli_matches = config.get_matches();
+  let hostname = cli_matches.value_of("host").unwrap();
+  let port_number = cli_matches.value_of("port").unwrap();
+  let addr = format!("{}:{}", hostname, port_number).parse()?;
+  let coordinator_hostname = cli_matches.value_of("coordinator").unwrap().to_string();
+  let pem = cli_matches
+    .value_of("pem")
+    .map(|p| std::fs::read_to_string(p).expect("Failed to read the private key pem file"));
 
-    (addr, coordinator_hostname)
-  };
-
-  let endpoint_grpc_state = EndpointGrpcState::new(coordinator_hostname.to_string()).await;
+  let endpoint_grpc_state = EndpointGrpcState::new(coordinator_hostname.to_string(), pem).await;
 
   println!("Running endpoint at {}", addr);
   Server::builder()
