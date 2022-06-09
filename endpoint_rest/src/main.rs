@@ -162,6 +162,7 @@ async fn get_identity(
     match params["pkformat"].as_ref() {
       "compressed" => PublicKeyFormat::COMPRESSED,
       "der" => PublicKeyFormat::DER,
+      "uncompressed" => PublicKeyFormat::UNCOMPRESSED,
       _ => {
         eprintln!("unsupported format");
         return (StatusCode::BAD_REQUEST, Json(json!({})));
