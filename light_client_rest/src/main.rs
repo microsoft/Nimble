@@ -72,7 +72,11 @@ async fn main() {
     .unwrap();
 
   // Step 0: Obtain the identity and public key of the instance
-  let get_identity_url = reqwest::Url::parse(&format!("{}/serviceid", endpoint_addr)).unwrap();
+  let get_identity_url = reqwest::Url::parse_with_params(
+    &format!("{}/serviceid", endpoint_addr),
+    &[("pkformat", "compressed")],
+  )
+  .unwrap();
   let res = client.get(get_identity_url).send().await;
 
   if res.is_err() {

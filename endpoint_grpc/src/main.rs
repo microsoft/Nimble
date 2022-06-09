@@ -32,7 +32,9 @@ impl Call for EndpointGrpcState {
     &self,
     _req: Request<GetIdentityReq>,
   ) -> Result<Response<GetIdentityResp>, Status> {
-    let res = self.state.get_identity();
+    let res = self
+      .state
+      .get_identity(endpoint::PublicKeyFormat::COMPRESSED);
     if res.is_err() {
       return Err(Status::aborted("Failed to get the identity"));
     }
@@ -50,7 +52,10 @@ impl Call for EndpointGrpcState {
     // receive a request from the light client
     let NewCounterReq { handle, tag } = req.into_inner();
 
-    let res = self.state.new_counter(&handle, &tag).await;
+    let res = self
+      .state
+      .new_counter(&handle, &tag, endpoint::SignatureFormat::RAW)
+      .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to create a new counter"));
     }
@@ -74,7 +79,12 @@ impl Call for EndpointGrpcState {
 
     let res = self
       .state
-      .increment_counter(&handle, &tag, expected_counter)
+      .increment_counter(
+        &handle,
+        &tag,
+        expected_counter,
+        endpoint::SignatureFormat::RAW,
+      )
       .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to increment the counter"));
@@ -93,7 +103,10 @@ impl Call for EndpointGrpcState {
     // receive a request from the light client
     let ReadCounterReq { handle, nonce } = req.into_inner();
 
-    let res = self.state.read_counter(&handle, &nonce).await;
+    let res = self
+      .state
+      .read_counter(&handle, &nonce, endpoint::SignatureFormat::RAW)
+      .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to read the counter"));
     }

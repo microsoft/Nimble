@@ -1,4 +1,4 @@
-use endpoint::EndpointState;
+use endpoint::{EndpointState, PublicKeyFormat, SignatureFormat};
 
 use axum::{
   extract::{Extension, Path, Query},
@@ -152,8 +152,24 @@ struct ReadCounterResponse {
   pub signature: String,
 }
 
-async fn get_identity(Extension(state): Extension<Arc<EndpointState>>) -> impl IntoResponse {
-  let (id, pk) = state.get_identity().unwrap();
+async fn get_identity(
+  Query(params): Query<HashMap<String, String>>,
+  Extension(state): Extension<Arc<EndpointState>>,
+) -> impl IntoResponse {
+  let pkformat = if !params.contains_key("pkformat") {
+    PublicKeyFormat::UNCOMPRESSED
+  } else {
+    match params["pkformat"].as_ref() {
+      "compressed" => PublicKeyFormat::COMPRESSED,
+      "der" => PublicKeyFormat::DER,
+      _ => {
+        eprintln!("unsupported format");
+        return (StatusCode::BAD_REQUEST, Json(json!({})));
+      },
+    }
+  };
+
+  let (id, pk) = state.get_identity(pkformat).unwrap();
   let resp = GetIdentityResponse {
     id: base64_url::encode(&id),
     pk: base64_url::encode(&pk),
@@ -164,6 +180,7 @@ async fn get_identity(Extension(state): Extension<Arc<EndpointState>>) -> impl I
 async fn new_counter(
   Path(handle): Path<String>,
   Json(req): Json<NewCounterRequest>,
+  Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
   let res = base64_url::decode(&handle);
@@ -180,7 +197,16 @@ async fn new_counter(
   }
   let tag = res.unwrap();
 
-  let res = state.new_counter(&handle, &tag).await;
+  let sigformat = if params.contains_key("sigformat") {
+    match params["sigformat"].as_ref() {
+      "der" => SignatureFormat::DER,
+      _ => SignatureFormat::RAW,
+    }
+  } else {
+    SignatureFormat::RAW
+  };
+
+  let res = state.new_counter(&handle, &tag, sigformat).await;
   if res.is_err() {
     eprintln!("failed to create a new counter {:?}", res);
     return (StatusCode::CONFLICT, Json(json!({})));
@@ -217,7 +243,16 @@ async fn read_counter(
   }
   let nonce = res.unwrap();
 
-  let res = state.read_counter(&handle, &nonce).await;
+  let sigformat = if params.contains_key("sigformat") {
+    match params["sigformat"].as_ref() {
+      "der" => SignatureFormat::DER,
+      _ => SignatureFormat::RAW,
+    }
+  } else {
+    SignatureFormat::RAW
+  };
+
+  let res = state.read_counter(&handle, &nonce, sigformat).await;
   if res.is_err() {
     eprintln!("failed to read a counter {:?}", res);
     return (StatusCode::CONFLICT, Json(json!({})));
@@ -236,6 +271,7 @@ async fn read_counter(
 async fn increment_counter(
   Path(handle): Path<String>,
   Json(req): Json<IncrementCounterRequest>,
+  Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
   let res = base64_url::decode(&handle);
@@ -252,8 +288,17 @@ async fn increment_counter(
   }
   let tag = res.unwrap();
 
+  let sigformat = if params.contains_key("sigformat") {
+    match params["sigformat"].as_ref() {
+      "der" => SignatureFormat::DER,
+      _ => SignatureFormat::RAW,
+    }
+  } else {
+    SignatureFormat::RAW
+  };
+
   let res = state
-    .increment_counter(&handle, &tag, req.expected_counter)
+    .increment_counter(&handle, &tag, req.expected_counter, sigformat)
     .await;
   if res.is_err() {
     eprintln!("failed to increment a counter {:?}", res);

@@ -18,6 +18,8 @@ pub enum CryptoError {
   SignatureGenerationError,
   /// returned if the private key pem is invalid
   InvalidPrivateKeyPem,
+  /// returned if there is an error when deriving a signature from DER
+  FailedToGetSigFromDER,
 }
 
 pub trait PublicKeyTrait {
@@ -95,6 +97,22 @@ impl PublicKeyTrait for PublicKey {
       .key
       .public_key()
       .to_bytes(&group, PointConversionForm::COMPRESSED, &mut ctx)
+      .unwrap()
+  }
+}
+
+impl PublicKey {
+  pub fn to_der(&self) -> Vec<u8> {
+    self.key.public_key_to_der().unwrap()
+  }
+
+  pub fn to_uncompressed(&self) -> Vec<u8> {
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+    let mut ctx = BigNumContext::new().unwrap();
+    self
+      .key
+      .public_key()
+      .to_bytes(&group, PointConversionForm::UNCOMPRESSED, &mut ctx)
       .unwrap()
   }
 }
@@ -199,6 +217,19 @@ impl SignatureTrait for Signature {
       .to_vec_padded((Self::num_bytes() / 2) as i32)
       .unwrap();
     concat(vec![r, s]).to_vec()
+  }
+}
+
+impl Signature {
+  pub fn to_der(&self) -> Vec<u8> {
+    self.sig.to_der().unwrap()
+  }
+
+  pub fn from_der(der: &[u8]) -> Result<Self, CryptoError> {
+    match EcdsaSig::from_der(der) {
+      Ok(sig) => Ok(Signature { sig }),
+      Err(_) => Err(CryptoError::FailedToGetSigFromDER),
+    }
   }
 }
 

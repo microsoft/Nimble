@@ -130,6 +130,19 @@ pub struct EndpointState {
   vs: Arc<RwLock<VerifierState>>,
 }
 
+#[derive(Debug)]
+pub enum PublicKeyFormat {
+  UNCOMPRESSED = 0,
+  COMPRESSED = 1,
+  DER = 2,
+}
+
+#[derive(Debug)]
+pub enum SignatureFormat {
+  RAW = 0,
+  DER = 1,
+}
+
 impl EndpointState {
   pub async fn new(hostname: String, pem_opt: Option<String>) -> Result<Self, EndpointError> {
     // make a connection to the coordinator
@@ -178,10 +191,18 @@ impl EndpointState {
     })
   }
 
-  pub fn get_identity(&self) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
+  pub fn get_identity(
+    &self,
+    pkformat: PublicKeyFormat,
+  ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
+    let public_key = self.sk.get_public_key().unwrap();
     Ok((
       self.id.to_bytes(),
-      self.sk.get_public_key().unwrap().to_bytes(),
+      match pkformat {
+        PublicKeyFormat::COMPRESSED => public_key.to_bytes(),
+        PublicKeyFormat::DER => public_key.to_der(),
+        _ => public_key.to_uncompressed(),
+      },
     ))
   }
 
@@ -214,7 +235,12 @@ impl EndpointState {
     Ok(())
   }
 
-  pub async fn new_counter(&self, handle: &[u8], tag: &[u8]) -> Result<Vec<u8>, EndpointError> {
+  pub async fn new_counter(
+    &self,
+    handle: &[u8],
+    tag: &[u8],
+    sigformat: SignatureFormat,
+  ) -> Result<Vec<u8>, EndpointError> {
     // issue a request to the coordinator and receive a response
     let receipt = {
       let res = self.conn.new_ledger(handle, tag).await;
@@ -265,7 +291,11 @@ impl EndpointState {
       );
       NimbleDigest::digest(s.as_bytes())
     };
-    let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
+    let sig = self.sk.sign(&msg.to_bytes()).unwrap();
+    let signature = match sigformat {
+      SignatureFormat::DER => sig.to_der(),
+      _ => sig.to_bytes(),
+    };
 
     Ok(signature)
   }
@@ -275,6 +305,7 @@ impl EndpointState {
     handle: &[u8],
     tag: &[u8],
     expected_counter: u64,
+    sigformat: SignatureFormat,
   ) -> Result<Vec<u8>, EndpointError> {
     // convert u64 to usize, returning error
     let expected_height = {
@@ -336,7 +367,11 @@ impl EndpointState {
       );
       NimbleDigest::digest(s.as_bytes())
     };
-    let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
+    let sig = self.sk.sign(&msg.to_bytes()).unwrap();
+    let signature = match sigformat {
+      SignatureFormat::DER => sig.to_der(),
+      _ => sig.to_bytes(),
+    };
 
     Ok(signature)
   }
@@ -345,6 +380,7 @@ impl EndpointState {
     &self,
     handle: &[u8],
     nonce: &[u8],
+    sigformat: SignatureFormat,
   ) -> Result<(Vec<u8>, u64, Vec<u8>), EndpointError> {
     // issue a request to the coordinator and receive a response
     let (block, receipt) = {
@@ -403,7 +439,11 @@ impl EndpointState {
       );
       NimbleDigest::digest(s.as_bytes())
     };
-    let signature = self.sk.sign(&msg.to_bytes()).unwrap().to_bytes();
+    let sig = self.sk.sign(&msg.to_bytes()).unwrap();
+    let signature = match sigformat {
+      SignatureFormat::DER => sig.to_der(),
+      _ => sig.to_bytes(),
+    };
 
     // respond to the light client
     Ok((block, counter as u64, signature))
