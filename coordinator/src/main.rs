@@ -494,7 +494,7 @@ mod tests {
 
     let endorser_args = {
       match std::env::var_os("ENDORSER_ARGS") {
-        None => panic!("The ENDORSER_ARGS environment variable is not specified"),
+        None => String::from(""),
         Some(x) => x.into_string().unwrap(),
       }
     };
@@ -541,6 +541,16 @@ mod tests {
       ledger_store_args.insert(
         String::from("NIMBLE_DB"),
         std::env::var_os("NIMBLE_DB")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("NIMBLE_FSTORE_DIR").is_some() {
+      ledger_store_args.insert(
+        String::from("NIMBLE_FSTORE_DIR"),
+        std::env::var_os("NIMBLE_FSTORE_DIR")
           .unwrap()
           .into_string()
           .unwrap(),
@@ -978,7 +988,9 @@ mod tests {
       println!("append_ledger with the first two endorser: {:?}", res);
       assert!(res.is_ok());
 
-      // Step 13: start a new coordinator
+      // Step 13: drop old coordinator and start a new coordinator
+      drop(server);
+
       let coordinator2 = Arc::new(
         CoordinatorState::new(&store, &ledger_store_args)
           .await
@@ -1013,16 +1025,16 @@ mod tests {
       let res = verify_append(&vs, &new_handle2, message, 0, &receipt);
       println!("Append verification no condition: {:?}", res.is_ok());
       assert!(res.is_ok());
+
+      // Step 15: query the state of endorsers
+      let _pk_ledger_views = server2.get_state().query_endorsers().await.unwrap();
+
+      // We access endorser and endorser2 below
+      // to stop them from being dropped earlier
+      println!("endorser1 process ID is {}", endorser.child.id());
+      println!("endorser2 process ID is {}", endorser2.child.id());
+      println!("endorser3 process ID is {}", endorser3.child.id());
+      server2.get_state().reset_ledger_store().await;
     }
-
-    // Step 15: query the state of endorsers
-    let _pk_ledger_views = server.get_state().query_endorsers().await.unwrap();
-
-    // We access endorser and endorser2 below
-    // to stop them from being dropped earlier
-    println!("endorser1 process ID is {}", endorser.child.id());
-    println!("endorser2 process ID is {}", endorser2.child.id());
-    println!("endorser3 process ID is {}", endorser3.child.id());
-    server.get_state().reset_ledger_store().await;
   }
 }

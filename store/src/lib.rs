@@ -4,6 +4,7 @@ use ledger::{Block, Handle, NimbleDigest, Receipt};
 pub mod azure_pageblob;
 pub mod azure_table;
 mod errors;
+pub mod filestore;
 pub mod in_memory;
 pub mod mongodb_cosmos;
 
@@ -68,7 +69,7 @@ pub trait LedgerStore {
 #[cfg(test)]
 mod tests {
   use crate::{
-    azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore,
+    azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore, filestore::FileStore,
     in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
   };
   use ledger::{Block, CustomSerde, NimbleHashTrait};
@@ -214,6 +215,26 @@ mod tests {
     );
 
     let state = TableLedgerStore::new(&args).await.unwrap();
+    check_store_creation_and_operations(&state).await;
+  }
+
+  #[tokio::test]
+  pub async fn check_filestore() {
+    if std::env::var_os("NIMBLE_FSTORE_DIR").is_none() {
+      // The right env variables are not available so let's skip tests
+      return;
+    }
+
+    let mut args = HashMap::<String, String>::new();
+    args.insert(
+      String::from("NIMBLE_FSTORE_DIR"),
+      std::env::var_os("NIMBLE_FSTORE_DIR")
+        .unwrap()
+        .into_string()
+        .unwrap(),
+    );
+
+    let state = FileStore::new(&args).await.unwrap();
     check_store_creation_and_operations(&state).await;
   }
 }
