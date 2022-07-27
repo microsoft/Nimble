@@ -1,5 +1,13 @@
 # NimbleLedger: An append-only ledger with minimal TCB
 
+# Dependencies
+
+Install make, gcc, perl, libssl-dev, pkg-config. In Ubuntu, you can type:
+
+```text
+sudo apt install make gcc libssl-dev pkg-config perl
+```
+
 ## Building and running tests
 
 Install [`rustup`](https://rustup.rs/)
