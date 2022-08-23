@@ -1,6 +1,6 @@
 use crate::{
   errors::{LedgerStoreError, StorageError},
-  LedgerEntry, LedgerStore,
+  ledger::{LedgerEntry, LedgerStore},
 };
 use async_trait::async_trait;
 use azure_data_tables::{clients::TableClient, prelude::*};

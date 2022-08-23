@@ -9,7 +9,7 @@ use std::{
   convert::TryInto,
   sync::{Arc, RwLock},
 };
-use store::{
+use store::ledger::{
   azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore, filestore::FileStore,
   in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
 };

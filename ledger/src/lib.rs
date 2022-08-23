@@ -270,9 +270,7 @@ impl Receipt {
 
     for receipt in receipts.iter() {
       let res = new_receipt.append(receipt);
-      if let Err(error) = res {
-        return Err(error);
-      }
+      res?
     }
 
     Ok(new_receipt)
@@ -520,15 +518,14 @@ impl CustomSerde for Receipt {
       return Err(CustomSerdeError::IncorrectLength);
     }
 
-    let view = NimbleDigest::from_bytes(&bytes[0..NimbleDigest::num_bytes()].to_vec())?;
+    let view = NimbleDigest::from_bytes(&bytes[0..NimbleDigest::num_bytes()])?;
     let metablock = MetaBlock::from_bytes(
-      &bytes[NimbleDigest::num_bytes()..NimbleDigest::num_bytes() + MetaBlock::num_bytes()]
-        .to_vec(),
+      &bytes[NimbleDigest::num_bytes()..NimbleDigest::num_bytes() + MetaBlock::num_bytes()],
     )?;
     let mut id_sigs = Vec::new();
     let mut pos = NimbleDigest::num_bytes() + MetaBlock::num_bytes();
     while pos < bytes.len() {
-      let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()].to_vec())?;
+      let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()])?;
       id_sigs.push(id_sig);
       pos += IdSig::num_bytes();
     }

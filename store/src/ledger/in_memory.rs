@@ -1,7 +1,7 @@
 use super::{Block, Handle, NimbleDigest, Receipt};
 use crate::{
   errors::{LedgerStoreError, StorageError},
-  LedgerEntry, LedgerStore,
+  ledger::{LedgerEntry, LedgerStore},
 };
 use async_trait::async_trait;
 use std::{
