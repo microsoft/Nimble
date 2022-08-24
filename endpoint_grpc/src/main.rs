@@ -1,5 +1,6 @@
 use tonic::{transport::Server, Request, Response, Status};
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod endpoint_proto {
   tonic::include_proto!("endpoint_proto");
 }

@@ -2,6 +2,7 @@ mod errors;
 
 use tonic::transport::{Channel, Endpoint};
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }

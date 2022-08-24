@@ -7,6 +7,7 @@ use tonic::{transport::Server, Code, Request, Response, Status};
 mod endorser_state;
 mod errors;
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
 }

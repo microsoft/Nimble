@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     env:
-      RUST_VERSION: nightly-2021-12-15
+      RUST_VERSION: 1.63.0
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2

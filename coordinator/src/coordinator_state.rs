@@ -19,6 +19,7 @@ use tonic::{
   Code, Status,
 };
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod endorser_proto {
   tonic::include_proto!("endorser_proto");
 }

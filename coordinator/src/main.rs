@@ -6,6 +6,7 @@ use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
 use tonic::{transport::Server, Request, Response, Status};
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }

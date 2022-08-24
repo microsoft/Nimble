@@ -28,6 +28,7 @@ mod log;
 mod timer;
 mod utils;
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
 }

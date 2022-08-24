@@ -6,6 +6,7 @@ use ledger::{
 };
 use tonic::transport::{Channel, Endpoint};
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 mod endpoint_proto {
   tonic::include_proto!("endpoint_proto");
 }
