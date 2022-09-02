@@ -632,19 +632,16 @@ mod tests {
     let handle = handle_bytes.to_vec();
 
     // Step 2: Read At Index
-    if cfg!(feature = "receipts") {
-      let req = tonic::Request::new(ReadByIndexReq {
-        handle: handle.clone(),
-        index: 0,
-      });
+    let req = tonic::Request::new(ReadByIndexReq {
+      handle: handle.clone(),
+      index: 0,
+    });
 
-      let ReadByIndexResp { block, receipt } =
-        server.read_by_index(req).await.unwrap().into_inner();
+    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
 
-      let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
-      println!("ReadByIndex: {:?}", res.is_ok());
-      assert!(res.is_ok());
-    }
+    let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
+    println!("ReadByIndex: {:?}", res.is_ok());
+    assert!(res.is_ok());
 
     // Step 3: Read Latest with the Nonce generated
     let nonce = rand::thread_rng().gen::<[u8; 16]>();
@@ -709,20 +706,17 @@ mod tests {
     assert!(is_latest_valid.is_ok());
 
     // Step 5: Read At Index
-    if cfg!(feature = "receipts") {
-      let req = tonic::Request::new(ReadByIndexReq {
-        handle: handle.clone(),
-        index: 1,
-      });
+    let req = tonic::Request::new(ReadByIndexReq {
+      handle: handle.clone(),
+      index: 1,
+    });
 
-      let ReadByIndexResp { block, receipt } =
-        server.read_by_index(req).await.unwrap().into_inner();
-      assert_eq!(block, b1.clone());
+    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
+    assert_eq!(block, b1.clone());
 
-      let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
-      println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
-      assert!(res.is_ok());
-    }
+    let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
+    println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
+    assert!(res.is_ok());
 
     // Step 6: change the view by adding a new endorser
     let endorser_args2 = endorser_args.clone() + " -p 9091";

@@ -224,14 +224,6 @@ impl Receipt {
     &self.id_sigs
   }
 
-  pub fn get_first_id_sig(&self) -> Option<&IdSig> {
-    if self.id_sigs.is_empty() {
-      None
-    } else {
-      Some(&self.id_sigs[0])
-    }
-  }
-
   pub fn get_metablock(&self) -> &MetaBlock {
     &self.metablock
   }
