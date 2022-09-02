@@ -37,6 +37,16 @@ impl EndpointConnection {
   }
 }
 
+#[allow(dead_code)]
+enum MessageType {
+  NewCounterReq,
+  NewCounterResp,
+  IncrementCounterReq,
+  IncrementCounterResp,
+  ReadCounterReq,
+  ReadCounterResp,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("client").arg(
@@ -77,7 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "{}.{}.{}.{}",
+      "{}.{}.{}.{}.{}",
+      base64_url::encode(&(MessageType::NewCounterResp as u64).to_le_bytes()),
       base64_url::encode(&id.to_bytes()),
       base64_url::encode(&handle_bytes),
       base64_url::encode(&0_u64.to_le_bytes()),
@@ -109,7 +120,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "{}.{}.{}.{}.{}",
+      "{}.{}.{}.{}.{}.{}",
+      base64_url::encode(&(MessageType::ReadCounterResp as u64).to_le_bytes()),
       base64_url::encode(&id.to_bytes()),
       base64_url::encode(&handle_bytes),
       base64_url::encode(&counter.to_le_bytes()),
@@ -143,7 +155,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // verify a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "{}.{}.{}.{}",
+        "{}.{}.{}.{}.{}",
+        base64_url::encode(&(MessageType::IncrementCounterResp as u64).to_le_bytes()),
         base64_url::encode(&id.to_bytes()),
         base64_url::encode(&handle_bytes),
         base64_url::encode(&(expected_counter as u64).to_le_bytes()),
@@ -176,7 +189,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // verify a message that unequivocally identifies the counter and tag
   let msg = {
     let s = format!(
-      "{}.{}.{}.{}.{}",
+      "{}.{}.{}.{}.{}.{}",
+      base64_url::encode(&(MessageType::ReadCounterResp as u64).to_le_bytes()),
       base64_url::encode(&id.to_bytes()),
       base64_url::encode(&handle_bytes),
       base64_url::encode(&counter.to_le_bytes()),

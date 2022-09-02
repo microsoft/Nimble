@@ -16,7 +16,7 @@ use coordinator_proto::{
   ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use ledger::{
-  signature::{PrivateKey, PrivateKeyTrait, PublicKeyTrait, SignatureTrait},
+  signature::{PrivateKey, PrivateKeyTrait, PublicKey, PublicKeyTrait, Signature, SignatureTrait},
   Block, CustomSerde, NimbleDigest, NimbleHashTrait,
 };
 use std::{
@@ -26,6 +26,16 @@ use std::{
 use verifier::{
   errors::VerificationError, verify_append, verify_new_ledger, verify_read_latest, VerifierState,
 };
+
+#[allow(dead_code)]
+enum MessageType {
+  NewCounterReq,
+  NewCounterResp,
+  IncrementCounterReq,
+  IncrementCounterResp,
+  ReadCounterReq,
+  ReadCounterResp,
+}
 
 #[derive(Debug, Clone)]
 pub struct Connection {
@@ -128,6 +138,7 @@ pub struct EndpointState {
   conn: Connection,
   id: NimbleDigest,
   sk: PrivateKey,
+  pk: PublicKey,
   vs: Arc<RwLock<VerifierState>>,
 }
 
@@ -184,10 +195,13 @@ impl EndpointState {
       PrivateKey::new()
     };
 
+    let pk = sk.get_public_key().unwrap();
+
     Ok(EndpointState {
       conn,
       id,
       sk,
+      pk,
       vs: Arc::new(RwLock::new(vs)),
     })
   }
@@ -242,23 +256,44 @@ impl EndpointState {
     tag: &[u8],
     sigformat: SignatureFormat,
   ) -> Result<Vec<u8>, EndpointError> {
+    // construct a block that unequivocally identifies the client's intent to create a new counter
+    let block = {
+      let msg = {
+        let s = format!(
+          "{}.{}.{}.{}.{}",
+          base64_url::encode(&(MessageType::NewCounterReq as u64).to_le_bytes()),
+          base64_url::encode(&self.id.to_bytes()),
+          base64_url::encode(handle),
+          base64_url::encode(&0_u64.to_le_bytes()),
+          base64_url::encode(tag),
+        );
+        NimbleDigest::digest(s.as_bytes())
+      };
+
+      let sig = self.sk.sign(&msg.to_bytes()).unwrap();
+
+      // concatenate tag and signature
+      [tag.to_vec(), sig.to_bytes()].concat()
+    };
+
     // issue a request to the coordinator and receive a response
     let receipt = {
-      let res = self.conn.new_ledger(handle, tag).await;
+      let res = self.conn.new_ledger(handle, &block).await;
       if res.is_err() {
         return Err(EndpointError::FailedToCreateNewCounter);
       }
       res.unwrap()
     };
 
-    // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
+    // verify the response received from the coordinator;
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_new_ledger(&vs_rd, handle, tag, &receipt)
+        verify_new_ledger(&vs_rd, handle, &block, &receipt)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
     };
+
     if res.is_err() {
       if res.unwrap_err() != VerificationError::ViewNotFound {
         return Err(EndpointError::FailedToVerifyNewCounter);
@@ -269,7 +304,7 @@ impl EndpointState {
         }
         let res = {
           if let Ok(vs_rd) = self.vs.read() {
-            verify_new_ledger(&vs_rd, handle, tag, &receipt)
+            verify_new_ledger(&vs_rd, handle, &block, &receipt)
           } else {
             return Err(EndpointError::FailedToAcquireReadLock);
           }
@@ -284,7 +319,8 @@ impl EndpointState {
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "{}.{}.{}.{}",
+        "{}.{}.{}.{}.{}",
+        base64_url::encode(&(MessageType::NewCounterResp as u64).to_le_bytes()),
         base64_url::encode(&self.id.to_bytes()),
         base64_url::encode(handle),
         base64_url::encode(&0_u64.to_le_bytes()),
@@ -317,9 +353,28 @@ impl EndpointState {
       res.unwrap()
     };
 
+    // construct a block that unequivocally identifies the client's intent to update the counter and tag
+    let block = {
+      let msg = {
+        let s = format!(
+          "{}.{}.{}.{}.{}",
+          base64_url::encode(&(MessageType::IncrementCounterReq as u64).to_le_bytes()),
+          base64_url::encode(&self.id.to_bytes()),
+          base64_url::encode(handle),
+          base64_url::encode(&expected_counter.to_le_bytes()),
+          base64_url::encode(tag),
+        );
+        NimbleDigest::digest(s.as_bytes())
+      };
+
+      let sig = self.sk.sign(&msg.to_bytes()).unwrap();
+
+      [tag.to_vec(), sig.to_bytes()].concat()
+    };
+
     // issue a request to the coordinator and receive a response
     let receipt = {
-      let res = self.conn.append(handle, tag, expected_counter).await;
+      let res = self.conn.append(handle, &block, expected_counter).await;
 
       if res.is_err() {
         return Err(EndpointError::FailedToIncrementCounter);
@@ -330,7 +385,7 @@ impl EndpointState {
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_append(&vs_rd, handle, tag, expected_height, &receipt)
+        verify_append(&vs_rd, handle, &block, expected_height, &receipt)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -345,7 +400,7 @@ impl EndpointState {
         }
         let res = {
           if let Ok(vs_rd) = self.vs.read() {
-            verify_append(&vs_rd, handle, tag, expected_height, &receipt)
+            verify_append(&vs_rd, handle, &block, expected_height, &receipt)
           } else {
             return Err(EndpointError::FailedToAcquireReadLock);
           }
@@ -360,7 +415,8 @@ impl EndpointState {
     // sign a message that unequivocally identifies the counter and tag
     let msg = {
       let s = format!(
-        "{}.{}.{}.{}",
+        "{}.{}.{}.{}.{}",
+        base64_url::encode(&(MessageType::IncrementCounterResp as u64).to_le_bytes()),
         base64_url::encode(&self.id.to_bytes()),
         base64_url::encode(handle),
         base64_url::encode(&expected_height.to_le_bytes()),
@@ -393,10 +449,10 @@ impl EndpointState {
       res.unwrap()
     };
 
-    // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
+    // verify the response received from the coordinator
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_read_latest(&vs_rd, handle, block.as_ref(), nonce, &receipt)
+        verify_read_latest(&vs_rd, handle, &block, nonce, &receipt)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -412,7 +468,7 @@ impl EndpointState {
           }
           let res = {
             if let Ok(vs_rd) = self.vs.read() {
-              verify_read_latest(&vs_rd, handle, block.as_ref(), nonce, &receipt)
+              verify_read_latest(&vs_rd, handle, &block, nonce, &receipt)
             } else {
               return Err(EndpointError::FailedToAcquireReadLock);
             }
@@ -428,14 +484,46 @@ impl EndpointState {
       }
     };
 
-    // sign a message that unequivocally identifies the counter and tag
+    // verify the integrity of the coordinator's response by checking the signature
+    if block.len() < Signature::num_bytes() {
+      return Err(EndpointError::FaieldToVerifyReadCounter);
+    }
+    let (tag, sig) = {
+      let (t, s) = block.split_at(block.len() - Signature::num_bytes());
+      assert_eq!(t.len(), block.len() - Signature::num_bytes());
+      assert_eq!(s.len(), Signature::num_bytes());
+      (t, Signature::from_bytes(s).unwrap())
+    };
+
     let msg = {
       let s = format!(
         "{}.{}.{}.{}.{}",
+        base64_url::encode(&if counter == 0 {
+          (MessageType::NewCounterReq as u64).to_le_bytes()
+        } else {
+          (MessageType::IncrementCounterReq as u64).to_le_bytes()
+        }),
         base64_url::encode(&self.id.to_bytes()),
         base64_url::encode(handle),
         base64_url::encode(&(counter as u64).to_le_bytes()),
-        base64_url::encode(&block),
+        base64_url::encode(&tag),
+      );
+      NimbleDigest::digest(s.as_bytes())
+    };
+
+    if sig.verify(&self.pk, &msg.to_bytes()).is_err() {
+      return Err(EndpointError::FaieldToVerifyReadCounter);
+    }
+
+    // sign a message to the client that unequivocally identifies the counter and tag
+    let msg = {
+      let s = format!(
+        "{}.{}.{}.{}.{}.{}",
+        base64_url::encode(&(MessageType::ReadCounterResp as u64).to_le_bytes()),
+        base64_url::encode(&self.id.to_bytes()),
+        base64_url::encode(handle),
+        base64_url::encode(&(counter as u64).to_le_bytes()),
+        base64_url::encode(&tag),
         base64_url::encode(nonce),
       );
       NimbleDigest::digest(s.as_bytes())
@@ -447,6 +535,6 @@ impl EndpointState {
     };
 
     // respond to the light client
-    Ok((block, counter as u64, signature))
+    Ok((tag.to_vec(), counter as u64, signature))
   }
 }
