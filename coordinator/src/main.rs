@@ -764,18 +764,20 @@ mod tests {
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
-    // Step 7: Append without a condition
-    let message = "no_condition_data_block_append".as_bytes();
+    // Step 7: Append after view change
+    expected_height += 1;
+
+    let message = "data_block_append".as_bytes();
     let req = tonic::Request::new(AppendReq {
       handle: handle.clone(),
       block: message.to_vec(),
-      expected_height: 0_u64,
+      expected_height: expected_height as u64,
     });
 
     let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, &handle, message, 0, &receipt);
-    println!("Append verification no condition: {:?}", res.is_ok());
+    let res = verify_append(&vs, &handle, message, expected_height, &receipt);
+    println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
     // Step 8: Read Latest with the Nonce generated and check for new data appended without condition
@@ -813,14 +815,14 @@ mod tests {
 
     let new_handle = handle_bytes.to_vec();
 
-    let message = "no_condition_data_block_append 2".as_bytes();
+    let message = "data_block_append 2".as_bytes();
     let res = server
       .get_state()
       .append_ledger(
         Some(endorsers.clone()),
         &new_handle.clone(),
         message,
-        0usize,
+        1usize,
       )
       .await;
     println!("append_ledger with first endorser: {:?}", res);
@@ -836,14 +838,14 @@ mod tests {
 
     let new_handle2 = handle2_bytes.to_vec();
 
-    let message2 = "no_condition_data_block_append 3".as_bytes();
+    let message2 = "data_block_append 3".as_bytes();
     let res = server
       .get_state()
       .append_ledger(
         Some(endorsers.clone()),
         &new_handle2.clone(),
         message2,
-        0usize,
+        1usize,
       )
       .await;
     println!("append_ledger with first endorser: {:?}", res);
@@ -924,18 +926,18 @@ mod tests {
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
-    // Step 12: Append without a condition
-    let message = "no_condition_data_block_append 3".as_bytes();
+    // Step 12: Append data
+    let message = "data_block_append 3".as_bytes();
     let req = tonic::Request::new(AppendReq {
       handle: new_handle.clone(),
       block: message.to_vec(),
-      expected_height: 0_u64,
+      expected_height: 2_u64,
     });
 
     let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, &new_handle, message, 0, &receipt);
-    println!("Append verification no condition: {:?}", res.is_ok());
+    let res = verify_append(&vs, &new_handle, message, 2, &receipt);
+    println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
     if store != "memory" {
@@ -953,14 +955,14 @@ mod tests {
 
       let new_handle = handle_bytes.to_vec();
 
-      let message = "no_condition_data_block_append 2".as_bytes();
+      let message = "data_block_append 2".as_bytes();
       let res = server
         .get_state()
         .append_ledger(
           Some(endorsers.clone()),
           &new_handle.clone(),
           message,
-          0usize,
+          1usize,
         )
         .await;
       println!("append_ledger with the first two endorser: {:?}", res);
@@ -976,14 +978,14 @@ mod tests {
 
       let new_handle2 = handle2_bytes.to_vec();
 
-      let message2 = "no_condition_data_block_append 3".as_bytes();
+      let message2 = "data_block_append 3".as_bytes();
       let res = server
         .get_state()
         .append_ledger(
           Some(endorsers.clone()),
           &new_handle2.clone(),
           message2,
-          0usize,
+          1usize,
         )
         .await;
       println!("append_ledger with the first two endorser: {:?}", res);
@@ -1001,30 +1003,30 @@ mod tests {
       let server2 = CoordinatorServiceState::new(coordinator2);
       println!("Started a new coordinator");
 
-      // Step 14: Append without a condition via the new coordinator
-      let message = "no_condition_data_block_append 4".as_bytes();
+      // Step 14: Append via the new coordinator
+      let message = "data_block_append 4".as_bytes();
       let req = tonic::Request::new(AppendReq {
         handle: new_handle.clone(),
         block: message.to_vec(),
-        expected_height: 0_u64,
+        expected_height: 2_u64,
       });
 
       let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle, message, 0, &receipt);
-      println!("Append verification no condition: {:?}", res.is_ok());
+      let res = verify_append(&vs, &new_handle, message, 2, &receipt);
+      println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 
       // Step 14: Append without a condition via the new coordinator
-      let message = "no_condition_data_block_append 4".as_bytes();
+      let message = "data_block_append 4".as_bytes();
       let req = tonic::Request::new(AppendReq {
         handle: new_handle2.clone(),
         block: message.to_vec(),
-        expected_height: 0_u64,
+        expected_height: 2_u64,
       });
 
       let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle2, message, 0, &receipt);
-      println!("Append verification no condition: {:?}", res.is_ok());
+      let res = verify_append(&vs, &new_handle2, message, 2, &receipt);
+      println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 
       // Step 15: query the state of endorsers

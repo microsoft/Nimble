@@ -325,7 +325,7 @@ async fn find_db_entry(
 async fn append_ledger_op(
   handle: &Handle,
   block: &Block,
-  expected_height: Option<usize>,
+  expected_height: usize,
   ledger: &BlobClient,
   cache: &CacheMap,
 ) -> Result<usize, LedgerStoreError> {
@@ -333,12 +333,11 @@ async fn append_ledger_op(
   let (height, etag) = get_cached_entry(handle, cache, ledger).await?;
   let height_plus_one = checked_increment!(height);
 
-  // 2. If it is a conditional update, check if condition still holds
-  if expected_height.is_some() && expected_height.unwrap() as u64 != height_plus_one {
+  // 2. check if condition still holds
+  if expected_height as u64 != height_plus_one {
     eprintln!(
       "Expected height {};  Height-plus-one: {}",
-      expected_height.unwrap(),
-      height_plus_one
+      expected_height, height_plus_one
     );
 
     return Err(LedgerStoreError::LedgerError(
@@ -648,36 +647,24 @@ impl LedgerStore for PageBlobLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     let client = self.client.clone();
 
     let ledger = client.as_blob_client(&hex::encode(&handle.to_bytes()));
 
-    loop {
-      let res = append_ledger_op(handle, block, expected_height, &ledger, &self.cache).await;
-      match res {
-        Ok(v) => {
-          return Ok(v);
+    let res = append_ledger_op(handle, block, expected_height, &ledger, &self.cache).await;
+    match res {
+      Ok(v) => Ok(v),
+      Err(e) => match e {
+        LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
+          fix_cached_entry(handle, &self.cache, &ledger).await?;
+          Err(LedgerStoreError::LedgerError(
+            StorageError::IncorrectConditionalData,
+          ))
         },
-        Err(e) => {
-          match e {
-            LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
-              fix_cached_entry(handle, &self.cache, &ledger).await?;
-
-              if expected_height.is_some() {
-                // conditional write cannot be retried
-                return Err(LedgerStoreError::LedgerError(
-                  StorageError::IncorrectConditionalData,
-                ));
-              }
-            },
-            _ => {
-              return Err(e);
-            },
-          }
-        },
-      }
+        _ => Err(e),
+      },
     }
   }
 
@@ -749,7 +736,7 @@ impl LedgerStore for PageBlobLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     self
       .append_ledger(&self.view_handle, block, expected_height)

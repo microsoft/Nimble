@@ -44,7 +44,7 @@ macro_rules! checked_conversion {
 }
 
 macro_rules! with_retry {
-  ($x:expr, $handle:expr, $cache:expr, $ledger:expr, $write_retry:expr) => {
+  ($x:expr, $handle:expr, $cache:expr, $ledger:expr) => {
     match $x {
       Err(error) => match error {
         LedgerStoreError::MongoDBError(mongodb_error) => {
@@ -62,12 +62,7 @@ macro_rules! with_retry {
             mongodb::error::ErrorKind::Write(WriteError(write_error)) => {
               if write_error.code == DUPLICATE_KEY_CODE {
                 fix_cached_height($handle, $cache, $ledger).await?;
-
-                if $write_retry {
-                  continue;
-                } else {
-                  return Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey));
-                }
+                return Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey));
               }
             },
             _ => {
@@ -251,7 +246,7 @@ async fn find_db_entry(
 async fn append_ledger_op(
   handle: &Handle,
   block: &Block,
-  expected_height: Option<usize>,
+  expected_height: usize,
   ledger: &Collection<DBEntry>,
   cache: &CacheMap,
 ) -> Result<usize, LedgerStoreError> {
@@ -259,13 +254,10 @@ async fn append_ledger_op(
   let height_plus_one = checked_increment!(height);
 
   // 2. If it is a conditional update, check if condition still holds
-  if expected_height.is_some()
-    && checked_conversion!(expected_height.unwrap(), i64) != height_plus_one
-  {
+  if checked_conversion!(expected_height, i64) != height_plus_one {
     eprintln!(
       "Expected height {};  Height-plus-one: {}",
-      expected_height.unwrap(),
-      height_plus_one
+      expected_height, height_plus_one
     );
 
     return Err(LedgerStoreError::LedgerError(
@@ -523,13 +515,7 @@ async fn loop_and_read(
   cache: &CacheMap,
 ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
   loop {
-    with_retry!(
-      read_ledger_op(index, ledger).await,
-      handle,
-      cache,
-      ledger,
-      false
-    );
+    with_retry!(read_ledger_op(index, ledger).await, handle, cache, ledger);
   }
 }
 
@@ -555,8 +541,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
         create_ledger_op(handle, &genesis_block, &ledger, &self.cache).await,
         handle,
         &self.cache,
-        &ledger,
-        false
+        &ledger
       );
     }
   }
@@ -565,7 +550,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
@@ -577,8 +562,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
         append_ledger_op(handle, block, expected_height, &ledger, &self.cache).await,
         handle,
         &self.cache,
-        &ledger,
-        expected_height.is_none()
+        &ledger
       );
     }
   }
@@ -598,8 +582,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
         attach_ledger_receipt_op(receipt, &ledger).await,
         handle,
         &self.cache,
-        &ledger,
-        false
+        &ledger
       );
     }
   }
@@ -643,7 +626,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     self
       .append_ledger(&self.view_handle, block, expected_height)

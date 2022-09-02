@@ -46,6 +46,8 @@ pub enum CoordinatorError {
   FailedToCreateGenesis,
   /// returned if the provided handle is invalid
   InvalidHandle,
+  /// returned if the provided next height is invalid
+  InvalidHeight,
   /// returned if failed to (de)serialize endorser hostnames
   FailedToSerde,
   /// returned if the provided nonce is invalid

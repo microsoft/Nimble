@@ -173,12 +173,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b3.clone());
 
-  let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
-  println!(
-    "Verifying ReadLatest Response : {:?}",
-    is_latest_valid.is_ok()
-  );
-  assert!(is_latest_valid.is_ok());
+  let last_height = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+  println!("Verifying ReadLatest Response : {:?}", last_height.is_ok());
+  assert!(last_height.is_ok());
 
   // Step 5: Read At Index
   let req = tonic::Request::new(ReadByIndexReq {
@@ -197,12 +194,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
-  // Step 6: Append without a condition
-  let message = "no_condition_data_block_append".as_bytes();
+  // Step 6: Append
+  let expected_height = last_height.unwrap() + 1;
+  let message = "data_block_append".as_bytes();
   let req = tonic::Request::new(AppendReq {
     handle: handle.clone(),
     block: message.to_vec(),
-    expected_height: 0_u64,
+    expected_height: expected_height as u64,
   });
 
   let AppendResp { receipt } = coordinator_connection
@@ -211,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?
     .into_inner();
 
-  let res = verify_append(&vs, &handle, message, 0, &receipt);
+  let res = verify_append(&vs, &handle, message, expected_height, &receipt);
   println!("Append verification no condition: {:?}", res.is_ok());
   assert!(res.is_ok());
 

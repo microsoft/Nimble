@@ -337,7 +337,7 @@ async fn find_db_entry(
 async fn append_ledger_op(
   handle: &str,
   block: &Block,
-  expected_height: Option<usize>,
+  expected_height: usize,
   ledger: Arc<TableClient>,
   cache: &CacheMap,
 ) -> Result<usize, LedgerStoreError> {
@@ -345,47 +345,45 @@ async fn append_ledger_op(
   let height = get_cached_entry(handle, cache, ledger.clone()).await?;
   let height_plus_one = checked_increment!(height);
 
-  // 2. If it is a conditional update, check if condition still holds
-  if let Some(h) = expected_height {
-    let expected_height = checked_conversion!(h, i64);
+  // 2. Check if condition holds
+  let expected_height_c = checked_conversion!(expected_height, i64);
 
-    match expected_height.cmp(&height_plus_one) {
-      Ordering::Less => {
-        // Condition no longer holds. Cache may be stale but it doesn't matter
+  match expected_height_c.cmp(&height_plus_one) {
+    Ordering::Less => {
+      // Condition no longer holds. Cache may be stale but it doesn't matter
 
+      eprintln!(
+        "Expected height {};  Height-plus-one: {}",
+        expected_height_c, height_plus_one
+      );
+
+      return Err(LedgerStoreError::LedgerError(
+        StorageError::IncorrectConditionalData,
+      ));
+    },
+    Ordering::Greater => {
+      // Either condition does not hold or cache is stale for some reason
+      // Get latest height and double check
+      let height = find_ledger_height(ledger.clone(), handle).await?;
+      let height_plus_one = checked_increment!(height);
+
+      // Update the cache
+      update_cache_entry(handle, cache, height)?;
+
+      // Condition no longer holds
+      if expected_height_c != height_plus_one {
         eprintln!(
           "Expected height {};  Height-plus-one: {}",
-          expected_height, height_plus_one
+          expected_height_c, height_plus_one
         );
 
         return Err(LedgerStoreError::LedgerError(
           StorageError::IncorrectConditionalData,
         ));
-      },
-      Ordering::Greater => {
-        // Either condition does not hold or cache is stale for some reason
-        // Get latest height and double check
-        let height = find_ledger_height(ledger.clone(), handle).await?;
-        let height_plus_one = checked_increment!(height);
-
-        // Update the cache
-        update_cache_entry(handle, cache, height)?;
-
-        // Condition no longer holds
-        if expected_height != height_plus_one {
-          eprintln!(
-            "Expected height {};  Height-plus-one: {}",
-            expected_height, height_plus_one
-          );
-
-          return Err(LedgerStoreError::LedgerError(
-            StorageError::IncorrectConditionalData,
-          ));
-        }
-      },
-      Ordering::Equal => {}, // all is good
-    };
-  }
+      }
+    },
+    Ordering::Equal => {}, // all is good
+  };
 
   // 3. Construct the new entry we are going to append to the ledger
   let new_entry = DBEntry {
@@ -697,42 +695,34 @@ impl LedgerStore for TableLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     let ledger = self.client.clone();
     let handle_string = base64_url::encode(&handle.to_bytes());
 
-    loop {
-      let res = append_ledger_op(
-        &handle_string,
-        block,
-        expected_height,
-        ledger.clone(),
-        &self.cache,
-      )
-      .await;
-      match res {
-        Ok(v) => {
-          return Ok(v);
-        },
-        Err(e) => {
-          match e {
-            LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
-              fix_cached_entry(&handle_string, &self.cache, ledger.clone()).await?;
+    let res = append_ledger_op(
+      &handle_string,
+      block,
+      expected_height,
+      ledger.clone(),
+      &self.cache,
+    )
+    .await;
 
-              if expected_height.is_some() {
-                // conditional write cannot be retried
-                return Err(LedgerStoreError::LedgerError(
-                  StorageError::IncorrectConditionalData,
-                ));
-              }
-            },
-            _ => {
-              return Err(e);
-            },
-          }
-        },
-      }
+    match res {
+      Ok(v) => Ok(v),
+      Err(e) => {
+        match e {
+          LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
+            fix_cached_entry(&handle_string, &self.cache, ledger.clone()).await?;
+            // conditional write cannot be retried
+            Err(LedgerStoreError::LedgerError(
+              StorageError::IncorrectConditionalData,
+            ))
+          },
+          _ => Err(e),
+        }
+      },
     }
   }
 
@@ -801,7 +791,7 @@ impl LedgerStore for TableLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     self
       .append_ledger(&self.view_handle, block, expected_height)

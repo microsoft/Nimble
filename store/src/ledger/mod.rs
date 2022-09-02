@@ -40,7 +40,7 @@ pub trait LedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError>;
   async fn attach_ledger_receipt(
     &self,
@@ -56,7 +56,7 @@ pub trait LedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError>;
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
   async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError>;
@@ -91,7 +91,7 @@ mod tests {
     let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
-    let (current_block, _height) = res.unwrap();
+    let (current_block, height) = res.unwrap();
     assert_eq!(current_block.to_bytes(), initial_value);
 
     let new_value_appended: Vec<u8> = vec![
@@ -101,7 +101,7 @@ mod tests {
 
     let new_block = Block::new(&new_value_appended);
 
-    let res = state.append_ledger(&handle, &new_block, None).await;
+    let res = state.append_ledger(&handle, &new_block, height + 1).await;
     assert!(res.is_ok());
 
     let res = state.read_ledger_tail(&handle).await;

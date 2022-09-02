@@ -1299,10 +1299,25 @@ impl CoordinatorState {
       Block::new(&block_vec)
     };
 
+    // Read the current ledger tail
+    let res = self.ledger_store.read_view_ledger_tail().await;
+
+    if res.is_err() {
+      eprintln!(
+        "Failed to read from the view ledger in the ledger store ({:?})",
+        res.unwrap_err()
+      );
+      return Err(CoordinatorError::FailedToCallLedgerStore);
+    }
+
+    let (_tail, height) = res.unwrap();
+
+    // Ignore tail result for now. TODO: for fault tolerance, we'll need to do more.
+
     // Store the genesis block of the view ledger in the ledger store
     let res = self
       .ledger_store
-      .append_view_ledger(&view_ledger_genesis_block, None)
+      .append_view_ledger(&view_ledger_genesis_block, height + 1)
       .await;
     if res.is_err() {
       eprintln!(
@@ -1462,18 +1477,17 @@ impl CoordinatorState {
     block_bytes: &[u8],
     expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
+    if expected_height == 0 {
+      return Err(CoordinatorError::InvalidHeight);
+    }
+
     let handle = NimbleDigest::digest(handle_bytes);
     let data_block = Block::new(block_bytes);
     let hash_of_block = data_block.hash();
 
-    let requested_height = match expected_height {
-      0 => None,
-      _ => Some(expected_height),
-    };
-
     let res = self
       .ledger_store
-      .append_ledger(&handle, &data_block, requested_height)
+      .append_ledger(&handle, &data_block, expected_height)
       .await;
     if res.is_err() {
       eprintln!(
@@ -1484,7 +1498,7 @@ impl CoordinatorState {
     }
 
     let actual_height = res.unwrap();
-    assert!(expected_height == 0 || actual_height == expected_height);
+    assert!(actual_height == expected_height);
 
     let receipt = {
       let endorsers = match endorsers_opt {

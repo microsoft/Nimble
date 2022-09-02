@@ -362,7 +362,7 @@ impl LedgerStore for FileStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     let ledger_lock = open_and_lock(handle, &self.dir_path, &self.open_files, false)?;
 
@@ -383,12 +383,11 @@ impl LedgerStore for FileStore {
       },
     };
 
-    // 1. If it is a conditional update, check if condition still holds
-    if expected_height.is_some() && expected_height.unwrap() != next_index {
+    // 1. check if condition holds
+    if expected_height != next_index {
       eprintln!(
         "Expected height {};  Height-plus-one: {}",
-        expected_height.unwrap(),
-        next_index
+        expected_height, next_index
       );
 
       return Err(LedgerStoreError::LedgerError(
@@ -501,7 +500,7 @@ impl LedgerStore for FileStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     self
       .append_ledger(&self.view_handle, block, expected_height)

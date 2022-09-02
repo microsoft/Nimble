@@ -58,12 +58,12 @@ impl LedgerStore for InMemoryLedgerStore {
     &self,
     handle: &Handle,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          if expected_height.is_none() || expected_height.unwrap() == ledgers.len() {
+          if expected_height == ledgers.len() {
             let ledger_entry = LedgerEntry {
               block: block.clone(),
               receipt: Receipt::default(),
@@ -177,10 +177,10 @@ impl LedgerStore for InMemoryLedgerStore {
   async fn append_view_ledger(
     &self,
     block: &Block,
-    expected_height: Option<usize>,
+    expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      if expected_height.is_none() || expected_height.unwrap() == view_ledger_array.len() {
+      if expected_height == view_ledger_array.len() {
         let ledger_entry = LedgerEntry::new(block.clone(), Receipt::default());
         view_ledger_array.push(ledger_entry);
         Ok(view_ledger_array.len() - 1)
