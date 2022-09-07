@@ -227,7 +227,7 @@ impl CoordinatorState {
 
     let (view_ledger_tail, tail_height) = res.unwrap();
     if tail_height > 0 {
-      let res = bincode::deserialize(&view_ledger_tail.to_bytes());
+      let res = bincode::deserialize(&view_ledger_tail.get_block().to_bytes());
       if res.is_err() {
         eprintln!(
           "Failed to deserialize the view ledger tail's genesis block {:?}",
@@ -1542,7 +1542,7 @@ impl CoordinatorState {
 
     let handle = NimbleDigest::digest(handle_bytes);
 
-    let (ledger_block, height) = {
+    let (ledger_entry, height) = {
       let res = self.ledger_store.read_ledger_tail(&handle).await;
       if res.is_err() {
         eprintln!(
@@ -1569,7 +1569,7 @@ impl CoordinatorState {
       res.unwrap()
     };
 
-    Ok((ledger_block, receipt))
+    Ok((ledger_entry.get_block().clone(), receipt))
   }
 
   pub async fn read_ledger_by_index(

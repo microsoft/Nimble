@@ -47,7 +47,10 @@ pub trait LedgerStore {
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError>;
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError>;
+  async fn read_ledger_tail(
+    &self,
+    handle: &Handle,
+  ) -> Result<(LedgerEntry, usize), LedgerStoreError>;
   async fn read_ledger_by_index(
     &self,
     handle: &Handle,
@@ -59,7 +62,7 @@ pub trait LedgerStore {
     expected_height: usize,
   ) -> Result<usize, LedgerStoreError>;
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
-  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError>;
+  async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError>;
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError>; // only used for testing
@@ -91,8 +94,8 @@ mod tests {
     let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
-    let (current_block, height) = res.unwrap();
-    assert_eq!(current_block.to_bytes(), initial_value);
+    let (current_entry, height) = res.unwrap();
+    assert_eq!(current_entry.get_block().to_bytes(), initial_value);
 
     let new_value_appended: Vec<u8> = vec![
       2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1,
@@ -107,8 +110,8 @@ mod tests {
     let res = state.read_ledger_tail(&handle).await;
     assert!(res.is_ok());
 
-    let (current_block, _height) = res.unwrap();
-    assert_eq!(current_block.to_bytes(), new_value_appended);
+    let (current_entry, _height) = res.unwrap();
+    assert_eq!(current_entry.get_block().to_bytes(), new_value_appended);
 
     let res = state.read_ledger_by_index(&handle, 0).await;
     assert!(res.is_ok());

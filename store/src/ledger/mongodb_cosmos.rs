@@ -587,14 +587,16 @@ impl LedgerStore for MongoCosmosLedgerStore {
     }
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_ledger_tail(
+    &self,
+    handle: &Handle,
+  ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
       .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
 
-    let (ledger_entry, height) = loop_and_read(handle, None, &ledger, &self.cache).await?;
-    Ok((ledger_entry.block, height))
+    loop_and_read(handle, None, &ledger, &self.cache).await
   }
 
   async fn read_ledger_by_index(
@@ -611,7 +613,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     Ok(entry)
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     self.read_ledger_tail(&self.view_handle).await
   }
 

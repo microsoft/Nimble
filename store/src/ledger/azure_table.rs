@@ -757,11 +757,13 @@ impl LedgerStore for TableLedgerStore {
     }
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_ledger_tail(
+    &self,
+    handle: &Handle,
+  ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     let ledger = self.client.clone();
     let handle_string = base64_url::encode(&handle.to_bytes());
-    let (ledger_entry, height) = read_ledger_op(&handle_string, None, ledger, &self.cache).await?;
-    Ok((ledger_entry.block, height))
+    read_ledger_op(&handle_string, None, ledger, &self.cache).await
   }
 
   async fn read_ledger_by_index(
@@ -776,7 +778,7 @@ impl LedgerStore for TableLedgerStore {
     Ok(ledger_entry)
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     self.read_ledger_tail(&self.view_handle).await
   }
 

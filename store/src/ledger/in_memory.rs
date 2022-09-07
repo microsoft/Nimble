@@ -125,12 +125,15 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_ledger_tail(
+    &self,
+    handle: &Handle,
+  ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(ledgers) = ledgers_map[handle].read() {
           let ledgers_entry = ledgers[ledgers.len() - 1].clone();
-          Ok((ledgers_entry.block, ledgers.len() - 1))
+          Ok((ledgers_entry, ledgers.len() - 1))
         } else {
           Err(LedgerStoreError::LedgerError(
             StorageError::LedgerReadLockFailed,
@@ -217,10 +220,10 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     if let Ok(view_ledger_array) = self.view_ledger.read() {
       let ledger_entry = view_ledger_array[view_ledger_array.len() - 1].clone();
-      Ok((ledger_entry.block, view_ledger_array.len() - 1))
+      Ok((ledger_entry, view_ledger_array.len() - 1))
     } else {
       Err(LedgerStoreError::LedgerError(
         StorageError::ViewLedgerReadLockFailed,

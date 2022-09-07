@@ -469,10 +469,13 @@ impl LedgerStore for FileStore {
     Ok(())
   }
 
-  async fn read_ledger_tail(&self, handle: &Handle) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_ledger_tail(
+    &self,
+    handle: &Handle,
+  ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     let (ledger_entry, height) =
       read_ledger_op(handle, None, &self.dir_path, &self.open_files).await?;
-    Ok((ledger_entry.block, height))
+    Ok((ledger_entry, height))
   }
 
   async fn read_ledger_by_index(
@@ -485,7 +488,7 @@ impl LedgerStore for FileStore {
     Ok(ledger_entry)
   }
 
-  async fn read_view_ledger_tail(&self) -> Result<(Block, usize), LedgerStoreError> {
+  async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError> {
     self.read_ledger_tail(&self.view_handle).await
   }
 
