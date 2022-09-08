@@ -175,7 +175,7 @@ impl TableLedgerStore {
         match error {
           // Ledger does not exist ERROR
           LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
-            // Initialized view ledger's entry
+            // Initialize view ledger's entry
             let entry = DBEntry {
               handle: view_handle_string.clone(),
               row: 0.to_string(),
@@ -184,7 +184,13 @@ impl TableLedgerStore {
               receipt: base64_url::encode(&Receipt::default().to_bytes()),
             };
 
-            insert_row(ledger_store.client.clone(), &view_handle_string, entry).await?;
+            insert_row(
+              ledger_store.client.clone(),
+              &view_handle_string,
+              entry,
+              None, // No need to add an entry at the given index
+            )
+            .await?;
             update_cache_entry(&view_handle_string, &ledger_store.cache, 0)?;
           },
           _ => {
@@ -210,7 +216,8 @@ impl TableLedgerStore {
 async fn insert_row(
   table_client: Arc<TableClient>,
   handle: &str,
-  entry: DBEntry,
+  mut tail_entry: DBEntry,
+  indexed_entry: Option<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
   let partition_client = table_client.as_partition_key_client(handle);
   let tail_client = match partition_client.as_entity_client(TAIL) {
@@ -221,7 +228,6 @@ async fn insert_row(
     },
   };
 
-  let mut tail_entry = entry.clone();
   tail_entry.row = TAIL.to_owned();
 
   let tail_update = match tail_client
@@ -235,18 +241,24 @@ async fn insert_row(
     },
   };
 
-  let row_insert = match table_client.insert().to_transaction_operation(&entry) {
-    Ok(v) => v,
-    Err(e) => {
-      eprintln!("Cannot create transaction operation due to error: {:?}", e);
-      return Err(LedgerStoreError::LedgerError(StorageError::UnhandledError));
-    },
-  };
-
   // construct transaction
   let mut transaction = Transaction::default();
-  transaction.add(row_insert);
   transaction.add(tail_update);
+
+  // If the caller specifies a row to add at a particular index, add that to
+  // the ongoing transaction
+  if let Some(entry) = indexed_entry {
+    let row_insert = match table_client.insert().to_transaction_operation(&entry) {
+      Ok(v) => v,
+      Err(e) => {
+        eprintln!("Cannot create transaction operation due to error: {:?}", e);
+        return Err(LedgerStoreError::LedgerError(StorageError::UnhandledError));
+      },
+    };
+
+    transaction.add(row_insert);
+  }
+
   let res = partition_client
     .submit_transaction()
     .execute(&transaction)
@@ -292,6 +304,36 @@ async fn insert_row(
   }
 
   Ok(())
+}
+
+async fn attach_ledger_receipt_internal(
+  ledger: Arc<TableClient>,
+  handle_string: &str,
+  cache: &CacheMap,
+  receipt: &Receipt,
+  index: &str,
+) -> Result<(), LedgerStoreError> {
+  loop {
+    let res = attach_ledger_receipt_op(handle_string, receipt, ledger.clone(), index).await;
+
+    match res {
+      Ok(v) => {
+        return Ok(v);
+      },
+      Err(e) => {
+        match e {
+          LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
+            // fix cache and retry since there was some concurrent op that prevented
+            // this attach ledger
+            fix_cached_entry(handle_string, cache, ledger.clone()).await?;
+          },
+          _ => {
+            return Err(e);
+          },
+        }
+      },
+    }
+  }
 }
 
 async fn find_db_entry(
@@ -394,8 +436,8 @@ async fn append_ledger_op(
     receipt: base64_url::encode(&Receipt::default().to_bytes()),
   };
 
-  // 4. Try to insert the new entry into the ledger.
-  insert_row(ledger, handle, new_entry).await?;
+  // 4. Try to insert the new entry into the ledger (also set as tail)
+  insert_row(ledger, handle, new_entry.clone(), Some(new_entry)).await?;
 
   // Update the cached height and etag for this ledger
   update_cache_entry(handle, cache, height_plus_one)?;
@@ -414,12 +456,20 @@ async fn attach_ledger_receipt_op(
   handle: &str,
   receipt: &Receipt,
   ledger: Arc<TableClient>,
+  index: &str,
 ) -> Result<(), LedgerStoreError> {
-  // 1. Get the desired index.
-  let index = receipt.get_height().to_string();
+  // 1. Fetch the receipt at this index
+  let (entry, etag) = find_db_entry(ledger.clone(), handle, index).await?;
 
-  // 2. Fetch the receipt at this index
-  let (entry, etag) = find_db_entry(ledger.clone(), handle, &index).await?;
+  // Compare the height of the provided receipt with the height of the fetched
+  // entry. They should be the same.
+  // We need this check because default receipts have no height themselves,
+  // so we must rely on the entry's height and not just the receipt's height..
+  let height = checked_conversion!(entry.height, usize);
+  if receipt.get_height() != height {
+    return Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex));
+  }
+
   let receipt_bytes = match base64_url::decode(&entry.receipt) {
     Ok(v) => v,
     Err(e) => {
@@ -430,7 +480,7 @@ async fn attach_ledger_receipt_op(
     },
   };
 
-  // 3. Append the receipt to the fetched receipt
+  // 2. Append the receipt to the fetched receipt
   let mut fetched_receipt = match Receipt::from_bytes(&receipt_bytes) {
     Ok(r) => r,
     Err(e) => {
@@ -451,12 +501,12 @@ async fn attach_ledger_receipt_op(
   // 3. Update the row with the updated receipt
   let merge_entry = MergeDBEntry {
     handle: handle.to_owned(),
-    row: index.clone(),
+    row: index.to_owned(),
     receipt: base64_url::encode(&fetched_receipt.to_bytes()),
   };
 
   let partition_client = ledger.as_partition_key_client(handle);
-  let row_client = match partition_client.as_entity_client(&index) {
+  let row_client = match partition_client.as_entity_client(index) {
     Ok(v) => v,
     Err(e) => {
       eprintln!("Unable to get row client in attach ledger receipt: {:?}", e);
@@ -685,7 +735,7 @@ impl LedgerStore for TableLedgerStore {
       receipt: base64_url::encode(&Receipt::default().to_bytes()),
     };
 
-    insert_row(ledger, &handle_string, entry).await?;
+    insert_row(ledger, &handle_string, entry.clone(), Some(entry)).await?;
     update_cache_entry(&handle_string, &self.cache, 0)?;
 
     Ok(())
@@ -733,28 +783,9 @@ impl LedgerStore for TableLedgerStore {
   ) -> Result<(), LedgerStoreError> {
     let ledger = self.client.clone();
     let handle_string = base64_url::encode(&handle.to_bytes());
+    let index = receipt.get_height().to_string();
 
-    loop {
-      let res = attach_ledger_receipt_op(&handle_string, receipt, ledger.clone()).await;
-
-      match res {
-        Ok(v) => {
-          return Ok(v);
-        },
-        Err(e) => {
-          match e {
-            LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
-              // fix cache and retry since there was some concurrent op that prevented
-              // this attach ledger
-              fix_cached_entry(&handle_string, &self.cache, ledger.clone()).await?;
-            },
-            _ => {
-              return Err(e);
-            },
-          }
-        },
-      }
-    }
+    attach_ledger_receipt_internal(ledger, &handle_string, &self.cache, receipt, &index).await
   }
 
   async fn read_ledger_tail(
@@ -783,11 +814,27 @@ impl LedgerStore for TableLedgerStore {
   }
 
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError> {
-    self.read_ledger_by_index(&self.view_handle, idx).await
+    let res = self.read_ledger_by_index(&self.view_handle, idx).await;
+
+    if let Ok(v) = res {
+      Ok(v)
+    } else {
+      // Check the TAIL row as well just in case it is there. Recall that unlike regular
+      // ledgers, in the view ledger the TAIL contains the latest entry and it has not yet
+      // been inserted to a dedicated row. This is safe due to syncrhonous appends in view change.
+      let (entry, height) = self.read_view_ledger_tail().await?;
+      if height == idx {
+        Ok(entry)
+      } else {
+        Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
+      }
+    }
   }
 
   async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
-    self.attach_ledger_receipt(&self.view_handle, receipt).await
+    let ledger = self.client.clone();
+    let handle_string = base64_url::encode(&self.view_handle.to_bytes());
+    attach_ledger_receipt_internal(ledger, &handle_string, &self.cache, receipt, TAIL).await
   }
 
   async fn append_view_ledger(
@@ -795,9 +842,49 @@ impl LedgerStore for TableLedgerStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
-    self
-      .append_ledger(&self.view_handle, block, expected_height)
-      .await
+    // 1. Get current entry at TAIL row
+    let (current_tail_entry, height) = self.read_view_ledger_tail().await?;
+    let height_plus_one = checked_increment!(height);
+
+    // 2. Ensure condition holds
+    if expected_height != height_plus_one {
+      return Err(LedgerStoreError::LedgerError(
+        StorageError::IncorrectConditionalData,
+      ));
+    }
+
+    let height_c = checked_conversion!(height, i64);
+    let expected_height_c = checked_conversion!(expected_height, i64);
+
+    let ledger = self.client.clone();
+    let handle_string = base64_url::encode(&self.view_handle.to_bytes());
+
+    // 3. Construct the entry we are going to bump from the TAIL row to an entry in the
+    // ledger at position height
+    let bump_entry = DBEntry {
+      handle: handle_string.to_owned(),
+      row: height_c.to_string(),
+      height: height_c,
+      block: base64_url::encode(&current_tail_entry.get_block().to_bytes()),
+      receipt: base64_url::encode(&current_tail_entry.get_receipt().to_bytes()),
+    };
+
+    // 4. Construct the entry that should go in the tail
+    let tail_entry = DBEntry {
+      handle: handle_string.to_owned(),
+      row: expected_height_c.to_string(),
+      height: expected_height_c,
+      block: base64_url::encode(&block.to_bytes()),
+      receipt: base64_url::encode(&Receipt::default().to_bytes()),
+    };
+
+    // 4. Try to insert the bumped entry into the ledger.
+    insert_row(ledger, &handle_string, tail_entry, Some(bump_entry)).await?;
+
+    // Update the cached height and etag for this ledger
+    update_cache_entry(&handle_string, &self.cache, expected_height_c)?;
+
+    Ok(expected_height)
   }
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError> {
