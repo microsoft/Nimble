@@ -10,8 +10,8 @@ use std::{
   sync::{Arc, RwLock},
 };
 use store::ledger::{
-  azure_pageblob::PageBlobLedgerStore, azure_table::TableLedgerStore, filestore::FileStore,
-  in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
+  azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
+  mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
 };
 use tokio::sync::mpsc;
 use tonic::{
@@ -194,11 +194,6 @@ impl CoordinatorState {
     let coordinator = match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
         ledger_store: Arc::new(Box::new(MongoCosmosLedgerStore::new(args).await.unwrap())),
-        conn_map: Arc::new(RwLock::new(HashMap::new())),
-        quorum_size: Arc::new(RwLock::new(HashMap::new())),
-      },
-      "pageblob" => CoordinatorState {
-        ledger_store: Arc::new(Box::new(PageBlobLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         quorum_size: Arc::new(RwLock::new(HashMap::new())),
       },
