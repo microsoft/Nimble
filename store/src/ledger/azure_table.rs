@@ -8,7 +8,7 @@ use azure_data_tables::{clients::TableClient, prelude::*};
 use azure_core::Etag;
 use azure_storage::core::prelude::*;
 use base64_url;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Receipt};
 use serde::{Deserialize, Serialize};
 use std::{
   cmp::Ordering,
@@ -620,7 +620,7 @@ async fn read_ledger_op(
   };
 
   Ok((
-    LedgerEntry::new(ret_block, ret_receipt),
+    LedgerEntry::new(ret_block, ret_receipt, None),
     checked_conversion!(entry.height, usize),
   ))
 }
@@ -746,7 +746,7 @@ impl LedgerStore for TableLedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<usize, LedgerStoreError> {
+  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
     let ledger = self.client.clone();
     let handle_string = base64_url::encode(&handle.to_bytes());
 
@@ -760,7 +760,7 @@ impl LedgerStore for TableLedgerStore {
     .await;
 
     match res {
-      Ok(v) => Ok(v),
+      Ok(v) => Ok((v, Vec::new())),
       Err(e) => {
         match e {
           LedgerStoreError::LedgerError(StorageError::ConcurrentOperation) => {
@@ -786,6 +786,15 @@ impl LedgerStore for TableLedgerStore {
     let index = receipt.get_height().to_string();
 
     attach_ledger_receipt_internal(ledger, &handle_string, &self.cache, receipt, &index).await
+  }
+
+  #[allow(unused_variables)]
+  async fn attach_ledger_nonce(
+    &self,
+    handle: &Handle,
+    nonces: &Nonce,
+  ) -> Result<usize, LedgerStoreError> {
+    unimplemented!()
   }
 
   async fn read_ledger_tail(

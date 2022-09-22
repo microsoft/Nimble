@@ -1,4 +1,4 @@
-use super::{Block, Handle, NimbleDigest, Receipt};
+use super::{Block, Handle, NimbleDigest, Nonce, Receipt};
 use crate::{
   errors::{LedgerStoreError, StorageError},
   ledger::{LedgerEntry, LedgerStore},
@@ -10,10 +10,12 @@ use std::{
 };
 
 type LedgerArray = Arc<RwLock<Vec<LedgerEntry>>>;
+type NonceArray = Arc<RwLock<Vec<Nonce>>>;
 
 #[derive(Debug, Default)]
 pub struct InMemoryLedgerStore {
   ledgers: Arc<RwLock<HashMap<Handle, LedgerArray>>>,
+  nonces: Arc<RwLock<HashMap<Handle, NonceArray>>>,
   view_ledger: Arc<RwLock<Vec<LedgerEntry>>>,
 }
 
@@ -22,12 +24,34 @@ impl InMemoryLedgerStore {
     let ledgers = HashMap::new();
     let mut view_ledger = Vec::new();
 
-    let view_ledger_entry = LedgerEntry::new(Block::new(&[0; 0]), Receipt::default());
+    let view_ledger_entry = LedgerEntry::new(Block::new(&[0; 0]), Receipt::default(), None);
     view_ledger.push(view_ledger_entry);
 
     InMemoryLedgerStore {
       ledgers: Arc::new(RwLock::new(ledgers)),
+      nonces: Arc::new(RwLock::new(HashMap::new())),
       view_ledger: Arc::new(RwLock::new(view_ledger)),
+    }
+  }
+
+  fn drain_nonces(&self, handle: &Handle) -> Result<Vec<Nonce>, LedgerStoreError> {
+    if let Ok(nonce_map) = self.nonces.read() {
+      if nonce_map.contains_key(handle) {
+        if let Ok(mut nonces) = nonce_map[handle].write() {
+          Ok(nonces.drain(..).collect())
+        } else {
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerWriteLockFailed,
+          ))
+        }
+      } else {
+        eprintln!("Unable to drain nonce because key does not exist");
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
+      }
+    } else {
+      Err(LedgerStoreError::LedgerError(
+        StorageError::LedgerMapReadLockFailed,
+      ))
     }
   }
 }
@@ -39,13 +63,25 @@ impl LedgerStore for InMemoryLedgerStore {
     handle: &NimbleDigest,
     genesis_block: Block,
   ) -> Result<(), LedgerStoreError> {
-    let genesis_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default());
+    let genesis_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default(), None);
     if let Ok(mut ledgers_map) = self.ledgers.write() {
-      if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
-        e.insert(Arc::new(RwLock::new(vec![genesis_ledger_entry])));
-        Ok(())
+      if let Ok(mut nonce_map) = self.nonces.write() {
+        if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
+          e.insert(Arc::new(RwLock::new(vec![genesis_ledger_entry])));
+
+          if let hash_map::Entry::Vacant(n) = nonce_map.entry(*handle) {
+            n.insert(Arc::new(RwLock::new(Vec::new())));
+            Ok(())
+          } else {
+            Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
+          }
+        } else {
+          Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
+        }
       } else {
-        Err(LedgerStoreError::LedgerError(StorageError::DuplicateKey))
+        Err(LedgerStoreError::LedgerError(
+          StorageError::LedgerMapWriteLockFailed,
+        ))
       }
     } else {
       Err(LedgerStoreError::LedgerError(
@@ -59,17 +95,21 @@ impl LedgerStore for InMemoryLedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<usize, LedgerStoreError> {
+  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
           if expected_height == ledgers.len() {
+            let nonces = self.drain_nonces(handle)?;
+
             let ledger_entry = LedgerEntry {
               block: block.clone(),
               receipt: Receipt::default(),
+              nonces: nonces.clone(),
             };
             ledgers.push(ledger_entry);
-            Ok(ledgers.len() - 1)
+
+            Ok(((ledgers.len() - 1), nonces))
           } else {
             Err(LedgerStoreError::LedgerError(
               StorageError::IncorrectConditionalData,
@@ -81,6 +121,7 @@ impl LedgerStore for InMemoryLedgerStore {
           ))
         }
       } else {
+        eprintln!("Key does not exist in the ledger map");
         Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
       }
     } else {
@@ -113,6 +154,51 @@ impl LedgerStore for InMemoryLedgerStore {
         } else {
           Err(LedgerStoreError::LedgerError(
             StorageError::LedgerWriteLockFailed,
+          ))
+        }
+      } else {
+        Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
+      }
+    } else {
+      Err(LedgerStoreError::LedgerError(
+        StorageError::LedgerMapReadLockFailed,
+      ))
+    }
+  }
+
+  async fn attach_ledger_nonce(
+    &self,
+    handle: &Handle,
+    nonce: &Nonce,
+  ) -> Result<usize, LedgerStoreError> {
+    if let Ok(ledgers_map) = self.ledgers.read() {
+      if ledgers_map.contains_key(handle) {
+        if let Ok(ledgers) = ledgers_map[handle].read() {
+          let height = ledgers.len();
+
+          if let Ok(nonce_map) = self.nonces.read() {
+            if nonce_map.contains_key(handle) {
+              if let Ok(mut nonces) = nonce_map[handle].write() {
+                // add nonce to the nonces list of this ledger and return the next
+                // height at which it should be appended
+                nonces.push(nonce.to_owned());
+                Ok(height)
+              } else {
+                Err(LedgerStoreError::LedgerError(
+                  StorageError::LedgerWriteLockFailed,
+                ))
+              }
+            } else {
+              Err(LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist))
+            }
+          } else {
+            Err(LedgerStoreError::LedgerError(
+              StorageError::LedgerReadLockFailed,
+            ))
+          }
+        } else {
+          Err(LedgerStoreError::LedgerError(
+            StorageError::LedgerReadLockFailed,
           ))
         }
       } else {
@@ -184,7 +270,7 @@ impl LedgerStore for InMemoryLedgerStore {
   ) -> Result<usize, LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       if expected_height == view_ledger_array.len() {
-        let ledger_entry = LedgerEntry::new(block.clone(), Receipt::default());
+        let ledger_entry = LedgerEntry::new(block.clone(), Receipt::default(), None);
         view_ledger_array.push(ledger_entry);
         Ok(view_ledger_array.len() - 1)
       } else {

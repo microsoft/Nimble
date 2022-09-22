@@ -1488,7 +1488,7 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAppendLedger);
     }
 
-    let actual_height = res.unwrap();
+    let (actual_height, _nonce_list) = res.unwrap();
     assert!(actual_height == expected_height);
 
     let receipt = {

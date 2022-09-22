@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use ledger::{Block, Handle, NimbleDigest, Receipt};
+use ledger::{Block, Handle, NimbleDigest, Nonce, Receipt};
 
 pub mod azure_table;
 pub mod filestore;
@@ -12,11 +12,16 @@ use crate::errors::LedgerStoreError;
 pub struct LedgerEntry {
   pub block: Block,
   receipt: Receipt,
+  nonces: Vec<Nonce>,
 }
 
 impl LedgerEntry {
-  pub fn new(block: Block, receipt: Receipt) -> Self {
-    Self { block, receipt }
+  pub fn new(block: Block, receipt: Receipt, nonces: Option<Vec<Nonce>>) -> Self {
+    Self {
+      block,
+      receipt,
+      nonces: if let Some(n) = nonces { n } else { Vec::new() },
+    }
   }
 
   pub fn get_block(&self) -> &Block {
@@ -25,6 +30,10 @@ impl LedgerEntry {
 
   pub fn get_receipt(&self) -> &Receipt {
     &self.receipt
+  }
+
+  pub fn get_nonces(&self) -> &[Nonce] {
+    &self.nonces
   }
 }
 
@@ -40,12 +49,17 @@ pub trait LedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<usize, LedgerStoreError>;
+  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError>;
   async fn attach_ledger_receipt(
     &self,
     handle: &Handle,
     receipt: &Receipt,
   ) -> Result<(), LedgerStoreError>;
+  async fn attach_ledger_nonce(
+    &self,
+    handle: &Handle,
+    nonce: &Nonce,
+  ) -> Result<usize, LedgerStoreError>;
   async fn read_ledger_tail(
     &self,
     handle: &Handle,

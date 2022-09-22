@@ -5,7 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use bincode;
 use hex;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Receipt};
 use mongodb::{
   bson::{doc, spec::BinarySubtype, Binary},
   error::WriteFailure::WriteError,
@@ -249,7 +249,7 @@ async fn append_ledger_op(
   expected_height: usize,
   ledger: &Collection<DBEntry>,
   cache: &CacheMap,
-) -> Result<usize, LedgerStoreError> {
+) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
   let height = get_cached_height(handle, cache, ledger).await?;
   let height_plus_one = checked_increment!(height);
 
@@ -286,7 +286,7 @@ async fn append_ledger_op(
 
   // Update the cached height for this ledger
   update_cache_entry(handle, cache, height_plus_one)?;
-  Ok(height_plus_one as usize)
+  Ok((height_plus_one as usize, Vec::new()))
 }
 
 async fn attach_ledger_receipt_op(
@@ -405,6 +405,7 @@ async fn read_ledger_op(
   let res = LedgerEntry::new(
     Block::from_bytes(&entry.block).unwrap(),
     Receipt::from_bytes(&entry.receipt).unwrap(),
+    None, //TODO
   );
 
   Ok((res, checked_conversion!(index, usize)))
@@ -551,7 +552,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<usize, LedgerStoreError> {
+  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
@@ -585,6 +586,15 @@ impl LedgerStore for MongoCosmosLedgerStore {
         &ledger
       );
     }
+  }
+
+  #[allow(unused_variables)]
+  async fn attach_ledger_nonce(
+    &self,
+    handle: &Handle,
+    nonce: &Nonce,
+  ) -> Result<usize, LedgerStoreError> {
+    unimplemented!()
   }
 
   async fn read_ledger_tail(
@@ -630,9 +640,10 @@ impl LedgerStore for MongoCosmosLedgerStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
-    self
+    let res = self
       .append_ledger(&self.view_handle, block, expected_height)
-      .await
+      .await?;
+    Ok(res.0)
   }
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError> {

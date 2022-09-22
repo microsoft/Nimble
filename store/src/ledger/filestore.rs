@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bincode;
 use fs2::FileExt;
 use hex;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Receipt};
 use serde::{Deserialize, Serialize};
 use std::{
   collections::HashMap,
@@ -308,6 +308,7 @@ async fn read_ledger_op(
     LedgerEntry::new(
       Block::from_bytes(&entry.block).unwrap(),
       Receipt::from_bytes(&entry.receipt).unwrap(),
+      None, //TODO
     ),
     index,
   ))
@@ -363,7 +364,7 @@ impl LedgerStore for FileStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<usize, LedgerStoreError> {
+  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
     let ledger_lock = open_and_lock(handle, &self.dir_path, &self.open_files, false)?;
 
     let mut ledger = match ledger_lock.write() {
@@ -404,7 +405,16 @@ impl LedgerStore for FileStore {
     let ser_entry = serialize_entry(&new_entry)?;
 
     write_at(SeekFrom::End(0), &mut ledger, &ser_entry)?;
-    Ok(next_index)
+    Ok((next_index, Vec::new()))
+  }
+
+  #[allow(unused_variables)]
+  async fn attach_ledger_nonce(
+    &self,
+    handle: &Handle,
+    receipt: &Nonce,
+  ) -> Result<usize, LedgerStoreError> {
+    unimplemented!()
   }
 
   async fn attach_ledger_receipt(
@@ -505,9 +515,10 @@ impl LedgerStore for FileStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<usize, LedgerStoreError> {
-    self
+    let res = self
       .append_ledger(&self.view_handle, block, expected_height)
-      .await
+      .await?;
+    Ok(res.0)
   }
 
   async fn reset_store(&self) -> Result<(), LedgerStoreError> {
