@@ -77,7 +77,7 @@ pub fn produce_hash_of_state(ledger_tail_map: &LedgerTailMap) -> NimbleDigest {
 }
 
 /// A cryptographic Nonce
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Default, PartialEq, Eq)]
 pub struct Nonce {
   data: [u8; 16],
 }
@@ -95,6 +95,37 @@ impl Nonce {
 
   pub fn get(&self) -> Vec<u8> {
     self.data.to_vec()
+  }
+
+  pub fn num_bytes() -> usize {
+    16
+  }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Nonces {
+  nonces: Vec<Nonce>,
+}
+
+impl Nonces {
+  pub fn new() -> Self {
+    Nonces { nonces: Vec::new() }
+  }
+
+  pub fn from_vec(nonces: Vec<Nonce>) -> Self {
+    Nonces { nonces }
+  }
+
+  pub fn get(&self) -> &Vec<Nonce> {
+    &self.nonces
+  }
+
+  pub fn add(&mut self, nonce: Nonce) {
+    self.nonces.push(nonce)
+  }
+
+  pub fn contains(&self, nonce: &Nonce) -> bool {
+    self.nonces.iter().any(|nonce_iter| *nonce_iter == *nonce)
   }
 }
 
@@ -394,6 +425,43 @@ where
 {
   fn to_bytes(&self) -> Vec<u8>;
   fn from_bytes(bytes: &[u8]) -> Result<Self, CustomSerdeError>;
+}
+
+impl CustomSerde for Nonce {
+  fn to_bytes(&self) -> Vec<u8> {
+    self.data.to_vec()
+  }
+
+  fn from_bytes(bytes: &[u8]) -> Result<Nonce, CustomSerdeError> {
+    match Nonce::new(bytes) {
+      Ok(nonce) => Ok(nonce),
+      Err(_) => Err(CustomSerdeError::IncorrectLength),
+    }
+  }
+}
+impl CustomSerde for Nonces {
+  fn to_bytes(&self) -> Vec<u8> {
+    let mut data = Vec::with_capacity(self.nonces.len() * Nonce::num_bytes());
+    for nonce in self.get() {
+      data.extend(nonce.to_bytes());
+    }
+    data
+  }
+
+  fn from_bytes(bytes: &[u8]) -> Result<Nonces, CustomSerdeError> {
+    if bytes.len() % Nonce::num_bytes() != 0 {
+      Err(CustomSerdeError::IncorrectLength)
+    } else {
+      let mut nonces = Nonces::new();
+      let mut pos = 0;
+      while pos < bytes.len() {
+        let nonce = Nonce::from_bytes(&bytes[pos..pos + Nonce::num_bytes()])?;
+        nonces.add(nonce);
+        pos += Nonce::num_bytes();
+      }
+      Ok(nonces)
+    }
+  }
 }
 
 impl CustomSerde for Block {

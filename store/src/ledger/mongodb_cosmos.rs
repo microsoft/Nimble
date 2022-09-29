@@ -5,7 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use bincode;
 use hex;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipt};
 use mongodb::{
   bson::{doc, spec::BinarySubtype, Binary},
   error::WriteFailure::WriteError,
@@ -249,7 +249,7 @@ async fn append_ledger_op(
   expected_height: usize,
   ledger: &Collection<DBEntry>,
   cache: &CacheMap,
-) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
+) -> Result<(usize, Nonces), LedgerStoreError> {
   let height = get_cached_height(handle, cache, ledger).await?;
   let height_plus_one = checked_increment!(height);
 
@@ -286,7 +286,7 @@ async fn append_ledger_op(
 
   // Update the cached height for this ledger
   update_cache_entry(handle, cache, height_plus_one)?;
-  Ok((height_plus_one as usize, Vec::new()))
+  Ok((height_plus_one as usize, Nonces::new()))
 }
 
 async fn attach_ledger_receipt_op(
@@ -552,7 +552,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
+  ) -> Result<(usize, Nonces), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)

@@ -1,4 +1,4 @@
-use super::{Block, Handle, NimbleDigest, Nonce, Receipt};
+use super::{Block, Handle, NimbleDigest, Nonce, Nonces, Receipt};
 use crate::{
   errors::{LedgerStoreError, StorageError},
   ledger::{LedgerEntry, LedgerStore},
@@ -34,11 +34,11 @@ impl InMemoryLedgerStore {
     }
   }
 
-  fn drain_nonces(&self, handle: &Handle) -> Result<Vec<Nonce>, LedgerStoreError> {
+  fn drain_nonces(&self, handle: &Handle) -> Result<Nonces, LedgerStoreError> {
     if let Ok(nonce_map) = self.nonces.read() {
       if nonce_map.contains_key(handle) {
         if let Ok(mut nonces) = nonce_map[handle].write() {
-          Ok(nonces.drain(..).collect())
+          Ok(Nonces::from_vec(nonces.drain(..).collect()))
         } else {
           Err(LedgerStoreError::LedgerError(
             StorageError::LedgerWriteLockFailed,
@@ -95,7 +95,7 @@ impl LedgerStore for InMemoryLedgerStore {
     handle: &Handle,
     block: &Block,
     expected_height: usize,
-  ) -> Result<(usize, Vec<Nonce>), LedgerStoreError> {
+  ) -> Result<(usize, Nonces), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
