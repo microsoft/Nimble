@@ -1,5 +1,7 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageError {
+  /// returned if the request is somehow invalid
+  BadRequest,
   /// returned if the supplied key does not exist in the storage service
   InvalidKey,
   /// returned if one attempts to insert a key that is already in the storage service

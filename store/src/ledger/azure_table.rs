@@ -79,7 +79,7 @@ macro_rules! get_error_status {
 
 fn parse_error_status(code: StatusCode) -> LedgerStoreError {
   match code {
-    StatusCode::BAD_REQUEST => LedgerStoreError::LedgerError(StorageError::InvalidIndex),
+    StatusCode::BAD_REQUEST => LedgerStoreError::LedgerError(StorageError::BadRequest),
     StatusCode::RANGE_NOT_SATISFIABLE => LedgerStoreError::LedgerError(StorageError::InvalidIndex),
     StatusCode::NOT_FOUND => LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist),
     StatusCode::PRECONDITION_FAILED => {
@@ -447,7 +447,20 @@ async fn find_db_entry(
   let res = row_client.get().execute().await;
 
   if let Err(err) = res {
-    return Err(parse_error_status(get_error_status!(err)));
+    let e = parse_error_status(get_error_status!(err));
+
+    match e {
+      LedgerStoreError::LedgerError(StorageError::KeyDoesNotExist) => {
+        if row != TAIL {
+          return Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex));
+        } else {
+          return Err(e);
+        }
+      },
+      _ => {
+        return Err(e);
+      },
+    }
   }
 
   let res = res.unwrap();
@@ -524,8 +537,6 @@ async fn append_ledger_internal(
 
   // 4. Try to insert the new entry into the ledger and set the tail
 
-  let cached_entry = get_cached_entry(handle, cache, ledger.clone()).await?;
-
   azure_op(
     ledger,
     handle,
@@ -533,7 +544,7 @@ async fn append_ledger_internal(
     indexed_entry,
     cache,
     AzureOp::Append,
-    Some(cached_entry.etag),
+    Some(cache_entry.etag.clone()),
   )
   .await?;
 
@@ -686,8 +697,10 @@ async fn read_ledger_internal(
     },
   };
 
+  let nonce_list = decode_nonces_string(&entry.nonces)?;
+
   Ok((
-    LedgerEntry::new(ret_block, ret_receipt, None),
+    LedgerEntry::new(ret_block, ret_receipt, Some(nonce_list)),
     checked_conversion!(entry.height, usize),
   ))
 }
