@@ -25,11 +25,17 @@ pub enum VerificationError {
   /// returned if the supplied metablock of the view ledger does not point to the tail in the verifier's state
   ViewInMetaBlockNotLatest,
   /// returned if a public key is not found in a receipt
-  InvalidePublicKey,
+  InvalidPublicKey,
   /// returned if the block hash does not match the block
   InvalidBlockHash,
   /// returned if the height does not match the expected height
   InvalidHeight,
   /// returned if the supplied handle bytes cannot be deserialized
   InvalidHandle,
+  /// returned if the supplied nonces cannot be deserialized
+  InvalidNonces,
+  /// returned if the supplied nonce cannot be deserialized
+  InvalidNonce,
+  /// returned if the supplied hash nonces cannot be deserialized
+  InvalidNoncesHash,
 }

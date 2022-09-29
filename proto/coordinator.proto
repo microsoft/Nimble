@@ -26,7 +26,8 @@ message AppendReq {
 }
 
 message AppendResp {
-  bytes receipt = 1;
+  bytes hash_nonces = 1;
+  bytes receipt = 2;
 }
 
 message ReadLatestReq {
@@ -36,7 +37,8 @@ message ReadLatestReq {
 
 message ReadLatestResp {
   bytes block = 1;
-  bytes receipt = 2;
+  bytes nonces = 2;
+  bytes receipt = 3;
 }
 
 message ReadByIndexReq {
@@ -46,7 +48,8 @@ message ReadByIndexReq {
 
 message ReadByIndexResp {
   bytes block = 1;
-  bytes receipt = 2;
+  bytes nonces = 2;
+  bytes receipt = 3;
 }
 
 message ReadViewByIndexReq {

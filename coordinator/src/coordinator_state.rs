@@ -13,6 +13,7 @@ use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
   mongodb_cosmos::MongoCosmosLedgerStore, LedgerEntry, LedgerStore,
 };
+use store::{errors::LedgerStoreError, errors::StorageError};
 use tokio::sync::mpsc;
 use tonic::{
   transport::{Channel, Endpoint},
@@ -64,7 +65,11 @@ async fn update_endorser(
       let endorser_proto::NewLedgerResp { receipt } = endorser_client
         .new_ledger(tonic::Request::new(endorser_proto::NewLedgerReq {
           handle: handle.to_bytes(),
-          block_hash: ledger_entry.get_block().hash().to_bytes(),
+          block_hash: LedgerEntry::compute_aggregated_block_hash(
+            &ledger_entry.get_block().hash(),
+            &ledger_entry.get_nonces().hash(),
+          )
+          .to_bytes(),
           ignore_lock,
         }))
         .await?
@@ -75,7 +80,11 @@ async fn update_endorser(
       let endorser_proto::AppendResp { receipt } = endorser_client
         .append(tonic::Request::new(endorser_proto::AppendReq {
           handle: handle.to_bytes(),
-          block_hash: ledger_entry.get_block().hash().to_bytes(),
+          block_hash: LedgerEntry::compute_aggregated_block_hash(
+            &ledger_entry.get_block().hash(),
+            &ledger_entry.get_nonces().hash(),
+          )
+          .to_bytes(),
           expected_height: idx as u64,
           ignore_lock,
         }))
@@ -818,12 +827,75 @@ impl CoordinatorState {
     }
   }
 
+  async fn endorser_update_ledger(
+    &self,
+    endorsers: &[Vec<u8>],
+    ledger_handle: &Handle,
+    max_height: usize,
+    endorser_height_map: &HashMap<String, usize>,
+  ) {
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+
+    for pk in endorsers {
+      let (endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
+      };
+
+      let height_to_start = {
+        if !endorser_height_map.contains_key(&endorser) {
+          0
+        } else {
+          endorser_height_map[&endorser].checked_add(1).unwrap()
+        }
+      };
+
+      if height_to_start > max_height {
+        continue;
+      }
+
+      let ledger_store = self.ledger_store.clone();
+      let handle = *ledger_handle;
+      let tx = mpsc_tx.clone();
+      let _job = tokio::spawn(async move {
+        let res = update_endorser(
+          ledger_store,
+          endorser_client,
+          handle,
+          height_to_start,
+          max_height,
+          false,
+        )
+        .await;
+        let _ = tx.send((endorser, res)).await;
+      });
+    }
+
+    drop(mpsc_tx);
+
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(()) => {},
+        Err(status) => {
+          if process_error(&endorser, Some(ledger_handle), &status)
+            == CoordinatorAction::RemoveEndorser
+          {
+            eprintln!(
+              "update_endorser {} received unexpected error {:?}",
+              endorser, status,
+            );
+            let _ = self.disconnect_endorser(&endorser).await;
+          }
+        },
+      }
+    }
+  }
+
   async fn endorser_read_ledger_tail(
     &self,
     endorsers: &[Vec<u8>],
     ledger_handle: &Handle,
     client_nonce: &Nonce,
-    expected_height: usize,
   ) -> Result<Receipt, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
@@ -836,132 +908,83 @@ impl CoordinatorState {
       let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
       let nonce = *client_nonce;
-      let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
-        loop {
-          let res = endorser_client
-            .read_latest(tonic::Request::new(endorser_proto::ReadLatestReq {
-              handle: handle.to_bytes(),
-              nonce: nonce.get(),
-              expected_height: expected_height as u64,
-            }))
-            .await;
-          match res {
-            Ok(resp) => {
-              let endorser_proto::ReadLatestResp { receipt } = resp.into_inner();
-              let _ = tx.send((endorser, Ok(receipt))).await;
-              break;
-            },
-            Err(status) => match process_error(&endorser, Some(&handle), &status) {
-              CoordinatorAction::UpdateEndorser => {
-                let height_to_start = {
-                  if status.code() == Code::NotFound {
-                    0
-                  } else {
-                    let bytes = status.details();
-                    let ledger_height = u64::from_le_bytes(bytes[0..].try_into().unwrap()) as usize;
-                    ledger_height.checked_add(1).unwrap()
-                  }
-                };
-                let height_to_end = expected_height;
-                let res = update_endorser(
-                  ledger_store.clone(),
-                  endorser_client.clone(),
-                  handle,
-                  height_to_start,
-                  height_to_end,
-                  false,
-                )
+        let res = endorser_client
+          .read_latest(tonic::Request::new(endorser_proto::ReadLatestReq {
+            handle: handle.to_bytes(),
+            nonce: nonce.to_bytes(),
+          }))
+          .await;
+        match res {
+          Ok(resp) => {
+            let endorser_proto::ReadLatestResp { receipt } = resp.into_inner();
+            let _ = tx.send((endorser, Ok(receipt))).await;
+          },
+          Err(status) => match process_error(&endorser, Some(&handle), &status) {
+            CoordinatorAction::RemoveEndorser => {
+              let _ = tx
+                .send((endorser, Err(CoordinatorError::UnexpectedError)))
                 .await;
-                match res {
-                  Ok(_resp) => {
-                    continue;
-                  },
-                  Err(status) => match process_error(&endorser, Some(&handle), &status) {
-                    CoordinatorAction::RemoveEndorser => {
-                      let _ = tx
-                        .send((endorser, Err(CoordinatorError::UnexpectedError)))
-                        .await;
-                      break;
-                    },
-                    CoordinatorAction::IncrementReceipt => {
-                      continue;
-                    },
-                    _ => {
-                      let _ = tx
-                        .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
-                        .await;
-                      break;
-                    },
-                  },
-                }
-              },
-              CoordinatorAction::RemoveEndorser => {
-                let _ = tx
-                  .send((endorser, Err(CoordinatorError::UnexpectedError)))
-                  .await;
-                break;
-              },
-              CoordinatorAction::IncrementReceipt => {
-                let _ = tx
-                  .send((endorser, Err(CoordinatorError::LedgerAlreadyExists)))
-                  .await;
-                break;
-              },
-              _ => {
-                let _ = tx
-                  .send((endorser, Err(CoordinatorError::FailedToAppendLedger)))
-                  .await;
-                break;
-              },
             },
-          }
+            _ => {
+              let _ = tx
+                .send((endorser, Err(CoordinatorError::FailedToReadLedger)))
+                .await;
+            },
+          },
         }
       });
     }
 
     drop(mpsc_tx);
 
-    let mut quorum_size = 0;
-    let mut receipts: Vec<Receipt> = Vec::new();
-    let mut receipt_count = 0;
+    let mut receipt_map: HashMap<NimbleDigest, Receipt> = HashMap::new();
+    let mut endorser_height_map: HashMap<String, usize> = HashMap::new();
+    let mut max_height = 0;
+
     while let Some((endorser, res)) = mpsc_rx.recv().await {
       match res {
         Ok(receipt) => match Receipt::from_bytes(&receipt) {
-          Ok(receipt_rs) => {
-            if quorum_size == 0 {
-              quorum_size = self.get_quorum_size(receipt_rs.get_view()).await;
+          Ok(mut receipt_rs) => {
+            endorser_height_map.insert(endorser, receipt_rs.get_height());
+            if max_height < receipt_rs.get_height() {
+              max_height = receipt_rs.get_height();
             }
-            receipts.push(receipt_rs);
-            receipt_count += 1;
+            let receipt_digest = receipt_rs
+              .get_view()
+              .digest_with(&receipt_rs.get_metablock_hash());
+            if receipt_map.contains_key(&receipt_digest) {
+              let res = receipt_rs.append(&receipt_map[&receipt_digest]);
+              assert!(res.is_ok());
+            }
+            if receipt_rs.get_id_sigs().len() >= self.get_quorum_size(receipt_rs.get_view()).await {
+              return Ok(receipt_rs);
+            } else {
+              receipt_map.insert(receipt_digest, receipt_rs);
+            }
           },
           Err(error) => {
             eprintln!("Failed to parse a receipt (err={:?}", error);
           },
         },
-        Err(error) => match error {
-          CoordinatorError::LedgerAlreadyExists => {
-            receipt_count += 1;
-          },
-          CoordinatorError::UnexpectedError => {
+        Err(error) => {
+          if error == CoordinatorError::UnexpectedError {
             eprintln!(
               "read_ledger from endorser {} received unexpected error {:?}",
               endorser, error
             );
             let _ = self.disconnect_endorser(&endorser).await;
-          },
-          _ => {},
+          }
         },
-      }
-      if receipt_count == quorum_size {
-        break;
       }
     }
 
-    match Receipt::merge_receipts(&receipts) {
-      Ok(receipt) => Ok(receipt),
-      Err(_) => Err(CoordinatorError::EndorsersNotInSync),
-    }
+    // Since we didn't reach a quorum, let's have endorsers catch up
+    self
+      .endorser_update_ledger(endorsers, ledger_handle, max_height, &endorser_height_map)
+      .await;
+
+    Err(CoordinatorError::FailedToObtainQuorum)
   }
 
   async fn endorser_append_view_ledger(
@@ -1415,7 +1438,8 @@ impl CoordinatorState {
   ) -> Result<Receipt, CoordinatorError> {
     let handle = NimbleDigest::digest(handle_bytes);
     let genesis_block = Block::new(block_bytes);
-    let block_hash = genesis_block.hash();
+    let block_hash =
+      NimbleDigest::digest(&genesis_block.hash().to_bytes()).digest_with(&NimbleDigest::default());
 
     let res = self
       .ledger_store
@@ -1467,14 +1491,13 @@ impl CoordinatorState {
     handle_bytes: &[u8],
     block_bytes: &[u8],
     expected_height: usize,
-  ) -> Result<Receipt, CoordinatorError> {
+  ) -> Result<(NimbleDigest, Receipt), CoordinatorError> {
     if expected_height == 0 {
       return Err(CoordinatorError::InvalidHeight);
     }
 
     let handle = NimbleDigest::digest(handle_bytes);
     let data_block = Block::new(block_bytes);
-    let hash_of_block = data_block.hash();
 
     let res = self
       .ledger_store
@@ -1488,8 +1511,12 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAppendLedger);
     }
 
-    let (actual_height, _nonce_list) = res.unwrap();
+    let (actual_height, nonces) = res.unwrap();
     assert!(actual_height == expected_height);
+
+    let hash_block = data_block.hash();
+    let hash_nonces = nonces.hash();
+    let block_hash = LedgerEntry::compute_aggregated_block_hash(&hash_block, &hash_nonces);
 
     let receipt = {
       let endorsers = match endorsers_opt {
@@ -1497,7 +1524,7 @@ impl CoordinatorState {
         None => self.get_endorser_pks(),
       };
       let res = self
-        .endorser_append_ledger(&endorsers, &handle, &hash_of_block, actual_height)
+        .endorser_append_ledger(&endorsers, &handle, &block_hash, actual_height)
         .await;
       if res.is_err() {
         eprintln!("Failed to append to the ledger in endorsers {:?}", res);
@@ -1518,14 +1545,76 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAttachReceipt);
     }
 
-    Ok(receipt)
+    Ok((hash_nonces, receipt))
+  }
+
+  async fn read_ledger_tail_internal(
+    &self,
+    handle: &NimbleDigest,
+    nonce: &Nonce,
+  ) -> Result<LedgerEntry, CoordinatorError> {
+    let endorsers = self.get_endorser_pks();
+    let res = self
+      .endorser_read_ledger_tail(&endorsers, handle, nonce)
+      .await;
+    match res {
+      Ok(receipt) => {
+        let mut ledger_entry = {
+          let res = self
+            .ledger_store
+            .read_ledger_by_index(handle, receipt.get_height())
+            .await;
+          if res.is_err() {
+            eprintln!(
+              "Failed to read the ledger from the ledger store {:?}",
+              res.unwrap_err()
+            );
+            return Err(CoordinatorError::FailedToCallLedgerStore);
+          }
+          res.unwrap()
+        };
+        ledger_entry.set_receipt(receipt);
+        Ok(ledger_entry)
+      },
+      Err(error) => {
+        eprintln!("Failed to read the ledger tail {:?}", error);
+        Err(error)
+      },
+    }
+  }
+
+  async fn read_ledger_by_index_internal(
+    &self,
+    handle: &NimbleDigest,
+    height: usize,
+  ) -> Result<LedgerEntry, CoordinatorError> {
+    let res = self.ledger_store.read_ledger_by_index(handle, height).await;
+    match res {
+      Ok(ledger_entry) => {
+        if ledger_entry.get_receipt().get_id_sigs().len()
+          >= self
+            .get_quorum_size(ledger_entry.get_receipt().get_view())
+            .await
+        {
+          Ok(ledger_entry)
+        } else {
+          Err(CoordinatorError::FailedToObtainQuorum)
+        }
+      },
+      Err(error) => match error {
+        LedgerStoreError::LedgerError(StorageError::InvalidIndex) => {
+          Err(CoordinatorError::InvalidHeight)
+        },
+        _ => Err(CoordinatorError::FailedToCallLedgerStore),
+      },
+    }
   }
 
   pub async fn read_ledger_tail(
     &self,
     handle_bytes: &[u8],
     nonce_bytes: &[u8],
-  ) -> Result<(Block, Receipt), CoordinatorError> {
+  ) -> Result<LedgerEntry, CoordinatorError> {
     let nonce = {
       let nonce_op = Nonce::new(nonce_bytes);
       if nonce_op.is_err() {
@@ -1537,34 +1626,47 @@ impl CoordinatorState {
 
     let handle = NimbleDigest::digest(handle_bytes);
 
-    let (ledger_entry, height) = {
-      let res = self.ledger_store.read_ledger_tail(&handle).await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to read the ledger tail from the ledger store {:?}",
-          res.unwrap_err()
-        );
-        return Err(CoordinatorError::FailedToReadLatestState);
-      }
-      res.unwrap()
-    };
+    let mut nonce_attached = false;
+    let mut nonce_attached_height = 0;
 
-    let receipt = {
-      let endorsers = self.get_endorser_pks();
-      let res = self
-        .endorser_read_ledger_tail(&endorsers, &handle, &nonce, height)
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to read the ledger tail from endorsers {:?}",
-          res.unwrap_err()
-        );
-        return Err(CoordinatorError::FailedToReadLatestState);
+    loop {
+      match self.read_ledger_tail_internal(&handle, &nonce).await {
+        Ok(ledger_entry) => return Ok(ledger_entry),
+        Err(error) => match error {
+          CoordinatorError::FailedToObtainQuorum => {
+            if !nonce_attached {
+              let res = self.ledger_store.attach_ledger_nonce(&handle, &nonce).await;
+              if res.is_err() {
+                eprintln!(
+                  "Failed to attach the nonce for reading ledger tail {:?}",
+                  res.unwrap_err()
+                );
+                return Err(CoordinatorError::FailedToAttachNonce);
+              }
+              nonce_attached = true;
+              nonce_attached_height = res.unwrap();
+            }
+            match self
+              .read_ledger_by_index_internal(&handle, nonce_attached_height)
+              .await
+            {
+              Ok(ledger_entry) => return Ok(ledger_entry),
+              Err(error) => match error {
+                CoordinatorError::FailedToObtainQuorum | CoordinatorError::InvalidHeight => {
+                  continue;
+                },
+                _ => {
+                  return Err(error);
+                },
+              },
+            }
+          },
+          _ => {
+            return Err(error);
+          },
+        },
       }
-      res.unwrap()
-    };
-
-    Ok((ledger_entry.get_block().clone(), receipt))
+    }
   }
 
   pub async fn read_ledger_by_index(
@@ -1574,19 +1676,16 @@ impl CoordinatorState {
   ) -> Result<LedgerEntry, CoordinatorError> {
     let handle = NimbleDigest::digest(handle_bytes);
 
-    let ledger_entry = {
-      let res = self.ledger_store.read_ledger_by_index(&handle, index).await;
-      if res.is_err() {
+    match self.ledger_store.read_ledger_by_index(&handle, index).await {
+      Ok(ledger_entry) => Ok(ledger_entry),
+      Err(error) => {
         eprintln!(
           "Failed to read ledger by index from the ledger store {:?}",
-          res.unwrap_err()
+          error,
         );
-        return Err(CoordinatorError::FailedToReadLedger);
-      }
-      res.unwrap()
-    };
-
-    Ok(ledger_entry)
+        Err(CoordinatorError::FailedToReadLedger)
+      },
+    }
   }
 
   pub async fn read_view_by_index(&self, index: usize) -> Result<LedgerEntry, CoordinatorError> {

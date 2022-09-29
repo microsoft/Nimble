@@ -100,13 +100,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 0,
   });
 
-  let ReadByIndexResp { block, receipt } = coordinator_connection
+  let ReadByIndexResp {
+    block,
+    nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
+  let res = verify_read_by_index(&vs, &handle, &block, &nonces, 0, &receipt);
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -117,13 +121,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp { block, receipt } = coordinator_connection
+  let ReadLatestResp {
+    block,
+    nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .read_latest(req)
     .await?
     .into_inner();
 
-  let res = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+  let res = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
   println!("ReadLatest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -142,7 +150,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       expected_height: expected_height as u64,
     });
 
-    let AppendResp { receipt } = coordinator_connection
+    let AppendResp {
+      hash_nonces,
+      receipt,
+    } = coordinator_connection
       .client
       .append(req)
       .await?
@@ -152,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       &vs,
       &handle,
       block_to_append.as_ref(),
+      &hash_nonces,
       expected_height,
       &receipt,
     );
@@ -166,14 +178,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp { block, receipt } = coordinator_connection
+  let ReadLatestResp {
+    block,
+    nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .read_latest(latest_state_query)
     .await?
     .into_inner();
   assert_eq!(block, b3.clone());
 
-  let last_height = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+  let last_height = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
   println!("Verifying ReadLatest Response : {:?}", last_height.is_ok());
   assert!(last_height.is_ok());
 
@@ -183,14 +199,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 1,
   });
 
-  let ReadByIndexResp { block, receipt } = coordinator_connection
+  let ReadByIndexResp {
+    block,
+    nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
   assert_eq!(block, b1.clone());
 
-  let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
+  let res = verify_read_by_index(&vs, &handle, &block, &nonces, 1, &receipt);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -203,13 +223,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     expected_height: expected_height as u64,
   });
 
-  let AppendResp { receipt } = coordinator_connection
+  let AppendResp {
+    hash_nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .append(req)
     .await?
     .into_inner();
 
-  let res = verify_append(&vs, &handle, message, expected_height, &receipt);
+  let res = verify_append(
+    &vs,
+    &handle,
+    message,
+    &hash_nonces,
+    expected_height,
+    &receipt,
+  );
   println!("Append verification no condition: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -220,14 +250,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     nonce: nonce.to_vec(),
   });
 
-  let ReadLatestResp { block, receipt } = coordinator_connection
+  let ReadLatestResp {
+    block,
+    nonces,
+    receipt,
+  } = coordinator_connection
     .client
     .read_latest(latest_state_query)
     .await?
     .into_inner();
   assert_eq!(block, message);
 
-  let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+  let is_latest_valid = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()

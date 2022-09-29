@@ -40,8 +40,12 @@ impl NimbleDigest {
   }
 
   pub fn digest(bytes: &[u8]) -> Self {
-    NimbleDigest {
-      digest: Sha256::digest(bytes),
+    if bytes.is_empty() {
+      NimbleDigest::default()
+    } else {
+      NimbleDigest {
+        digest: Sha256::digest(bytes),
+      }
     }
   }
 
@@ -91,10 +95,6 @@ impl Nonce {
         data: nonce.try_into().unwrap(),
       })
     }
-  }
-
-  pub fn get(&self) -> Vec<u8> {
-    self.data.to_vec()
   }
 
   pub fn num_bytes() -> usize {
@@ -612,6 +612,12 @@ impl NimbleHashTrait for Block {
 }
 
 impl NimbleHashTrait for MetaBlock {
+  fn hash(&self) -> NimbleDigest {
+    NimbleDigest::digest(&self.to_bytes())
+  }
+}
+
+impl NimbleHashTrait for Nonces {
   fn hash(&self) -> NimbleDigest {
     NimbleDigest::digest(&self.to_bytes())
   }

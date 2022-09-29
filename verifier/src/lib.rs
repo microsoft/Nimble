@@ -3,9 +3,10 @@ pub mod errors;
 use crate::errors::VerificationError;
 use ledger::{
   signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorserHostnames, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  CustomSerde, EndorserHostnames, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce, Nonces, Receipt,
 };
 use std::collections::{HashMap, HashSet};
+use store::ledger::LedgerEntry;
 
 const MIN_NUM_ENDORSERS: usize = 1;
 
@@ -159,7 +160,11 @@ pub fn verify_new_ledger(
 
   let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
   let message = {
-    let genesis_metablock = MetaBlock::genesis(&NimbleDigest::digest(block_bytes));
+    let block_hash = LedgerEntry::compute_aggregated_block_hash(
+      &NimbleDigest::digest(block_bytes),
+      &NimbleDigest::default(),
+    );
+    let genesis_metablock = MetaBlock::genesis(&block_hash);
     NimbleDigest::digest(handle_bytes)
       .digest_with(&genesis_metablock.hash())
       .to_bytes()
@@ -179,6 +184,7 @@ pub fn verify_read_latest(
   vs: &VerifierState,
   handle_bytes: &[u8],
   block_bytes: &[u8],
+  nonces_bytes: &[u8],
   nonce_bytes: &[u8],
   receipt_bytes: &[u8],
 ) -> Result<usize, VerificationError> {
@@ -191,7 +197,10 @@ pub fn verify_read_latest(
 
   let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
 
-  let block_hash = Block::from_bytes(block_bytes).unwrap().hash();
+  let block_hash = LedgerEntry::compute_aggregated_block_hash(
+    &NimbleDigest::digest(block_bytes),
+    &NimbleDigest::digest(nonces_bytes),
+  );
   if block_hash != *receipt.get_block_hash() {
     return Err(VerificationError::InvalidBlockHash);
   }
@@ -202,18 +211,27 @@ pub fn verify_read_latest(
   let message = NimbleDigest::digest(handle_bytes).digest_with(&hash_nonced_tail_hash_prime);
 
   // verify the receipt against the nonced tail hash
-  receipt.verify(&message.to_bytes(), pk_vec).map_err(|e| {
-    eprintln!("receipt verify: {:?}", e);
-    VerificationError::InvalidReceipt
-  })?;
+  let res = receipt.verify(&message.to_bytes(), pk_vec);
 
-  Ok(receipt.get_height())
+  if res.is_ok() {
+    return Ok(receipt.get_height());
+  }
+
+  // verify if the nonce is in the nonces
+  let nonces = Nonces::from_bytes(nonces_bytes).map_err(|_e| VerificationError::InvalidNonces)?;
+  let nonce = Nonce::from_bytes(nonce_bytes).map_err(|_e| VerificationError::InvalidNonce)?;
+  if nonces.contains(&nonce) {
+    return Ok(receipt.get_height());
+  }
+
+  Err(VerificationError::InvalidReceipt)
 }
 
 pub fn verify_read_by_index(
   vs: &VerifierState,
   handle_bytes: &[u8],
   block_bytes: &[u8],
+  nonces_bytes: &[u8],
   idx: usize,
   receipt_bytes: &[u8],
 ) -> Result<(), VerificationError> {
@@ -230,7 +248,10 @@ pub fn verify_read_by_index(
 
   let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
 
-  let block_hash = Block::from_bytes(block_bytes).unwrap().hash();
+  let block_hash = LedgerEntry::compute_aggregated_block_hash(
+    &NimbleDigest::digest(block_bytes),
+    &NimbleDigest::digest(nonces_bytes),
+  );
   if block_hash != *receipt.get_block_hash() {
     return Err(VerificationError::InvalidBlockHash);
   }
@@ -252,6 +273,7 @@ pub fn verify_append(
   vs: &VerifierState,
   handle_bytes: &[u8],
   block_bytes: &[u8],
+  hash_nonces_bytes: &[u8],
   expected_height: usize,
   receipt_bytes: &[u8],
 ) -> Result<usize, VerificationError> {
@@ -264,7 +286,10 @@ pub fn verify_append(
 
   let pk_vec = vs.get_pk_for_view(receipt.get_view())?;
 
-  let block_hash = Block::from_bytes(block_bytes).unwrap().hash();
+  let hash_nonces = NimbleDigest::from_bytes(hash_nonces_bytes)
+    .map_err(|_e| VerificationError::InvalidNoncesHash)?;
+  let block_hash =
+    LedgerEntry::compute_aggregated_block_hash(&NimbleDigest::digest(block_bytes), &hash_nonces);
   if block_hash != *receipt.get_block_hash() {
     eprintln!(
       "original_block_hash={:?}, receipt_block_hash={:?}",

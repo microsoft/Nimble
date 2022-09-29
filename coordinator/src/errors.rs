@@ -58,4 +58,8 @@ pub enum CoordinatorError {
   LedgerAlreadyExists,
   /// returned if hit unexpected error
   UnexpectedError,
+  /// returned if failed to attach nonce into the ledger store
+  FailedToAttachNonce,
+  /// returned if failed to obtain a quorum
+  FailedToObtainQuorum,
 }

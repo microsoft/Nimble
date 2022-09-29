@@ -5,7 +5,6 @@ use ledger::{
   Handle, IdSig, LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
 };
 use std::{
-  cmp::Ordering,
   collections::{hash_map, HashMap},
   sync::{Arc, RwLock},
 };
@@ -122,12 +121,7 @@ impl EndorserState {
     }
   }
 
-  pub fn read_latest(
-    &self,
-    handle: &NimbleDigest,
-    nonce: &[u8],
-    expected_height: usize,
-  ) -> Result<Receipt, EndorserError> {
+  pub fn read_latest(&self, handle: &NimbleDigest, nonce: &[u8]) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       if !view_ledger_state.is_initialized {
         return Err(EndorserError::NotInitialized);
@@ -138,24 +132,17 @@ impl EndorserState {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
             if let Ok(metablock) = protected_metablock.read() {
-              let height = metablock.get_height();
-              match expected_height.cmp(&height) {
-                Ordering::Less => Err(EndorserError::InvalidTailHeight),
-                Ordering::Greater => Err(EndorserError::OutOfOrder),
-                Ordering::Equal => {
-                  let view = view_ledger_state.view_ledger_tail_hash;
-                  let tail_hash = metablock.hash();
-                  let message =
-                    view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce)));
-                  let signature = self.private_key.sign(&message.to_bytes()).unwrap();
+              let view = view_ledger_state.view_ledger_tail_hash;
+              let tail_hash = metablock.hash();
+              let message =
+                view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce)));
+              let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
-                  Ok(Receipt::new(
-                    view,
-                    metablock.clone(),
-                    vec![IdSig::new(self.public_key.clone(), signature)],
-                  ))
-                },
-              }
+              Ok(Receipt::new(
+                view,
+                metablock.clone(),
+                vec![IdSig::new(self.public_key.clone(), signature)],
+              ))
             } else {
               Err(EndorserError::FailedToAcquireLedgerEntryReadLock)
             }
@@ -462,7 +449,7 @@ mod tests {
       .is_ok());
 
     // Fetch the value currently in the tail.
-    let tail_result = endorser_state.read_latest(&handle, &[0], 0);
+    let tail_result = endorser_state.read_latest(&handle, &[0]);
     assert!(tail_result.is_ok());
 
     let ledger_tail_map = endorser_state.ledger_tail_map.read().expect("failed");

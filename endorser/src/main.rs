@@ -179,11 +179,7 @@ impl EndorserCall for EndorserServiceState {
     &self,
     request: Request<ReadLatestReq>,
   ) -> Result<Response<ReadLatestResp>, Status> {
-    let ReadLatestReq {
-      handle,
-      nonce,
-      expected_height,
-    } = request.into_inner();
+    let ReadLatestReq { handle, nonce } = request.into_inner();
     let handle = {
       let res = NimbleDigest::from_bytes(&handle);
       if res.is_err() {
@@ -191,9 +187,7 @@ impl EndorserCall for EndorserServiceState {
       }
       res.unwrap()
     };
-    let res = self
-      .state
-      .read_latest(&handle, &nonce, expected_height as usize);
+    let res = self.state.read_latest(&handle, &nonce);
 
     match res {
       Ok(receipt) => {

@@ -77,13 +77,16 @@ impl Connection {
     handle: &[u8],
     block: &[u8],
     expected_height: u64,
-  ) -> Result<Vec<u8>, EndpointError> {
+  ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
     let req = Request::new(AppendReq {
       handle: handle.to_vec(),
       block: block.to_vec(),
       expected_height,
     });
-    let AppendResp { receipt } = self
+    let AppendResp {
+      hash_nonces,
+      receipt,
+    } = self
       .client
       .clone()
       .append(req)
@@ -93,15 +96,19 @@ impl Connection {
         EndpointError::FailedToIncrementCounter
       })?
       .into_inner();
-    Ok(receipt)
+    Ok((hash_nonces, receipt))
   }
 
   pub async fn read_latest(
     &self,
     handle: &[u8],
     nonce: &[u8],
-  ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
-    let ReadLatestResp { block, receipt } = self
+  ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), EndpointError> {
+    let ReadLatestResp {
+      block,
+      nonces,
+      receipt,
+    } = self
       .client
       .clone()
       .read_latest(ReadLatestReq {
@@ -114,7 +121,7 @@ impl Connection {
         EndpointError::FailedToReadCounter
       })?
       .into_inner();
-    Ok((block, receipt))
+    Ok((block, nonces, receipt))
   }
 
   pub async fn read_view_by_index(
@@ -373,7 +380,7 @@ impl EndpointState {
     };
 
     // issue a request to the coordinator and receive a response
-    let receipt = {
+    let (hash_nonces, receipt) = {
       let res = self.conn.append(handle, &block, expected_counter).await;
 
       if res.is_err() {
@@ -385,7 +392,14 @@ impl EndpointState {
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_append(&vs_rd, handle, &block, expected_height, &receipt)
+        verify_append(
+          &vs_rd,
+          handle,
+          &block,
+          &hash_nonces,
+          expected_height,
+          &receipt,
+        )
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -400,7 +414,14 @@ impl EndpointState {
         }
         let res = {
           if let Ok(vs_rd) = self.vs.read() {
-            verify_append(&vs_rd, handle, &block, expected_height, &receipt)
+            verify_append(
+              &vs_rd,
+              handle,
+              &block,
+              &hash_nonces,
+              expected_height,
+              &receipt,
+            )
           } else {
             return Err(EndpointError::FailedToAcquireReadLock);
           }
@@ -440,7 +461,7 @@ impl EndpointState {
     sigformat: SignatureFormat,
   ) -> Result<(Vec<u8>, u64, Vec<u8>), EndpointError> {
     // issue a request to the coordinator and receive a response
-    let (block, receipt) = {
+    let (block, nonces, receipt) = {
       let res = self.conn.read_latest(handle, nonce).await;
 
       if res.is_err() {
@@ -452,7 +473,7 @@ impl EndpointState {
     // verify the response received from the coordinator
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_read_latest(&vs_rd, handle, &block, nonce, &receipt)
+        verify_read_latest(&vs_rd, handle, &block, &nonces, nonce, &receipt)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -468,7 +489,7 @@ impl EndpointState {
           }
           let res = {
             if let Ok(vs_rd) = self.vs.read() {
-              verify_read_latest(&vs_rd, handle, &block, nonce, &receipt)
+              verify_read_latest(&vs_rd, handle, &block, &nonces, nonce, &receipt)
             } else {
               return Err(EndpointError::FailedToAcquireReadLock);
             }

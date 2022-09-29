@@ -85,8 +85,9 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to append to a ledger"));
     }
 
-    let receipt = res.unwrap();
+    let (hash_nonces, receipt) = res.unwrap();
     let reply = AppendResp {
+      hash_nonces: hash_nonces.to_bytes(),
       receipt: receipt.to_bytes(),
     };
 
@@ -110,10 +111,11 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to read a ledger tail"));
     }
 
-    let (block, receipt) = res.unwrap();
+    let ledger_entry = res.unwrap();
     let reply = ReadLatestResp {
-      block: block.to_bytes(),
-      receipt: receipt.to_bytes(),
+      block: ledger_entry.get_block().to_bytes(),
+      nonces: ledger_entry.get_nonces().to_bytes(),
+      receipt: ledger_entry.get_receipt().to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -128,21 +130,21 @@ impl Call for CoordinatorServiceState {
       index,
     } = request.into_inner();
 
-    let res = self
+    match self
       .state
       .read_ledger_by_index(&handle_bytes, index as usize)
-      .await;
-    if res.is_err() {
-      return Err(Status::aborted("Failed to read a ledger"));
+      .await
+    {
+      Ok(ledger_entry) => {
+        let reply = ReadByIndexResp {
+          block: ledger_entry.get_block().to_bytes(),
+          nonces: ledger_entry.get_nonces().to_bytes(),
+          receipt: ledger_entry.get_receipt().to_bytes(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(_) => return Err(Status::aborted("Failed to read a ledger")),
     }
-
-    let ledger_entry = res.unwrap();
-    let reply = ReadByIndexResp {
-      block: ledger_entry.get_block().to_bytes(),
-      receipt: ledger_entry.get_receipt().to_bytes(),
-    };
-
-    Ok(Response::new(reply))
   }
 
   async fn read_view_by_index(
@@ -459,6 +461,7 @@ mod tests {
     },
     CoordinatorServiceState, CoordinatorState,
   };
+  use ledger::CustomSerde;
   use rand::Rng;
   use std::{
     collections::HashMap,
@@ -637,9 +640,13 @@ mod tests {
       index: 0,
     });
 
-    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
+    let ReadByIndexResp {
+      block,
+      nonces,
+      receipt,
+    } = server.read_by_index(req).await.unwrap().into_inner();
 
-    let res = verify_read_by_index(&vs, &handle, &block, 0, &receipt);
+    let res = verify_read_by_index(&vs, &handle, &block, &nonces, 0, &receipt);
     println!("ReadByIndex: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -650,9 +657,13 @@ mod tests {
       nonce: nonce.to_vec(),
     });
 
-    let ReadLatestResp { block, receipt } = server.read_latest(req).await.unwrap().into_inner();
+    let ReadLatestResp {
+      block,
+      nonces,
+      receipt,
+    } = server.read_latest(req).await.unwrap().into_inner();
 
-    let res = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+    let res = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
     println!("Read Latest : {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -671,12 +682,16 @@ mod tests {
         expected_height: expected_height as u64,
       });
 
-      let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
+      let AppendResp {
+        hash_nonces,
+        receipt,
+      } = server.append(req).await.unwrap().into_inner();
 
       let res = verify_append(
         &vs,
         &handle,
         block_to_append.as_ref(),
+        &hash_nonces,
         expected_height,
         &receipt,
       );
@@ -691,14 +706,19 @@ mod tests {
       nonce: nonce.to_vec(),
     });
 
-    let ReadLatestResp { block, receipt } = server
+    let ReadLatestResp {
+      block,
+      nonces,
+      receipt,
+    } = server
       .read_latest(latest_state_query)
       .await
       .unwrap()
       .into_inner();
     assert_eq!(block, b3.clone());
 
-    let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid =
+      verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -711,10 +731,14 @@ mod tests {
       index: 1,
     });
 
-    let ReadByIndexResp { block, receipt } = server.read_by_index(req).await.unwrap().into_inner();
+    let ReadByIndexResp {
+      block,
+      nonces,
+      receipt,
+    } = server.read_by_index(req).await.unwrap().into_inner();
     assert_eq!(block, b1.clone());
 
-    let res = verify_read_by_index(&vs, &handle, &block, 1, &receipt);
+    let res = verify_read_by_index(&vs, &handle, &block, &nonces, 1, &receipt);
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -768,9 +792,19 @@ mod tests {
       expected_height: expected_height as u64,
     });
 
-    let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
+    let AppendResp {
+      hash_nonces,
+      receipt,
+    } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, &handle, message, expected_height, &receipt);
+    let res = verify_append(
+      &vs,
+      &handle,
+      message,
+      &hash_nonces,
+      expected_height,
+      &receipt,
+    );
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -781,14 +815,19 @@ mod tests {
       nonce: nonce.to_vec(),
     });
 
-    let ReadLatestResp { block, receipt } = server
+    let ReadLatestResp {
+      block,
+      nonces,
+      receipt,
+    } = server
       .read_latest(latest_state_query)
       .await
       .unwrap()
       .into_inner();
     assert_eq!(block, message);
 
-    let is_latest_valid = verify_read_latest(&vs, &handle, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid =
+      verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -845,20 +884,68 @@ mod tests {
     println!("append_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
-    let latest_state_query = tonic::Request::new(ReadLatestReq {
-      handle: new_handle2.clone(),
-      nonce: nonce.to_vec(),
-    });
+    let nonce1 = rand::thread_rng().gen::<[u8; 16]>();
+    let res = server
+      .get_state()
+      .read_ledger_tail(&new_handle2, &nonce1)
+      .await;
+    assert!(res.is_ok());
 
-    let ReadLatestResp { block, receipt } = server
-      .read_latest(latest_state_query)
-      .await
-      .unwrap()
-      .into_inner();
-    assert_eq!(block, message2);
+    let res = server
+      .get_state()
+      .append_ledger(
+        Some(endorsers.clone()),
+        &new_handle2.clone(),
+        message2,
+        2usize,
+      )
+      .await;
+    println!("append_ledger with first endorser again: {:?}", res);
+    assert!(res.is_ok());
 
-    let is_latest_valid = verify_read_latest(&vs, &new_handle2, &block, nonce.as_ref(), &receipt);
+    let message3 = "data_block_append 4".as_bytes();
+    let res = server
+      .get_state()
+      .append_ledger(None, &new_handle2.clone(), message3, 3usize)
+      .await;
+    assert!(res.is_ok());
+
+    let nonce2 = rand::thread_rng().gen::<[u8; 16]>();
+    let res = server
+      .get_state()
+      .read_ledger_tail(&new_handle2, &nonce2)
+      .await;
+    assert!(res.is_ok());
+
+    let ledger_entry = res.unwrap();
+    assert_eq!(ledger_entry.get_block().to_bytes(), message3.to_vec());
+    let is_latest_valid = verify_read_latest(
+      &vs,
+      &new_handle2,
+      &ledger_entry.get_block().to_bytes(),
+      &ledger_entry.get_nonces().to_bytes(),
+      nonce2.as_ref(),
+      &ledger_entry.get_receipt().to_bytes(),
+    );
+    println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
+    assert!(is_latest_valid.is_ok());
+
+    let res = server
+      .get_state()
+      .read_ledger_by_index(&new_handle2, 2usize)
+      .await;
+    assert!(res.is_ok());
+
+    let ledger_entry = res.unwrap();
+    assert_eq!(ledger_entry.get_block().to_bytes(), message2.to_vec());
+    let is_latest_valid = verify_read_latest(
+      &vs,
+      &new_handle2,
+      &ledger_entry.get_block().to_bytes(),
+      &ledger_entry.get_nonces().to_bytes(),
+      nonce1.as_ref(),
+      &ledger_entry.get_receipt().to_bytes(),
+    );
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
@@ -909,14 +996,19 @@ mod tests {
       nonce: nonce.to_vec(),
     });
 
-    let ReadLatestResp { block, receipt } = server
+    let ReadLatestResp {
+      block,
+      nonces,
+      receipt,
+    } = server
       .read_latest(latest_state_query)
       .await
       .unwrap()
       .into_inner();
     assert_eq!(block, message);
 
-    let is_latest_valid = verify_read_latest(&vs, &new_handle, &block, nonce.as_ref(), &receipt);
+    let is_latest_valid =
+      verify_read_latest(&vs, &new_handle, &block, &nonces, nonce.as_ref(), &receipt);
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
@@ -928,9 +1020,12 @@ mod tests {
       expected_height: 2_u64,
     });
 
-    let AppendResp { receipt } = server.append(req).await.unwrap().into_inner();
+    let AppendResp {
+      hash_nonces,
+      receipt,
+    } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, &new_handle, message, 2, &receipt);
+    let res = verify_append(&vs, &new_handle, message, &hash_nonces, 2, &receipt);
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -1005,8 +1100,11 @@ mod tests {
         expected_height: 2_u64,
       });
 
-      let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle, message, 2, &receipt);
+      let AppendResp {
+        hash_nonces,
+        receipt,
+      } = server2.append(req).await.unwrap().into_inner();
+      let res = verify_append(&vs, &new_handle, message, &hash_nonces, 2, &receipt);
       println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 
@@ -1018,8 +1116,11 @@ mod tests {
         expected_height: 2_u64,
       });
 
-      let AppendResp { receipt } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle2, message, 2, &receipt);
+      let AppendResp {
+        hash_nonces,
+        receipt,
+      } = server2.append(req).await.unwrap().into_inner();
+      let res = verify_append(&vs, &new_handle2, message, &hash_nonces, 2, &receipt);
       println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 

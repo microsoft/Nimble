@@ -10,7 +10,7 @@ use crate::errors::LedgerStoreError;
 
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
-  pub block: Block,
+  block: Block,
   receipt: Receipt,
   nonces: Nonces,
 }
@@ -36,8 +36,20 @@ impl LedgerEntry {
     &self.receipt
   }
 
+  pub fn set_receipt(&mut self, new_receipt: Receipt) {
+    self.receipt = new_receipt;
+  }
+
   pub fn get_nonces(&self) -> &Nonces {
     &self.nonces
+  }
+
+  // Compute H(hash_block) || hash_nonces)
+  pub fn compute_aggregated_block_hash(
+    hash_block: &NimbleDigest,
+    hash_nonces: &NimbleDigest,
+  ) -> NimbleDigest {
+    NimbleDigest::digest(&hash_block.to_bytes()).digest_with(hash_nonces)
   }
 }
 
