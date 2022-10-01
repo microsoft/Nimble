@@ -108,7 +108,7 @@ impl EndorserState {
           Ok(Receipt::new(
             view,
             metablock,
-            vec![IdSig::new(self.public_key.clone(), signature)],
+            IdSig::new(self.public_key.clone(), signature),
           ))
         } else {
           Err(EndorserError::LedgerExists)
@@ -141,7 +141,7 @@ impl EndorserState {
               Ok(Receipt::new(
                 view,
                 metablock.clone(),
-                vec![IdSig::new(self.public_key.clone(), signature)],
+                IdSig::new(self.public_key.clone(), signature),
               ))
             } else {
               Err(EndorserError::FailedToAcquireLedgerEntryReadLock)
@@ -229,7 +229,7 @@ impl EndorserState {
               Ok(Receipt::new(
                 view,
                 new_metablock,
-                vec![IdSig::new(self.public_key.clone(), signature)],
+                IdSig::new(self.public_key.clone(), signature),
               ))
             } else {
               Err(EndorserError::FailedToAcquireLedgerEntryWriteLock)
@@ -308,7 +308,7 @@ impl EndorserState {
         Ok(Receipt::new(
           view,
           new_metablock,
-          vec![IdSig::new(self.public_key.clone(), signature)],
+          IdSig::new(self.public_key.clone(), signature),
         ))
       }
     } else {
@@ -376,6 +376,7 @@ impl EndorserState {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use ledger::signature::SignatureTrait;
   use rand::Rng;
 
   #[test]
@@ -442,9 +443,14 @@ mod tests {
         .view_ledger_tail_hash,
     );
     assert!(receipt
+      .get_id_sig()
+      .get_sig()
       .verify(
-        &handle.digest_with(&genesis_tail_hash).to_bytes(),
-        &[endorser_state.public_key.clone()],
+        &endorser_state.public_key,
+        &receipt
+          .get_view()
+          .digest_with(&handle.digest_with(&genesis_tail_hash))
+          .to_bytes(),
       )
       .is_ok());
 
@@ -562,8 +568,13 @@ mod tests {
 
     let endorser_tail_expectation = metadata.hash();
     let message = handle.digest_with(&endorser_tail_expectation);
-    let tail_signature_verification =
-      receipt.verify(&message.to_bytes(), &[endorser_state.public_key.clone()]);
+    let tail_signature_verification = receipt.get_id_sig().get_sig().verify(
+      &endorser_state.public_key,
+      &receipt
+        .get_view()
+        .digest_with_bytes(&message.to_bytes())
+        .to_bytes(),
+    );
 
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");

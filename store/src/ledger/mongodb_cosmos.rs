@@ -5,7 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use bincode;
 use hex;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use mongodb::{
   bson::{doc, spec::BinarySubtype, Binary},
   error::WriteFailure::WriteError,
@@ -109,7 +109,7 @@ type CacheMap = Arc<RwLock<HashMap<Handle, CacheEntry>>>;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SerializedLedgerEntry {
   pub block: Vec<u8>,
-  pub receipt: Vec<u8>,
+  pub receipts: Vec<u8>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -176,7 +176,7 @@ impl MongoCosmosLedgerStore {
           // Initialized view ledger's entry
           let entry = SerializedLedgerEntry {
             block: Block::new(&[0; 0]).to_bytes(),
-            receipt: Receipt::default().to_bytes(),
+            receipts: Receipts::new().to_bytes(),
           };
 
           let bson_entry: Binary = match bincode::serialize(&entry) {
@@ -268,7 +268,7 @@ async fn append_ledger_op(
   // 3. Construct the new entry we are going to append to the ledger
   let new_ledger_entry = SerializedLedgerEntry {
     block: block.to_bytes(),
-    receipt: Receipt::default().to_bytes(),
+    receipts: Receipts::new().to_bytes(),
   };
 
   let bson_new_ledger_entry: Binary = bincode::serialize(&new_ledger_entry)
@@ -289,12 +289,13 @@ async fn append_ledger_op(
   Ok((height_plus_one as usize, Nonces::new()))
 }
 
-async fn attach_ledger_receipt_op(
-  receipt: &Receipt,
+async fn attach_ledger_receipts_op(
+  idx: usize,
+  receipts: &Receipts,
   ledger: &Collection<DBEntry>,
 ) -> Result<(), LedgerStoreError> {
   // 1. Get the desired index.
-  let index = checked_conversion!(receipt.get_height(), i64);
+  let index = checked_conversion!(idx, i64);
 
   // 2. Find the appropriate entry in the ledger
   let ledger_entry: DBEntry = find_db_entry(ledger, index).await?;
@@ -304,17 +305,12 @@ async fn attach_ledger_receipt_op(
   let mut ledger_entry: SerializedLedgerEntry = bincode::deserialize(&read_bson_ledger_entry.bytes)
     .expect("failed to deserialize ledger entry");
 
-  let mut ledger_entry_receipt =
-    Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
+  let mut ledger_entry_receipts =
+    Receipts::from_bytes(&ledger_entry.receipts).expect("failed to deserialize receipt");
 
   // 4. Update receipt
-  let res = ledger_entry_receipt.append(receipt);
-  if res.is_err() {
-    return Err(LedgerStoreError::LedgerError(
-      StorageError::MismatchedReceipts,
-    ));
-  }
-  ledger_entry.receipt = ledger_entry_receipt.to_bytes();
+  ledger_entry_receipts.merge_receipts(receipts);
+  ledger_entry.receipts = ledger_entry_receipts.to_bytes();
 
   // 5. Re-serialize into bson binary
   let write_bson_ledger_entry: Binary = bincode::serialize(&ledger_entry)
@@ -345,7 +341,7 @@ async fn create_ledger_op(
   // 1. Create the ledger entry that we will add to the brand new ledger
   let genesis_data_ledger_entry = SerializedLedgerEntry {
     block: genesis_block.to_bytes(),
-    receipt: Receipt::default().to_bytes(),
+    receipts: Receipts::new().to_bytes(),
   };
 
   let bson_init_data_ledger_entry: Binary = bincode::serialize(&genesis_data_ledger_entry)
@@ -404,7 +400,7 @@ async fn read_ledger_op(
 
   let res = LedgerEntry::new(
     Block::from_bytes(&entry.block).unwrap(),
-    Receipt::from_bytes(&entry.receipt).unwrap(),
+    Receipts::from_bytes(&entry.receipts).unwrap(),
     None, //TODO
   );
 
@@ -568,10 +564,11 @@ impl LedgerStore for MongoCosmosLedgerStore {
     }
   }
 
-  async fn attach_ledger_receipt(
+  async fn attach_ledger_receipts(
     &self,
     handle: &Handle,
-    receipt: &Receipt,
+    idx: usize,
+    receipts: &Receipts,
   ) -> Result<(), LedgerStoreError> {
     let client = self.client.clone();
     let ledger = client
@@ -580,7 +577,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
 
     loop {
       with_retry!(
-        attach_ledger_receipt_op(receipt, &ledger).await,
+        attach_ledger_receipts_op(idx, receipts, &ledger).await,
         handle,
         &self.cache,
         &ledger
@@ -631,8 +628,14 @@ impl LedgerStore for MongoCosmosLedgerStore {
     self.read_ledger_by_index(&self.view_handle, idx).await
   }
 
-  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
-    self.attach_ledger_receipt(&self.view_handle, receipt).await
+  async fn attach_view_ledger_receipts(
+    &self,
+    idx: usize,
+    receipts: &Receipts,
+  ) -> Result<(), LedgerStoreError> {
+    self
+      .attach_ledger_receipts(&self.view_handle, idx, receipts)
+      .await
   }
 
   async fn append_view_ledger(

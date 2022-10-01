@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use ledger::{Block, Handle, NimbleDigest, Nonce, Nonces, Receipt};
+use ledger::{Block, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 
 pub mod azure_table;
 pub mod filestore;
@@ -11,15 +11,15 @@ use crate::errors::LedgerStoreError;
 #[derive(Debug, Default, Clone)]
 pub struct LedgerEntry {
   block: Block,
-  receipt: Receipt,
+  receipts: Receipts,
   nonces: Nonces,
 }
 
 impl LedgerEntry {
-  pub fn new(block: Block, receipt: Receipt, nonces: Option<Nonces>) -> Self {
+  pub fn new(block: Block, receipts: Receipts, nonces: Option<Nonces>) -> Self {
     Self {
       block,
-      receipt,
+      receipts,
       nonces: if let Some(n) = nonces {
         n
       } else {
@@ -32,24 +32,16 @@ impl LedgerEntry {
     &self.block
   }
 
-  pub fn get_receipt(&self) -> &Receipt {
-    &self.receipt
+  pub fn get_receipts(&self) -> &Receipts {
+    &self.receipts
   }
 
-  pub fn set_receipt(&mut self, new_receipt: Receipt) {
-    self.receipt = new_receipt;
+  pub fn set_receipts(&mut self, new_receipt: Receipts) {
+    self.receipts = new_receipt;
   }
 
   pub fn get_nonces(&self) -> &Nonces {
     &self.nonces
-  }
-
-  // Compute H(hash_block) || hash_nonces)
-  pub fn compute_aggregated_block_hash(
-    hash_block: &NimbleDigest,
-    hash_nonces: &NimbleDigest,
-  ) -> NimbleDigest {
-    NimbleDigest::digest(&hash_block.to_bytes()).digest_with(hash_nonces)
   }
 }
 
@@ -66,10 +58,11 @@ pub trait LedgerStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<(usize, Nonces), LedgerStoreError>;
-  async fn attach_ledger_receipt(
+  async fn attach_ledger_receipts(
     &self,
     handle: &Handle,
-    receipt: &Receipt,
+    idx: usize,
+    receipt: &Receipts,
   ) -> Result<(), LedgerStoreError>;
   async fn attach_ledger_nonce(
     &self,
@@ -90,7 +83,11 @@ pub trait LedgerStore {
     block: &Block,
     expected_height: usize,
   ) -> Result<usize, LedgerStoreError>;
-  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError>;
+  async fn attach_view_ledger_receipts(
+    &self,
+    idx: usize,
+    receipt: &Receipts,
+  ) -> Result<(), LedgerStoreError>;
   async fn read_view_ledger_tail(&self) -> Result<(LedgerEntry, usize), LedgerStoreError>;
   async fn read_view_ledger_by_index(&self, idx: usize) -> Result<LedgerEntry, LedgerStoreError>;
 

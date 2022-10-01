@@ -16,15 +16,13 @@ use coordinator_proto::{
   ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
 use ledger::{
+  errors::VerificationError,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, PublicKeyTrait, Signature, SignatureTrait},
-  Block, CustomSerde, NimbleDigest, NimbleHashTrait,
+  Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
 use std::{
   convert::TryFrom,
   sync::{Arc, RwLock},
-};
-use verifier::{
-  errors::VerificationError, verify_append, verify_new_ledger, verify_read_latest, VerifierState,
 };
 
 #[allow(dead_code)]
@@ -59,7 +57,7 @@ impl Connection {
       handle: handle.to_vec(),
       block: block.to_vec(),
     });
-    let NewLedgerResp { receipt } = self
+    let NewLedgerResp { receipts } = self
       .client
       .clone()
       .new_ledger(req)
@@ -69,7 +67,7 @@ impl Connection {
         EndpointError::FailedToCreateNewCounter
       })?
       .into_inner();
-    Ok(receipt)
+    Ok(receipts)
   }
 
   pub async fn append(
@@ -85,7 +83,7 @@ impl Connection {
     });
     let AppendResp {
       hash_nonces,
-      receipt,
+      receipts,
     } = self
       .client
       .clone()
@@ -96,7 +94,7 @@ impl Connection {
         EndpointError::FailedToIncrementCounter
       })?
       .into_inner();
-    Ok((hash_nonces, receipt))
+    Ok((hash_nonces, receipts))
   }
 
   pub async fn read_latest(
@@ -107,7 +105,7 @@ impl Connection {
     let ReadLatestResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = self
       .client
       .clone()
@@ -121,14 +119,14 @@ impl Connection {
         EndpointError::FailedToReadCounter
       })?
       .into_inner();
-    Ok((block, nonces, receipt))
+    Ok((block, nonces, receipts))
   }
 
   pub async fn read_view_by_index(
     &self,
     index: usize,
   ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
-    let ReadViewByIndexResp { block, receipt } = self
+    let ReadViewByIndexResp { block, receipts } = self
       .client
       .clone()
       .read_view_by_index(ReadViewByIndexReq {
@@ -137,7 +135,7 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToReadViewLedger)?
       .into_inner();
-    Ok((block, receipt))
+    Ok((block, receipts))
   }
 }
 
@@ -244,9 +242,9 @@ impl EndpointState {
         break;
       }
 
-      let (block, receipt) = res.unwrap();
+      let (block, receipts) = res.unwrap();
       if let Ok(mut vs_wr) = self.vs.write() {
-        let res = vs_wr.apply_view_change(&block, &receipt);
+        let res = vs_wr.apply_view_change(&block, &receipts);
         if res.is_err() {
           return Err(EndpointError::FailedToApplyViewChange);
         }
@@ -284,7 +282,7 @@ impl EndpointState {
     };
 
     // issue a request to the coordinator and receive a response
-    let receipt = {
+    let receipts = {
       let res = self.conn.new_ledger(handle, &block).await;
       if res.is_err() {
         return Err(EndpointError::FailedToCreateNewCounter);
@@ -295,7 +293,7 @@ impl EndpointState {
     // verify the response received from the coordinator;
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_new_ledger(&vs_rd, handle, &block, &receipt)
+        vs_rd.verify_new_ledger(handle, &block, &receipts)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -311,7 +309,7 @@ impl EndpointState {
         }
         let res = {
           if let Ok(vs_rd) = self.vs.read() {
-            verify_new_ledger(&vs_rd, handle, &block, &receipt)
+            vs_rd.verify_new_ledger(handle, &block, &receipts)
           } else {
             return Err(EndpointError::FailedToAcquireReadLock);
           }
@@ -380,7 +378,7 @@ impl EndpointState {
     };
 
     // issue a request to the coordinator and receive a response
-    let (hash_nonces, receipt) = {
+    let (hash_nonces, receipts) = {
       let res = self.conn.append(handle, &block, expected_counter).await;
 
       if res.is_err() {
@@ -392,14 +390,7 @@ impl EndpointState {
     // verify the response received from the coordinator; TODO: handle the case where vs does not have the returned view hash
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_append(
-          &vs_rd,
-          handle,
-          &block,
-          &hash_nonces,
-          expected_height,
-          &receipt,
-        )
+        vs_rd.verify_append(handle, &block, &hash_nonces, expected_height, &receipts)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -414,14 +405,7 @@ impl EndpointState {
         }
         let res = {
           if let Ok(vs_rd) = self.vs.read() {
-            verify_append(
-              &vs_rd,
-              handle,
-              &block,
-              &hash_nonces,
-              expected_height,
-              &receipt,
-            )
+            vs_rd.verify_append(handle, &block, &hash_nonces, expected_height, &receipts)
           } else {
             return Err(EndpointError::FailedToAcquireReadLock);
           }
@@ -461,7 +445,7 @@ impl EndpointState {
     sigformat: SignatureFormat,
   ) -> Result<(Vec<u8>, u64, Vec<u8>), EndpointError> {
     // issue a request to the coordinator and receive a response
-    let (block, nonces, receipt) = {
+    let (block, nonces, receipts) = {
       let res = self.conn.read_latest(handle, nonce).await;
 
       if res.is_err() {
@@ -473,7 +457,7 @@ impl EndpointState {
     // verify the response received from the coordinator
     let res = {
       if let Ok(vs_rd) = self.vs.read() {
-        verify_read_latest(&vs_rd, handle, &block, &nonces, nonce, &receipt)
+        vs_rd.verify_read_latest(handle, &block, &nonces, nonce, &receipts)
       } else {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
@@ -489,7 +473,7 @@ impl EndpointState {
           }
           let res = {
             if let Ok(vs_rd) = self.vs.read() {
-              verify_read_latest(&vs_rd, handle, &block, &nonces, nonce, &receipt)
+              vs_rd.verify_read_latest(handle, &block, &nonces, nonce, &receipts)
             } else {
               return Err(EndpointError::FailedToAcquireReadLock);
             }

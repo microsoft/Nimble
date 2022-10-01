@@ -7,7 +7,6 @@ authors = ["Srinath Setty <srinath@microsoft.com>", "Sudheesh Singanamalla <sudh
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-verifier = { path = "../verifier" }
 ledger = {path = "../ledger"}
 tonic = "0.5"
 prost = "0.8"

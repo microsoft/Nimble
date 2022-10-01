@@ -1,4 +1,4 @@
-use super::{Block, Handle, NimbleDigest, Nonce, Nonces, Receipt};
+use super::{Block, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use crate::{
   errors::{LedgerStoreError, StorageError},
   ledger::{LedgerEntry, LedgerStore},
@@ -24,7 +24,7 @@ impl InMemoryLedgerStore {
     let ledgers = HashMap::new();
     let mut view_ledger = Vec::new();
 
-    let view_ledger_entry = LedgerEntry::new(Block::new(&[0; 0]), Receipt::default(), None);
+    let view_ledger_entry = LedgerEntry::new(Block::new(&[0; 0]), Receipts::new(), None);
     view_ledger.push(view_ledger_entry);
 
     InMemoryLedgerStore {
@@ -63,7 +63,7 @@ impl LedgerStore for InMemoryLedgerStore {
     handle: &NimbleDigest,
     genesis_block: Block,
   ) -> Result<(), LedgerStoreError> {
-    let genesis_ledger_entry = LedgerEntry::new(genesis_block, Receipt::default(), None);
+    let genesis_ledger_entry = LedgerEntry::new(genesis_block, Receipts::new(), None);
     if let Ok(mut ledgers_map) = self.ledgers.write() {
       if let Ok(mut nonce_map) = self.nonces.write() {
         if let hash_map::Entry::Vacant(e) = ledgers_map.entry(*handle) {
@@ -104,7 +104,7 @@ impl LedgerStore for InMemoryLedgerStore {
 
             let ledger_entry = LedgerEntry {
               block: block.clone(),
-              receipt: Receipt::default(),
+              receipts: Receipts::new(),
               nonces: nonces.clone(),
             };
             ledgers.push(ledger_entry);
@@ -131,22 +131,18 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn attach_ledger_receipt(
+  async fn attach_ledger_receipts(
     &self,
     handle: &Handle,
-    receipt: &Receipt,
+    idx: usize,
+    receipts: &Receipts,
   ) -> Result<(), LedgerStoreError> {
     if let Ok(ledgers_map) = self.ledgers.read() {
       if ledgers_map.contains_key(handle) {
         if let Ok(mut ledgers) = ledgers_map[handle].write() {
-          let height = receipt.get_height();
+          let height = idx;
           if height < ledgers.len() {
-            let res = ledgers[height].receipt.append(receipt);
-            if res.is_err() {
-              return Err(LedgerStoreError::LedgerError(
-                StorageError::MismatchedReceipts,
-              ));
-            }
+            ledgers[height].receipts.merge_receipts(receipts);
             Ok(())
           } else {
             Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))
@@ -270,7 +266,7 @@ impl LedgerStore for InMemoryLedgerStore {
   ) -> Result<usize, LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
       if expected_height == view_ledger_array.len() {
-        let ledger_entry = LedgerEntry::new(block.clone(), Receipt::default(), None);
+        let ledger_entry = LedgerEntry::new(block.clone(), Receipts::new(), None);
         view_ledger_array.push(ledger_entry);
         Ok(view_ledger_array.len() - 1)
       } else {
@@ -285,16 +281,15 @@ impl LedgerStore for InMemoryLedgerStore {
     }
   }
 
-  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
+  async fn attach_view_ledger_receipts(
+    &self,
+    idx: usize,
+    receipts: &Receipts,
+  ) -> Result<(), LedgerStoreError> {
     if let Ok(mut view_ledger_array) = self.view_ledger.write() {
-      let height = receipt.get_height();
+      let height = idx;
       if height < view_ledger_array.len() {
-        let res = view_ledger_array[height].receipt.append(receipt);
-        if res.is_err() {
-          return Err(LedgerStoreError::LedgerError(
-            StorageError::MismatchedReceipts,
-          ));
-        }
+        view_ledger_array[height].receipts.merge_receipts(receipts);
         Ok(())
       } else {
         Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex))

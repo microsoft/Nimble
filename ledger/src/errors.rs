@@ -14,14 +14,28 @@ pub enum VerificationError {
   IndexOutofBounds,
   /// returned if the identities are not unique
   DuplicateIds,
-  /// returned if the supplied views are not unique
+  /// returned if the supplied view is not well formed
   InvalidView,
-  /// returned when the nonce is of an incorrect length
-  InvalidNonceSize,
-  /// returned when the purported public key is not in the view ledger
+  /// returned if the number of provided receipts is zero
+  InsufficientReceipts,
+  /// returned if the receipt provided to prove view change is invalid
+  InvalidViewChangeReceipt,
+  /// returned if the purported view is not in the verifier's state
+  ViewNotFound,
+  /// returned if the supplied metablock of the view ledger does not point to the tail in the verifier's state
+  ViewInMetaBlockNotLatest,
+  /// returned if a public key is not found in a receipt
   InvalidPublicKey,
-  /// returned when the provided receipt does not contain signatures from a valid quorum
-  InsufficientQuorum,
-  /// returned when the supplied list of metablocks does not have a unique metablock
-  NonUniqueMetablocks,
+  /// returned if the block hash does not match the block
+  InvalidBlockHash,
+  /// returned if the height does not match the expected height
+  InvalidHeight,
+  /// returned if the supplied handle bytes cannot be deserialized
+  InvalidHandle,
+  /// returned if the supplied nonces cannot be deserialized
+  InvalidNonces,
+  /// returned if the supplied nonce cannot be deserialized
+  InvalidNonce,
+  /// returned if the supplied hash nonces cannot be deserialized
+  InvalidNoncesHash,
 }

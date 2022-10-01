@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bincode;
 use fs2::FileExt;
 use hex;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use serde::{Deserialize, Serialize};
 use std::{
   collections::HashMap,
@@ -38,7 +38,7 @@ type FileMap = Arc<RwLock<HashMap<Handle, FileLock>>>;
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct StoreEntry {
   pub block: Vec<u8>,
-  pub receipt: Vec<u8>,
+  pub receipts: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ impl FileStore {
       // Initialized view ledger's entry
       let entry = StoreEntry {
         block: Block::new(&[0; 0]).to_bytes(),
-        receipt: Receipt::default().to_bytes(),
+        receipts: Receipts::new().to_bytes(),
       };
 
       // Guaranteed to be the size of 1 file entry
@@ -307,7 +307,7 @@ async fn read_ledger_op(
   Ok((
     LedgerEntry::new(
       Block::from_bytes(&entry.block).unwrap(),
-      Receipt::from_bytes(&entry.receipt).unwrap(),
+      Receipts::from_bytes(&entry.receipts).unwrap(),
       None, //TODO
     ),
     index,
@@ -349,7 +349,7 @@ impl LedgerStore for FileStore {
     // 3. Create the ledger entry that we will add to the brand new ledger
     let init_entry = StoreEntry {
       block: genesis_block.to_bytes(),
-      receipt: Receipt::default().to_bytes(),
+      receipts: Receipts::new().to_bytes(),
     };
 
     // Serialize the entry
@@ -399,7 +399,7 @@ impl LedgerStore for FileStore {
     // 2. Construct the new entry we are going to append to the ledger
     let new_entry = StoreEntry {
       block: block.to_bytes(),
-      receipt: Receipt::default().to_bytes(),
+      receipts: Receipts::new().to_bytes(),
     };
 
     let ser_entry = serialize_entry(&new_entry)?;
@@ -417,13 +417,14 @@ impl LedgerStore for FileStore {
     unimplemented!()
   }
 
-  async fn attach_ledger_receipt(
+  async fn attach_ledger_receipts(
     &self,
     handle: &Handle,
-    receipt: &Receipt,
+    idx: usize,
+    receipts: &Receipts,
   ) -> Result<(), LedgerStoreError> {
     // 1. Get the desired offset
-    let offset = match receipt.get_height().checked_mul(ENTRY_SIZE) {
+    let offset = match idx.checked_mul(ENTRY_SIZE) {
       Some(v) => checked_conversion!(v, u64),
       None => {
         return Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex));
@@ -457,18 +458,12 @@ impl LedgerStore for FileStore {
     };
 
     // 3. Recover the contents of the ledger entry
-    let mut ledger_entry_receipt =
-      Receipt::from_bytes(&ledger_entry.receipt).expect("failed to deserialize receipt");
+    let mut ledger_entry_receipts =
+      Receipts::from_bytes(&ledger_entry.receipts).expect("failed to deserialize receipt");
 
     // 4. Update receipt
-    let res = ledger_entry_receipt.append(receipt);
-
-    if res.is_err() {
-      return Err(LedgerStoreError::LedgerError(
-        StorageError::MismatchedReceipts,
-      ));
-    }
-    ledger_entry.receipt = ledger_entry_receipt.to_bytes();
+    ledger_entry_receipts.merge_receipts(receipts);
+    ledger_entry.receipts = ledger_entry_receipts.to_bytes();
 
     // 5. Re-serialize
     let ser_entry = serialize_entry(&ledger_entry)?;
@@ -506,8 +501,14 @@ impl LedgerStore for FileStore {
     self.read_ledger_by_index(&self.view_handle, idx).await
   }
 
-  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
-    self.attach_ledger_receipt(&self.view_handle, receipt).await
+  async fn attach_view_ledger_receipts(
+    &self,
+    idx: usize,
+    receipts: &Receipts,
+  ) -> Result<(), LedgerStoreError> {
+    self
+      .attach_ledger_receipts(&self.view_handle, idx, receipts)
+      .await
   }
 
   async fn append_view_ledger(

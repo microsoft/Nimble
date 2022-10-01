@@ -24,7 +24,6 @@ serde_derive = { version = "1.0" }
 serde_json = "1.0"
 
 [dev-dependencies]
-verifier = { path = "../verifier" }
 rand = "0.8.4"
 
 [build-dependencies]

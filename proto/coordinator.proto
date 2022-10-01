@@ -16,7 +16,7 @@ message NewLedgerReq {
 }
 
 message NewLedgerResp {
-  bytes receipt = 1;
+  bytes receipts = 1;
 }
 
 message AppendReq {
@@ -27,7 +27,7 @@ message AppendReq {
 
 message AppendResp {
   bytes hash_nonces = 1;
-  bytes receipt = 2;
+  bytes receipts = 2;
 }
 
 message ReadLatestReq {
@@ -38,7 +38,7 @@ message ReadLatestReq {
 message ReadLatestResp {
   bytes block = 1;
   bytes nonces = 2;
-  bytes receipt = 3;
+  bytes receipts = 3;
 }
 
 message ReadByIndexReq {
@@ -49,7 +49,7 @@ message ReadByIndexReq {
 message ReadByIndexResp {
   bytes block = 1;
   bytes nonces = 2;
-  bytes receipt = 3;
+  bytes receipts = 3;
 }
 
 message ReadViewByIndexReq {
@@ -58,5 +58,5 @@ message ReadViewByIndexReq {
 
 message ReadViewByIndexResp {
   bytes block = 1;
-  bytes receipt = 2;
+  bytes receipts = 2;
 }

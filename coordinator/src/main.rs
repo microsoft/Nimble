@@ -63,9 +63,9 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to create a new ledger"));
     }
 
-    let receipt = res.unwrap();
+    let receipts = res.unwrap();
     let reply = NewLedgerResp {
-      receipt: receipt.to_bytes(),
+      receipts: receipts.to_bytes(),
     };
     Ok(Response::new(reply))
   }
@@ -85,10 +85,10 @@ impl Call for CoordinatorServiceState {
       return Err(Status::aborted("Failed to append to a ledger"));
     }
 
-    let (hash_nonces, receipt) = res.unwrap();
+    let (hash_nonces, receipts) = res.unwrap();
     let reply = AppendResp {
       hash_nonces: hash_nonces.to_bytes(),
-      receipt: receipt.to_bytes(),
+      receipts: receipts.to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -115,7 +115,7 @@ impl Call for CoordinatorServiceState {
     let reply = ReadLatestResp {
       block: ledger_entry.get_block().to_bytes(),
       nonces: ledger_entry.get_nonces().to_bytes(),
-      receipt: ledger_entry.get_receipt().to_bytes(),
+      receipts: ledger_entry.get_receipts().to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -139,7 +139,7 @@ impl Call for CoordinatorServiceState {
         let reply = ReadByIndexResp {
           block: ledger_entry.get_block().to_bytes(),
           nonces: ledger_entry.get_nonces().to_bytes(),
-          receipt: ledger_entry.get_receipt().to_bytes(),
+          receipts: ledger_entry.get_receipts().to_bytes(),
         };
         Ok(Response::new(reply))
       },
@@ -161,7 +161,7 @@ impl Call for CoordinatorServiceState {
     let ledger_entry = res.unwrap();
     let reply = ReadViewByIndexResp {
       block: ledger_entry.get_block().to_bytes(),
-      receipt: ledger_entry.get_receipt().to_bytes(),
+      receipts: ledger_entry.get_receipts().to_bytes(),
     };
 
     Ok(Response::new(reply))
@@ -461,16 +461,13 @@ mod tests {
     },
     CoordinatorServiceState, CoordinatorState,
   };
-  use ledger::CustomSerde;
+  use ledger::{CustomSerde, VerifierState};
   use rand::Rng;
   use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
     sync::Arc,
-  };
-  use verifier::{
-    verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest, VerifierState,
   };
 
   struct BoxChild {
@@ -610,8 +607,8 @@ mod tests {
         break;
       }
 
-      let ReadViewByIndexResp { block, receipt } = res.unwrap().into_inner();
-      let res = vs.apply_view_change(&block, &receipt);
+      let ReadViewByIndexResp { block, receipts } = res.unwrap().into_inner();
+      let res = vs.apply_view_change(&block, &receipts);
       println!("Applying ReadViewByIndexResp Response: {:?}", res);
       assert!(res.is_ok());
 
@@ -627,8 +624,8 @@ mod tests {
       handle: handle_bytes.to_vec(),
       block: block_bytes.to_vec(),
     });
-    let NewLedgerResp { receipt } = server.new_ledger(request).await.unwrap().into_inner();
-    let res = verify_new_ledger(&vs, &handle_bytes, block_bytes.as_ref(), &receipt);
+    let NewLedgerResp { receipts } = server.new_ledger(request).await.unwrap().into_inner();
+    let res = vs.verify_new_ledger(&handle_bytes, block_bytes.as_ref(), &receipts);
     println!("NewLedger (WithAppData) : {:?}", res);
     assert!(res.is_ok());
 
@@ -643,10 +640,10 @@ mod tests {
     let ReadByIndexResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server.read_by_index(req).await.unwrap().into_inner();
 
-    let res = verify_read_by_index(&vs, &handle, &block, &nonces, 0, &receipt);
+    let res = vs.verify_read_by_index(&handle, &block, &nonces, 0, &receipts);
     println!("ReadByIndex: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -660,10 +657,10 @@ mod tests {
     let ReadLatestResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server.read_latest(req).await.unwrap().into_inner();
 
-    let res = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+    let res = vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
     println!("Read Latest : {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -684,16 +681,15 @@ mod tests {
 
       let AppendResp {
         hash_nonces,
-        receipt,
+        receipts,
       } = server.append(req).await.unwrap().into_inner();
 
-      let res = verify_append(
-        &vs,
+      let res = vs.verify_append(
         &handle,
         block_to_append.as_ref(),
         &hash_nonces,
         expected_height,
-        &receipt,
+        &receipts,
       );
       println!("Append verification: {:?} {:?}", block_to_append, res);
       assert!(res.is_ok());
@@ -709,7 +705,7 @@ mod tests {
     let ReadLatestResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server
       .read_latest(latest_state_query)
       .await
@@ -718,7 +714,7 @@ mod tests {
     assert_eq!(block, b3.clone());
 
     let is_latest_valid =
-      verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+      vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -734,11 +730,11 @@ mod tests {
     let ReadByIndexResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server.read_by_index(req).await.unwrap().into_inner();
     assert_eq!(block, b1.clone());
 
-    let res = verify_read_by_index(&vs, &handle, &block, &nonces, 1, &receipt);
+    let res = vs.verify_read_by_index(&handle, &block, &nonces, 1, &receipts);
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -775,10 +771,10 @@ mod tests {
       index: view_height as u64, // the first entry on the view ledger starts at 1
     });
 
-    let ReadViewByIndexResp { block, receipt } =
+    let ReadViewByIndexResp { block, receipts } =
       server.read_view_by_index(req).await.unwrap().into_inner();
 
-    let res = vs.apply_view_change(&block, &receipt);
+    let res = vs.apply_view_change(&block, &receipts);
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
@@ -794,17 +790,10 @@ mod tests {
 
     let AppendResp {
       hash_nonces,
-      receipt,
+      receipts,
     } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(
-      &vs,
-      &handle,
-      message,
-      &hash_nonces,
-      expected_height,
-      &receipt,
-    );
+    let res = vs.verify_append(&handle, message, &hash_nonces, expected_height, &receipts);
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -818,7 +807,7 @@ mod tests {
     let ReadLatestResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server
       .read_latest(latest_state_query)
       .await
@@ -827,7 +816,7 @@ mod tests {
     assert_eq!(block, message);
 
     let is_latest_valid =
-      verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+      vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
     println!(
       "Verifying ReadLatest Response : {:?}",
       is_latest_valid.is_ok()
@@ -919,13 +908,12 @@ mod tests {
 
     let ledger_entry = res.unwrap();
     assert_eq!(ledger_entry.get_block().to_bytes(), message3.to_vec());
-    let is_latest_valid = verify_read_latest(
-      &vs,
+    let is_latest_valid = vs.verify_read_latest(
       &new_handle2,
       &ledger_entry.get_block().to_bytes(),
       &ledger_entry.get_nonces().to_bytes(),
       nonce2.as_ref(),
-      &ledger_entry.get_receipt().to_bytes(),
+      &ledger_entry.get_receipts().to_bytes(),
     );
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
@@ -938,13 +926,12 @@ mod tests {
 
     let ledger_entry = res.unwrap();
     assert_eq!(ledger_entry.get_block().to_bytes(), message2.to_vec());
-    let is_latest_valid = verify_read_latest(
-      &vs,
+    let is_latest_valid = vs.verify_read_latest(
       &new_handle2,
       &ledger_entry.get_block().to_bytes(),
       &ledger_entry.get_nonces().to_bytes(),
       nonce1.as_ref(),
-      &ledger_entry.get_receipt().to_bytes(),
+      &ledger_entry.get_receipts().to_bytes(),
     );
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
@@ -982,10 +969,10 @@ mod tests {
       index: view_height as u64, // the first entry on the view ledger starts at 1
     });
 
-    let ReadViewByIndexResp { block, receipt } =
+    let ReadViewByIndexResp { block, receipts } =
       server.read_view_by_index(req).await.unwrap().into_inner();
 
-    let res = vs.apply_view_change(&block, &receipt);
+    let res = vs.apply_view_change(&block, &receipts);
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
@@ -999,7 +986,7 @@ mod tests {
     let ReadLatestResp {
       block,
       nonces,
-      receipt,
+      receipts,
     } = server
       .read_latest(latest_state_query)
       .await
@@ -1008,7 +995,7 @@ mod tests {
     assert_eq!(block, message);
 
     let is_latest_valid =
-      verify_read_latest(&vs, &new_handle, &block, &nonces, nonce.as_ref(), &receipt);
+      vs.verify_read_latest(&new_handle, &block, &nonces, nonce.as_ref(), &receipts);
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
@@ -1022,10 +1009,10 @@ mod tests {
 
     let AppendResp {
       hash_nonces,
-      receipt,
+      receipts,
     } = server.append(req).await.unwrap().into_inner();
 
-    let res = verify_append(&vs, &new_handle, message, &hash_nonces, 2, &receipt);
+    let res = vs.verify_append(&new_handle, message, &hash_nonces, 2, &receipts);
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
 
@@ -1102,9 +1089,9 @@ mod tests {
 
       let AppendResp {
         hash_nonces,
-        receipt,
+        receipts,
       } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle, message, &hash_nonces, 2, &receipt);
+      let res = vs.verify_append(&new_handle, message, &hash_nonces, 2, &receipts);
       println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 
@@ -1118,9 +1105,9 @@ mod tests {
 
       let AppendResp {
         hash_nonces,
-        receipt,
+        receipts,
       } = server2.append(req).await.unwrap().into_inner();
-      let res = verify_append(&vs, &new_handle2, message, &hash_nonces, 2, &receipt);
+      let res = vs.verify_append(&new_handle2, message, &hash_nonces, 2, &receipts);
       println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 

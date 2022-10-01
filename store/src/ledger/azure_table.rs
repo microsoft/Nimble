@@ -8,7 +8,7 @@ use azure_data_tables::{clients::TableClient, prelude::*};
 use azure_core::Etag;
 use azure_storage::core::prelude::*;
 use base64_url;
-use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipt};
+use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use serde::{Deserialize, Serialize};
 use std::{
   cmp::Ordering,
@@ -126,7 +126,7 @@ struct DBEntry {
   pub row: String,
   pub height: i64,
   pub block: String,
-  pub receipt: String,
+  pub receipts: String,
   pub nonces: String,
 }
 
@@ -137,7 +137,7 @@ struct DBEntryReceiptProjection {
   pub handle: String,
   #[serde(rename = "RowKey")]
   pub row: String,
-  pub receipt: String,
+  pub receipts: String,
 }
 
 // This is a projection so you only modify the nonces, not the rest
@@ -235,7 +235,7 @@ impl TableLedgerStore {
               row: 0.to_string(),
               height: 0,
               block: base64_url::encode(&Block::new(&[0; 0]).to_bytes()),
-              receipt: base64_url::encode(&Receipt::default().to_bytes()),
+              receipts: base64_url::encode(&Receipts::new().to_bytes()),
               nonces: base64_url::encode(&Nonces::new().to_bytes()),
             };
 
@@ -400,15 +400,16 @@ async fn azure_op(
   Ok(())
 }
 
-async fn attach_ledger_receipt_internal(
+async fn attach_ledger_receipts_internal(
   ledger: Arc<TableClient>,
   handle_string: &str,
   cache: &CacheMap,
-  receipt: &Receipt,
+  idx: usize,
+  receipt: &Receipts,
   index: &str,
 ) -> Result<(), LedgerStoreError> {
   loop {
-    let res = attach_ledger_receipt_op(handle_string, receipt, ledger.clone(), index).await;
+    let res = attach_ledger_receipts_op(handle_string, idx, receipt, ledger.clone(), index).await;
 
     match res {
       Ok(v) => {
@@ -522,7 +523,7 @@ async fn append_ledger_internal(
     row: height_plus_one.to_string(),
     height: height_plus_one,
     block: base64_url::encode(&block.to_bytes()),
-    receipt: base64_url::encode(&Receipt::default().to_bytes()),
+    receipts: base64_url::encode(&Receipts::new().to_bytes()),
     nonces: base64_url::encode(&Nonces::new().to_bytes()), // clear out the nonces in tail
   };
 
@@ -531,7 +532,7 @@ async fn append_ledger_internal(
     row: height_plus_one.to_string(),
     height: height_plus_one,
     block: base64_url::encode(&block.to_bytes()),
-    receipt: base64_url::encode(&Receipt::default().to_bytes()),
+    receipts: base64_url::encode(&Receipts::new().to_bytes()),
     nonces: base64_url::encode(&cache_entry.get_nonces().to_bytes()),
   };
 
@@ -597,9 +598,10 @@ async fn attach_ledger_nonce_internal(
   Ok(checked_increment!(height))
 }
 
-async fn attach_ledger_receipt_op(
+async fn attach_ledger_receipts_op(
   handle: &str,
-  receipt: &Receipt,
+  idx: usize,
+  receipts: &Receipts,
   ledger: Arc<TableClient>,
   index: &str,
 ) -> Result<(), LedgerStoreError> {
@@ -611,12 +613,12 @@ async fn attach_ledger_receipt_op(
   // We need this check because default receipts have no height themselves,
   // so we must rely on the entry's height and not just the receipt's height..
   let height = checked_conversion!(entry.height, usize);
-  if receipt.get_height() != height {
+  if idx != height {
     return Err(LedgerStoreError::LedgerError(StorageError::InvalidIndex));
   }
 
   // 2. Append the receipt to the fetched receipt
-  let mut fetched_receipt = match Receipt::from_bytes(&string_decode(&entry.receipt)?) {
+  let mut fetched_receipts = match Receipts::from_bytes(&string_decode(&entry.receipts)?) {
     Ok(r) => r,
     Err(e) => {
       eprintln!("Unable to decode receipt bytes in attach_ledger_op {:?}", e);
@@ -626,18 +628,13 @@ async fn attach_ledger_receipt_op(
     },
   };
 
-  let res = fetched_receipt.append(receipt);
-  if res.is_err() {
-    return Err(LedgerStoreError::LedgerError(
-      StorageError::MismatchedReceipts,
-    ));
-  }
+  fetched_receipts.merge_receipts(receipts);
 
   // 3. Update the row with the updated receipt
   let merge_entry = DBEntryReceiptProjection {
     handle: handle.to_owned(),
     row: index.to_owned(),
-    receipt: base64_url::encode(&fetched_receipt.to_bytes()),
+    receipts: base64_url::encode(&fetched_receipts.to_bytes()),
   };
 
   let partition_client = ledger.as_partition_key_client(handle);
@@ -687,7 +684,7 @@ async fn read_ledger_internal(
     },
   };
 
-  let ret_receipt = match Receipt::from_bytes(&string_decode(&entry.receipt)?) {
+  let ret_receipts = match Receipts::from_bytes(&string_decode(&entry.receipts)?) {
     Ok(r) => r,
     Err(e) => {
       eprintln!("Unable to decode receipt bytes in read_ledger_op {:?}", e);
@@ -700,7 +697,7 @@ async fn read_ledger_internal(
   let nonce_list = decode_nonces_string(&entry.nonces)?;
 
   Ok((
-    LedgerEntry::new(ret_block, ret_receipt, Some(nonce_list)),
+    LedgerEntry::new(ret_block, ret_receipts, Some(nonce_list)),
     checked_conversion!(entry.height, usize),
   ))
 }
@@ -814,7 +811,7 @@ impl LedgerStore for TableLedgerStore {
       row: 0.to_string(),
       height: 0,
       block: base64_url::encode(&genesis_block.to_bytes()),
-      receipt: base64_url::encode(&Receipt::default().to_bytes()),
+      receipts: base64_url::encode(&Receipts::new().to_bytes()),
       nonces,
     };
 
@@ -866,16 +863,18 @@ impl LedgerStore for TableLedgerStore {
     }
   }
 
-  async fn attach_ledger_receipt(
+  async fn attach_ledger_receipts(
     &self,
     handle: &Handle,
-    receipt: &Receipt,
+    idx: usize,
+    receipts: &Receipts,
   ) -> Result<(), LedgerStoreError> {
     let ledger = self.client.clone();
     let handle_string = base64_url::encode(&handle.to_bytes());
-    let index = receipt.get_height().to_string();
+    let index = idx.to_string();
 
-    attach_ledger_receipt_internal(ledger, &handle_string, &self.cache, receipt, &index).await
+    attach_ledger_receipts_internal(ledger, &handle_string, &self.cache, idx, receipts, &index)
+      .await
   }
 
   async fn attach_ledger_nonce(
@@ -938,8 +937,14 @@ impl LedgerStore for TableLedgerStore {
     self.read_ledger_by_index(&self.view_handle, idx).await
   }
 
-  async fn attach_view_ledger_receipt(&self, receipt: &Receipt) -> Result<(), LedgerStoreError> {
-    self.attach_ledger_receipt(&self.view_handle, receipt).await
+  async fn attach_view_ledger_receipts(
+    &self,
+    idx: usize,
+    receipts: &Receipts,
+  ) -> Result<(), LedgerStoreError> {
+    self
+      .attach_ledger_receipts(&self.view_handle, idx, receipts)
+      .await
   }
 
   async fn append_view_ledger(

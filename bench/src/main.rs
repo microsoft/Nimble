@@ -12,7 +12,7 @@ use coordinator_proto::{
   call_client::CallClient, AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq,
   ReadViewByIndexReq, ReadViewByIndexResp,
 };
-use verifier::{verify_append, verify_new_ledger, verify_read_latest, VerifierState};
+use ledger::VerifierState;
 
 use crate::{
   cli::Args,
@@ -199,7 +199,7 @@ async fn benchmark_newledger(
 
   for (newledger_res, handle_block) in &responses {
     // NOTE: Every NewLedger response is individually verified and MUST pass.
-    let res = verify_new_ledger(vs, &handle_block.0, &handle_block.1, &newledger_res.receipt);
+    let res = vs.verify_new_ledger(&handle_block.0, &handle_block.1, &newledger_res.receipts);
     assert!(res.is_ok());
   }
   let time_taken = seq_verification_start.stop();
@@ -311,13 +311,12 @@ async fn benchmark_append(
 
   for append_res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_append(
-      vs,
+    let _res = vs.verify_append(
       handle,
       &block.to_vec(),
       &append_res.hash_nonces,
       0,
-      &append_res.receipt,
+      &append_res.receipts,
     );
   }
 
@@ -433,7 +432,7 @@ async fn benchmark_read_latest(
 
   for res in &responses {
     // NOTE: Not every append is verified since we don't know the order they were received and processed.
-    let _res = verify_read_latest(vs, handle, &res.block, &res.nonces, &nonce, &res.receipt);
+    let _res = vs.verify_read_latest(handle, &res.block, &res.nonces, &nonce, &res.receipts);
   }
 
   let time_taken = seq_verification_start.stop();
@@ -481,13 +480,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 1, // the first entry on the view ledger starts at 1
   });
 
-  let ReadViewByIndexResp { block, receipt } = coordinator_connection
+  let ReadViewByIndexResp { block, receipts } = coordinator_connection
     .client
     .read_view_by_index(req)
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&block, &receipt);
+  let res = vs.apply_view_change(&block, &receipts);
   Timer::print(&format!(
     "Applying ReadViewByIndexResp Response: {:?}",
     res.is_ok()
@@ -501,13 +500,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle: handle_bytes.to_vec(),
     block: block_bytes.to_vec(),
   });
-  let NewLedgerResp { receipt } = coordinator_connection
+  let NewLedgerResp { receipts } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
+  let res = vs.verify_new_ledger(handle_bytes.as_ref(), block_bytes.as_ref(), &receipts);
   Timer::print(&format!("NewLedger (WithAppData) : {:?}", res.is_ok()));
   assert!(res.is_ok());
   let handle = handle_bytes.to_vec();

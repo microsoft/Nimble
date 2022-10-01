@@ -62,4 +62,6 @@ pub enum CoordinatorError {
   FailedToAttachNonce,
   /// returned if failed to obtain a quorum
   FailedToObtainQuorum,
+  /// returned if failed to verify view change
+  FailedToVerifyViewChange,
 }

@@ -1,16 +1,14 @@
-mod errors;
+pub mod errors;
 pub mod signature;
-use crate::{
-  errors::VerificationError,
-  signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait},
-};
+use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
+use errors::VerificationError;
 use generic_array::{typenum::U32, GenericArray};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-  collections::{HashMap, HashSet},
+  collections::{hash_map, HashMap, HashSet},
   convert::TryInto,
 };
 
@@ -146,7 +144,7 @@ impl Block {
 /// `MetaBlock` has three entries: (i) hash of the previous metadata,
 /// (ii) a hash of the current block, and (iii) a counter denoting the height
 /// of the current block in the ledger
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct MetaBlock {
   prev: NimbleDigest,
   block_hash: NimbleDigest,
@@ -187,6 +185,29 @@ impl MetaBlock {
   }
 }
 
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub struct ExtendedMetaBlock {
+  view: NimbleDigest,
+  metablock: MetaBlock,
+}
+
+impl ExtendedMetaBlock {
+  pub fn new(view: &NimbleDigest, metablock: &MetaBlock) -> Self {
+    Self {
+      view: *view,
+      metablock: metablock.clone(),
+    }
+  }
+
+  pub fn get_view(&self) -> &NimbleDigest {
+    &self.view
+  }
+
+  pub fn get_metablock(&self) -> &MetaBlock {
+    &self.metablock
+  }
+}
+
 #[derive(Debug, Clone)]
 pub struct IdSig {
   id: PublicKey,
@@ -215,19 +236,19 @@ impl IdSig {
   }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Receipt {
   view: NimbleDigest,
   metablock: MetaBlock,
-  id_sigs: Vec<IdSig>,
+  id_sig: IdSig,
 }
 
 impl Receipt {
-  pub fn new(view: NimbleDigest, metablock: MetaBlock, id_sigs: Vec<IdSig>) -> Self {
+  pub fn new(view: NimbleDigest, metablock: MetaBlock, id_sig: IdSig) -> Self {
     Self {
       view,
       metablock,
-      id_sigs,
+      id_sig,
     }
   }
 
@@ -251,151 +272,420 @@ impl Receipt {
     self.metablock.hash()
   }
 
-  pub fn get_id_sigs(&self) -> &Vec<IdSig> {
-    &self.id_sigs
+  pub fn get_id_sig(&self) -> &IdSig {
+    &self.id_sig
   }
 
   pub fn get_metablock(&self) -> &MetaBlock {
     &self.metablock
   }
 
-  fn extend_id_sigs(&mut self, id_sigs: &[IdSig]) {
-    for new_id_sig in id_sigs {
-      let id_sig = self.id_sigs.iter().find(|existing_id_sig| {
+  pub fn num_bytes() -> usize {
+    NimbleDigest::num_bytes() + MetaBlock::num_bytes() + IdSig::num_bytes()
+  }
+}
+
+const MIN_NUM_ENDORSERS: usize = 1;
+
+pub fn compute_aggregated_block_hash(
+  hash_block_bytes: &[u8],
+  hash_nonces_bytes: &[u8],
+) -> NimbleDigest {
+  NimbleDigest::digest(hash_block_bytes).digest_with_bytes(hash_nonces_bytes)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Receipts {
+  receipts: HashMap<ExtendedMetaBlock, Vec<IdSig>>,
+}
+
+impl Receipts {
+  pub fn new() -> Self {
+    Receipts {
+      receipts: HashMap::new(),
+    }
+  }
+
+  pub fn get(&self) -> &HashMap<ExtendedMetaBlock, Vec<IdSig>> {
+    &self.receipts
+  }
+
+  pub fn add(&mut self, receipt: &Receipt) {
+    let ex_meta_block = ExtendedMetaBlock::new(receipt.get_view(), receipt.get_metablock());
+    if let hash_map::Entry::Occupied(mut e) = self.receipts.entry(ex_meta_block.clone()) {
+      let new_id_sig = receipt.get_id_sig();
+      let id_sig = e.get().iter().find(|existing_id_sig| {
         existing_id_sig.get_id().to_bytes() == new_id_sig.get_id().to_bytes()
       });
       if id_sig.is_none() {
-        self.id_sigs.push(new_id_sig.clone());
+        e.get_mut().push(receipt.get_id_sig().clone());
+      }
+    } else {
+      self
+        .receipts
+        .insert(ex_meta_block, vec![receipt.get_id_sig().clone()]);
+    }
+  }
+
+  pub fn merge_receipts(&mut self, receipts: &Receipts) {
+    for (ex_meta_block, id_sigs) in receipts.get() {
+      for id_sig in id_sigs {
+        let receipt = Receipt::new(
+          *ex_meta_block.get_view(),
+          ex_meta_block.get_metablock().clone(),
+          id_sig.clone(),
+        );
+        self.add(&receipt);
       }
     }
   }
 
-  pub fn append(&mut self, receipt: &Receipt) -> Result<(), VerificationError> {
-    if self.get_metablock_hash() == MetaBlock::default().hash() {
-      assert!(self.id_sigs.is_empty());
-      self.view = *receipt.get_view();
-      self.metablock = receipt.get_metablock().clone();
-      self.id_sigs = receipt.get_id_sigs().clone();
-    } else if self.view == *receipt.get_view()
-      && self.get_metablock_hash() == receipt.get_metablock_hash()
-    {
-      self.extend_id_sigs(receipt.get_id_sigs());
-    } else {
-      eprintln!("receipt1: {:?}", self);
-      eprintln!("receipt2: {:?}", receipt);
-      return Err(VerificationError::InvalidReceipt);
-    }
-    Ok(())
-  }
+  pub fn check_quorum(&self, verifier_state: &VerifierState) -> Result<usize, VerificationError> {
+    for (ex_meta_block, id_sigs) in &self.receipts {
+      let view = ex_meta_block.get_view();
+      let pks = verifier_state.get_pks_for_view(view)?;
+      if id_sigs.len() < pks.len() / 2 + 1 {
+        continue;
+      }
 
-  pub fn merge_receipts(receipts: &[Receipt]) -> Result<Receipt, VerificationError> {
-    let mut new_receipt = Receipt::new(NimbleDigest::default(), MetaBlock::default(), Vec::new());
-
-    for receipt in receipts.iter() {
-      let res = new_receipt.append(receipt);
-      res?
-    }
-
-    Ok(new_receipt)
-  }
-
-  pub fn verify(&self, msg: &[u8], pk_vec: &[PublicKey]) -> Result<(), VerificationError> {
-    // check if the provided public keys in the receipt are unique
-    let id_sigs = &self.id_sigs;
-
-    let unique_ids = {
-      let mut uniq = HashSet::new();
-      (0..id_sigs.len())
-        .map(|i| id_sigs[i].get_id().to_bytes().to_vec())
-        .collect::<Vec<Vec<u8>>>()
-        .into_iter()
-        .all(|x| uniq.insert(x));
-      uniq
-    };
-
-    if id_sigs.len() != unique_ids.len() {
-      return Err(VerificationError::DuplicateIds);
-    }
-
-    let view_msg = self.get_view().digest_with_bytes(msg).to_bytes();
-    let num_accepted_sigs = (0..id_sigs.len())
-      .map(|i| {
-        let id = id_sigs[i].get_id();
-        let sig = id_sigs[i].get_sig();
-        let pk = pk_vec.iter().find(|pk| pk.to_bytes() == id.to_bytes());
-        if pk.is_none() {
-          Err(VerificationError::InvalidPublicKey)
-        } else if sig.verify(pk.unwrap(), &view_msg).is_err() {
-          Err(VerificationError::InvalidSignature)
-        } else {
-          Ok(())
+      let mut num_receipts = 0;
+      for id_sig in id_sigs {
+        let id = id_sig.get_id();
+        if pks.contains(&id.to_bytes()) {
+          num_receipts += 1;
         }
-      })
-      .filter(|x| x.is_ok())
-      .count();
+      }
 
-    // check if we have the simple majority
-    if num_accepted_sigs < pk_vec.len() / 2 + 1 {
-      return Err(VerificationError::InsufficientQuorum);
+      if num_receipts > pks.len() / 2 {
+        return Ok(ex_meta_block.get_metablock().get_height());
+      }
     }
 
-    Ok(())
+    Err(VerificationError::InsufficientReceipts)
+  }
+
+  pub fn verify_read_latest(
+    &self,
+    verifier_state: &VerifierState,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    nonces_bytes: &[u8],
+    nonce_bytes: &[u8],
+  ) -> Result<usize, VerificationError> {
+    let hash_nonces = NimbleDigest::digest(nonces_bytes);
+
+    let res = self.verify(
+      verifier_state,
+      handle_bytes,
+      block_bytes,
+      &hash_nonces.to_bytes(),
+      None,
+      Some(nonce_bytes),
+    );
+    if let Ok(h) = res {
+      return Ok(h);
+    }
+
+    let height = self.verify(
+      verifier_state,
+      handle_bytes,
+      block_bytes,
+      &hash_nonces.to_bytes(),
+      None,
+      None,
+    )?;
+
+    // verify if the nonce is in the nonces
+    let nonces = Nonces::from_bytes(nonces_bytes).map_err(|_e| VerificationError::InvalidNonces)?;
+    let nonce = Nonce::from_bytes(nonce_bytes).map_err(|_e| VerificationError::InvalidNonce)?;
+    if nonces.contains(&nonce) {
+      Ok(height)
+    } else {
+      Err(VerificationError::InvalidReceipt)
+    }
+  }
+
+  pub fn verify(
+    &self,
+    verifier_state: &VerifierState,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    hash_nonces_bytes: &[u8],
+    expected_height: Option<usize>,
+    nonce_bytes: Option<&[u8]>,
+  ) -> Result<usize, VerificationError> {
+    let block_hash = compute_aggregated_block_hash(
+      &NimbleDigest::digest(block_bytes).to_bytes(),
+      hash_nonces_bytes,
+    );
+
+    for (ex_meta_block, id_sigs) in &self.receipts {
+      let pks = verifier_state.get_pks_for_view(ex_meta_block.get_view())?;
+      if id_sigs.len() < pks.len() / 2 + 1 {
+        continue;
+      }
+
+      // check the block hash matches with the block
+      if block_hash != *ex_meta_block.get_metablock().get_block_hash() {
+        return Err(VerificationError::InvalidBlockHash);
+      }
+      // check the height matches with the expected height
+      if let Some(h) = expected_height {
+        if h != ex_meta_block.get_metablock().get_height() {
+          return Err(VerificationError::InvalidHeight);
+        }
+      }
+      // update the message
+      let tail_hash = match nonce_bytes {
+        Some(n) => ex_meta_block.get_metablock().hash().digest_with_bytes(n),
+        None => ex_meta_block.get_metablock().hash(),
+      };
+      let message = ex_meta_block
+        .get_view()
+        .digest_with(&NimbleDigest::digest(handle_bytes).digest_with(&tail_hash));
+
+      let mut num_receipts = 0;
+      for id_sig in id_sigs {
+        let id = id_sig.get_id();
+        id_sig
+          .get_sig()
+          .verify(id, &message.to_bytes())
+          .map_err(|_e| VerificationError::InvalidSignature)?;
+        if pks.contains(&id.to_bytes()) {
+          num_receipts += 1;
+        }
+      }
+
+      if num_receipts > pks.len() / 2 {
+        return Ok(ex_meta_block.get_metablock().get_height());
+      }
+    }
+
+    Err(VerificationError::InvalidReceipt)
   }
 
   pub fn verify_view_change(
     &self,
-    msg: &[u8],
-    pk_vec_existing: &[PublicKey],
-    _pk_vec_proposed: &[PublicKey],
-  ) -> Result<(), VerificationError> {
-    // check if the provided public keys in the receipt are unique
-    let unique_ids = {
-      let mut uniq = HashSet::new();
-      (0..self.id_sigs.len())
-        .map(|i| self.id_sigs[i].get_id().to_bytes().to_vec())
-        .collect::<Vec<Vec<u8>>>()
-        .into_iter()
-        .all(|x| uniq.insert(x));
-      uniq
-    };
-
-    if self.id_sigs.len() != unique_ids.len() {
-      return Err(VerificationError::DuplicateIds);
+    verifier_state: &VerifierState,
+    block_bytes: &[u8],
+  ) -> Result<(NimbleDigest, HashSet<Vec<u8>>), VerificationError> {
+    // retrieve public keys of endorsers in the new configuration
+    let endorsers: EndorserHostnames = bincode::deserialize(block_bytes).map_err(|e| {
+      eprintln!("Failed to deserialize the view genesis block {:?}", e);
+      VerificationError::InvalidGenesisBlock
+    })?;
+    let mut new_pk_vec = Vec::new();
+    for idx in 0..endorsers.pk_hostnames.len() {
+      let pk = PublicKey::from_bytes(&endorsers.pk_hostnames[idx].0)
+        .map_err(|_e| VerificationError::InvalidPublicKey)?;
+      new_pk_vec.push(pk.to_bytes());
     }
 
-    // we require a majority of endorsers in the latest view to have signed the provided message
-    // we also require all new endorsers in the proposed latest view to have signed the provided metblock
-    // (the latter check ensures that the new endorsers are initialized with the right state)
+    let new_pks = new_pk_vec.iter().cloned().collect::<HashSet<_>>();
 
-    let num_sigs_from_pk_vec_existing = (0..pk_vec_existing.len())
-      .filter(|&i| {
-        let id = pk_vec_existing[i].to_bytes();
-        self.id_sigs.iter().any(|x| x.get_id().to_bytes() == id)
-      })
-      .count();
+    // check that the public keys are unique and there are at least `MIN_NUM_ENDORSERS`
+    if new_pk_vec.len() != new_pks.len() || new_pk_vec.len() < MIN_NUM_ENDORSERS {}
 
-    // check if we have the simple majority
-    if num_sigs_from_pk_vec_existing < pk_vec_existing.len() / 2 + 1 {
-      return Err(VerificationError::InsufficientQuorum);
-    }
+    // retrieve public keys of endorsers in current view
+    let current_pks = verifier_state.get_current_pks();
+    assert!(current_pks.len() >= MIN_NUM_ENDORSERS || verifier_state.get_view_ledger_height() == 0);
 
-    let view_msg = self.get_view().digest_with_bytes(msg).to_bytes();
-    // verify the signatures in the receipt and ensure that the provided public keys are in pk_vec
-    let res = (0..self.id_sigs.len()).try_for_each(|i| {
-      let id = self.id_sigs[i].get_id();
-      let sig = self.id_sigs[i].get_sig();
-      let res = sig.verify(id, &view_msg);
-      if res.is_err() {
-        Err(VerificationError::InvalidSignature)
-      } else {
-        Ok(())
+    let mut num_receipts_for_current_pks = 0;
+    let mut num_receipts_for_new_pks = 0;
+    let current_view = verifier_state.get_current_view();
+    let mut new_view = NimbleDigest::default();
+
+    for (ex_meta_block, id_sigs) in &self.receipts {
+      let metablock_hash = ex_meta_block.get_metablock().hash();
+      // check the block hash matches with the block
+      if NimbleDigest::digest(block_bytes) != *ex_meta_block.get_metablock().get_block_hash() {
+        return Err(VerificationError::InvalidBlockHash);
       }
-    });
+      if *current_view != NimbleDigest::default()
+        && *current_view != *ex_meta_block.get_metablock().get_prev()
+      {
+        return Err(VerificationError::InvalidView);
+      }
+      let message = ex_meta_block.get_view().digest_with(&metablock_hash);
 
-    if res.is_err() {
-      Err(VerificationError::InvalidReceipt)
-    } else {
-      Ok(())
+      if new_view == NimbleDigest::default() {
+        new_view = metablock_hash;
+      } else if new_view != metablock_hash {
+        return Err(VerificationError::InvalidViewChangeReceipt);
+      }
+
+      for id_sig in id_sigs {
+        let id = id_sig.get_id();
+        id_sig
+          .get_sig()
+          .verify(id, &message.to_bytes())
+          .map_err(|_e| VerificationError::InvalidSignature)?;
+        if new_pks.contains(&id.to_bytes()) {
+          num_receipts_for_new_pks += 1;
+        }
+        if current_pks.contains(&id.to_bytes()) {
+          num_receipts_for_current_pks += 1;
+        }
+      }
+    }
+
+    if verifier_state.get_view_ledger_height() > 0
+      && num_receipts_for_current_pks < current_pks.len() / 2 + 1
+    {
+      return Err(VerificationError::InsufficientReceipts);
+    }
+
+    if num_receipts_for_new_pks < new_pks.len() / 2 + 1 {
+      return Err(VerificationError::InsufficientReceipts);
+    }
+
+    Ok((new_view, new_pks))
+  }
+}
+
+/// VerifierState keeps track of public keys of any valid view
+#[derive(Debug, Default)]
+pub struct VerifierState {
+  // The state is a hashmap from the view (a NimbleDigest) to a list of public keys
+  // In our context, we don't need views to be ordered, so we use a HashMap
+  // However, we require that a new view is "authorized" by the latest view, so we keep track of the latest_view in a separate variable
+  vk_map: HashMap<NimbleDigest, HashSet<Vec<u8>>>,
+  current_view: NimbleDigest,    // latest view
+  current_pks: HashSet<Vec<u8>>, // pk vec in the latest view
+}
+
+impl VerifierState {
+  pub fn new() -> Self {
+    VerifierState {
+      vk_map: HashMap::new(),
+      current_view: NimbleDigest::default(),
+      current_pks: HashSet::new(),
+    }
+  }
+
+  pub fn get_view_ledger_height(&self) -> usize {
+    self.vk_map.len()
+  }
+
+  pub fn get_current_pks(&self) -> &HashSet<Vec<u8>> {
+    &self.current_pks
+  }
+
+  pub fn get_current_view(&self) -> &NimbleDigest {
+    &self.current_view
+  }
+
+  pub fn get_pks_for_view(
+    &self,
+    view: &NimbleDigest,
+  ) -> Result<&HashSet<Vec<u8>>, VerificationError> {
+    let res = self.vk_map.get(view);
+    match res {
+      Some(pks) => Ok(pks),
+      None => Err(VerificationError::ViewNotFound),
+    }
+  }
+
+  pub fn apply_view_change(
+    &mut self,
+    block_bytes: &[u8],
+    receipts_bytes: &[u8],
+  ) -> Result<(), VerificationError> {
+    let receipts =
+      Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
+    let res = receipts.verify_view_change(self, block_bytes);
+    match res {
+      Ok((new_view, new_pks)) => {
+        self.vk_map.insert(new_view, new_pks.clone());
+        self.current_pks = new_pks;
+        self.current_view = new_view;
+        Ok(())
+      },
+      Err(error) => Err(error),
+    }
+  }
+
+  pub fn verify_new_ledger(
+    &self,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    receipts_bytes: &[u8],
+  ) -> Result<(), VerificationError> {
+    let receipts =
+      Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
+    let res = receipts.verify(
+      self,
+      handle_bytes,
+      block_bytes,
+      &NimbleDigest::default().to_bytes(),
+      Some(0),
+      None,
+    );
+    match res {
+      Ok(_h) => Ok(()),
+      Err(e) => Err(e),
+    }
+  }
+
+  pub fn verify_append(
+    &self,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    hash_nonces_bytes: &[u8],
+    expected_height: usize,
+    receipts_bytes: &[u8],
+  ) -> Result<(), VerificationError> {
+    let receipts =
+      Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
+    let res = receipts.verify(
+      self,
+      handle_bytes,
+      block_bytes,
+      hash_nonces_bytes,
+      Some(expected_height),
+      None,
+    );
+    match res {
+      Ok(_h) => Ok(()),
+      Err(e) => Err(e),
+    }
+  }
+
+  pub fn verify_read_latest(
+    &self,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    nonces_bytes: &[u8],
+    nonce_bytes: &[u8],
+    receipts_bytes: &[u8],
+  ) -> Result<usize, VerificationError> {
+    let receipts =
+      Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
+    receipts.verify_read_latest(self, handle_bytes, block_bytes, nonces_bytes, nonce_bytes)
+  }
+
+  pub fn verify_read_by_index(
+    &self,
+    handle_bytes: &[u8],
+    block_bytes: &[u8],
+    nonces_bytes: &[u8],
+    idx: usize,
+    receipts_bytes: &[u8],
+  ) -> Result<(), VerificationError> {
+    let receipts =
+      Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
+    let hash_nonces_bytes = NimbleDigest::digest(nonces_bytes).to_bytes();
+    let res = receipts.verify(
+      self,
+      handle_bytes,
+      block_bytes,
+      &hash_nonces_bytes,
+      Some(idx),
+      None,
+    );
+    match res {
+      Ok(_h) => Ok(()),
+      Err(e) => Err(e),
     }
   }
 }
@@ -560,21 +850,13 @@ impl CustomSerde for Receipt {
     let mut bytes = Vec::new();
     bytes.extend(&self.view.to_bytes());
     bytes.extend(&self.metablock.to_bytes());
-    for id_sig in &self.id_sigs {
-      bytes.extend(&id_sig.to_bytes());
-    }
+    bytes.extend(&self.id_sig.to_bytes());
     bytes
   }
 
   fn from_bytes(bytes: &[u8]) -> Result<Receipt, CustomSerdeError> {
-    if bytes.len() < NimbleDigest::num_bytes() + MetaBlock::num_bytes() {
-      eprintln!("bytes len {} is too short", bytes.len());
-      return Err(CustomSerdeError::IncorrectLength);
-    }
-
-    if (bytes.len() - NimbleDigest::num_bytes() - MetaBlock::num_bytes()) % IdSig::num_bytes() != 0
-    {
-      eprintln!("bytes len {} is not a multiple of IdSig", bytes.len());
+    if bytes.len() != Receipt::num_bytes() {
+      eprintln!("bytes len {} is incorrect for receipt", bytes.len());
       return Err(CustomSerdeError::IncorrectLength);
     }
 
@@ -582,19 +864,49 @@ impl CustomSerde for Receipt {
     let metablock = MetaBlock::from_bytes(
       &bytes[NimbleDigest::num_bytes()..NimbleDigest::num_bytes() + MetaBlock::num_bytes()],
     )?;
-    let mut id_sigs = Vec::new();
-    let mut pos = NimbleDigest::num_bytes() + MetaBlock::num_bytes();
-    while pos < bytes.len() {
-      let id_sig = IdSig::from_bytes(&bytes[pos..pos + IdSig::num_bytes()])?;
-      id_sigs.push(id_sig);
-      pos += IdSig::num_bytes();
-    }
+    let id_sig = IdSig::from_bytes(
+      &bytes[NimbleDigest::num_bytes() + MetaBlock::num_bytes()
+        ..NimbleDigest::num_bytes() + MetaBlock::num_bytes() + IdSig::num_bytes()],
+    )?;
 
     Ok(Receipt {
       view,
       metablock,
-      id_sigs,
+      id_sig,
     })
+  }
+}
+
+impl CustomSerde for Receipts {
+  fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (ex_meta_block, id_sigs) in &self.receipts {
+      for id_sig in id_sigs {
+        bytes.extend(
+          Receipt::new(
+            *ex_meta_block.get_view(),
+            ex_meta_block.get_metablock().clone(),
+            id_sig.clone(),
+          )
+          .to_bytes(),
+        );
+      }
+    }
+    bytes
+  }
+
+  fn from_bytes(bytes: &[u8]) -> Result<Receipts, CustomSerdeError> {
+    if bytes.len() % Receipt::num_bytes() != 0 {
+      return Err(CustomSerdeError::IncorrectLength);
+    }
+    let mut pos = 0;
+    let mut receipts = Receipts::new();
+    while pos < bytes.len() {
+      let receipt = Receipt::from_bytes(&bytes[pos..pos + Receipt::num_bytes()])?;
+      receipts.add(&receipt);
+      pos += Receipt::num_bytes();
+    }
+    Ok(receipts)
   }
 }
 

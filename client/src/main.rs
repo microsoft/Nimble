@@ -13,10 +13,8 @@ use coordinator_proto::{
   call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
   ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
 };
+use ledger::VerifierState;
 use rand::Rng;
-use verifier::{
-  verify_append, verify_new_ledger, verify_read_by_index, verify_read_latest, VerifierState,
-};
 
 #[derive(Debug, Clone)]
 pub struct CoordinatorConnection {
@@ -63,13 +61,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index: 1, // the first entry on the view ledger starts at 1
   });
 
-  let ReadViewByIndexResp { block, receipt } = coordinator_connection
+  let ReadViewByIndexResp { block, receipts } = coordinator_connection
     .client
     .read_view_by_index(req)
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&block, &receipt);
+  let res = vs.apply_view_change(&block, &receipts);
   println!("Applying ReadViewByIndexResp Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -82,13 +80,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle: handle_bytes.to_vec(),
     block: block_bytes.to_vec(),
   });
-  let NewLedgerResp { receipt } = coordinator_connection
+  let NewLedgerResp { receipts } = coordinator_connection
     .client
     .new_ledger(request)
     .await?
     .into_inner();
 
-  let res = verify_new_ledger(&vs, handle_bytes.as_ref(), block_bytes.as_ref(), &receipt);
+  let res = vs.verify_new_ledger(handle_bytes.as_ref(), block_bytes.as_ref(), &receipts);
   println!("NewLedger (WithAppData) : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -103,14 +101,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadByIndexResp {
     block,
     nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .read_by_index(req)
     .await?
     .into_inner();
 
-  let res = verify_read_by_index(&vs, &handle, &block, &nonces, 0, &receipt);
+  let res = vs.verify_read_by_index(&handle, &block, &nonces, 0, &receipts);
   println!("ReadByIndex: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -124,14 +122,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadLatestResp {
     block,
     nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .read_latest(req)
     .await?
     .into_inner();
 
-  let res = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+  let res = vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
   println!("ReadLatest : {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -152,20 +150,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let AppendResp {
       hash_nonces,
-      receipt,
+      receipts,
     } = coordinator_connection
       .client
       .append(req)
       .await?
       .into_inner();
 
-    let res = verify_append(
-      &vs,
+    let res = vs.verify_append(
       &handle,
       block_to_append.as_ref(),
       &hash_nonces,
       expected_height,
-      &receipt,
+      &receipts,
     );
     println!("Append verification: {:?}", res.is_ok());
     assert!(res.is_ok());
@@ -181,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadLatestResp {
     block,
     nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .read_latest(latest_state_query)
@@ -189,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b3.clone());
 
-  let last_height = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+  let last_height = vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
   println!("Verifying ReadLatest Response : {:?}", last_height.is_ok());
   assert!(last_height.is_ok());
 
@@ -202,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadByIndexResp {
     block,
     nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .read_by_index(req)
@@ -210,12 +207,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, b1.clone());
 
-  let res = verify_read_by_index(&vs, &handle, &block, &nonces, 1, &receipt);
+  let res = vs.verify_read_by_index(&handle, &block, &nonces, 1, &receipts);
   println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
   assert!(res.is_ok());
 
   // Step 6: Append
-  let expected_height = last_height.unwrap() + 1;
+  let expected_height = 2;
   let message = "data_block_append".as_bytes();
   let req = tonic::Request::new(AppendReq {
     handle: handle.clone(),
@@ -225,21 +222,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let AppendResp {
     hash_nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .append(req)
     .await?
     .into_inner();
 
-  let res = verify_append(
-    &vs,
-    &handle,
-    message,
-    &hash_nonces,
-    expected_height,
-    &receipt,
-  );
+  let res = vs.verify_append(&handle, message, &hash_nonces, expected_height, &receipts);
   println!("Append verification no condition: {:?}", res.is_ok());
   assert!(res.is_ok());
 
@@ -253,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let ReadLatestResp {
     block,
     nonces,
-    receipt,
+    receipts,
   } = coordinator_connection
     .client
     .read_latest(latest_state_query)
@@ -261,7 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .into_inner();
   assert_eq!(block, message);
 
-  let is_latest_valid = verify_read_latest(&vs, &handle, &block, &nonces, nonce.as_ref(), &receipt);
+  let is_latest_valid = vs.verify_read_latest(&handle, &block, &nonces, nonce.as_ref(), &receipts);
   println!(
     "Verifying ReadLatest Response : {:?}",
     is_latest_valid.is_ok()
