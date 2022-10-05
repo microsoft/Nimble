@@ -5,7 +5,6 @@ use digest::Output;
 use errors::VerificationError;
 use generic_array::{typenum::U32, GenericArray};
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
   collections::{hash_map, HashMap, HashSet},
@@ -67,14 +66,7 @@ pub fn produce_hash_of_state(ledger_tail_map: &LedgerTailMap) -> NimbleDigest {
   if ledger_tail_map.is_empty() {
     NimbleDigest::default()
   } else {
-    let mut serialized_state = Vec::new();
-    for handle in ledger_tail_map.keys().sorted() {
-      let metablock = ledger_tail_map.get(handle).unwrap();
-      serialized_state.extend_from_slice(&handle.to_bytes());
-      serialized_state.extend_from_slice(&metablock.hash().to_bytes());
-      serialized_state.extend_from_slice(&metablock.get_height().to_le_bytes());
-    }
-    NimbleDigest::digest(&serialized_state)
+    NimbleDigest::digest(&ledger_tail_map.to_bytes())
   }
 }
 
@@ -306,6 +298,22 @@ impl Receipts {
     }
   }
 
+  pub fn is_empty(&self) -> bool {
+    self.receipts.is_empty()
+  }
+
+  pub fn get_metablock(&self) -> Result<MetaBlock, VerificationError> {
+    let mut metablocks = HashSet::<MetaBlock>::new();
+    for ex_meta_block in self.receipts.keys() {
+      metablocks.insert(ex_meta_block.get_metablock().clone());
+    }
+    if metablocks.len() != 1 {
+      Err(VerificationError::InvalidViewChangeReceipt)
+    } else {
+      Ok(metablocks.iter().next().unwrap().clone())
+    }
+  }
+
   pub fn get(&self) -> &HashMap<ExtendedMetaBlock, Vec<IdSig>> {
     &self.receipts
   }
@@ -474,17 +482,11 @@ impl Receipts {
       eprintln!("Failed to deserialize the view genesis block {:?}", e);
       VerificationError::InvalidGenesisBlock
     })?;
-    let mut new_pk_vec = Vec::new();
-    for idx in 0..endorsers.pk_hostnames.len() {
-      let pk = PublicKey::from_bytes(&endorsers.pk_hostnames[idx].0)
-        .map_err(|_e| VerificationError::InvalidPublicKey)?;
-      new_pk_vec.push(pk.to_bytes());
+    let mut new_pks = HashSet::new();
+    for (pk_bytes, _uri) in &endorsers {
+      let pk = PublicKey::from_bytes(pk_bytes).map_err(|_e| VerificationError::InvalidPublicKey)?;
+      new_pks.insert(pk.to_bytes());
     }
-
-    let new_pks = new_pk_vec.iter().cloned().collect::<HashSet<_>>();
-
-    // check that the public keys are unique and there are at least `MIN_NUM_ENDORSERS`
-    if new_pk_vec.len() != new_pks.len() || new_pk_vec.len() < MIN_NUM_ENDORSERS {}
 
     // retrieve public keys of endorsers in current view
     let current_pks = verifier_state.get_current_pks();
@@ -501,6 +503,8 @@ impl Receipts {
       if NimbleDigest::digest(block_bytes) != *ex_meta_block.get_metablock().get_block_hash() {
         return Err(VerificationError::InvalidBlockHash);
       }
+
+      // check the previous hash matches current view
       if *current_view != NimbleDigest::default()
         && *current_view != *ex_meta_block.get_metablock().get_prev()
       {
@@ -690,16 +694,22 @@ impl VerifierState {
   }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct LedgerView {
-  pub view_tail_metablock: MetaBlock,
-  pub ledger_tail_map: LedgerTailMap,
+pub fn compute_max_cut(ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>) -> LedgerTailMap {
+  let mut max_cut: LedgerTailMap = LedgerTailMap::new();
+
+  // Find the tails in the max cut
+  for ledger_tail_map in ledger_tail_maps.values() {
+    for (handle, metablock) in ledger_tail_map.iter() {
+      if !max_cut.contains_key(handle) || max_cut[handle].get_height() < metablock.get_height() {
+        max_cut.insert(*handle, metablock.clone());
+      }
+    }
+  }
+
+  max_cut
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EndorserHostnames {
-  pub pk_hostnames: Vec<(Vec<u8>, String)>,
-}
+pub type EndorserHostnames = Vec<(Vec<u8>, String)>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CustomSerdeError {
@@ -907,6 +917,34 @@ impl CustomSerde for Receipts {
       pos += Receipt::num_bytes();
     }
     Ok(receipts)
+  }
+}
+
+impl CustomSerde for LedgerTailMap {
+  fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for handle in self.keys().sorted() {
+      let metablock = self.get(handle).unwrap();
+      bytes.extend_from_slice(&handle.to_bytes());
+      bytes.extend_from_slice(&metablock.to_bytes());
+    }
+    bytes
+  }
+
+  fn from_bytes(bytes: &[u8]) -> Result<LedgerTailMap, CustomSerdeError> {
+    if bytes.len() % (NimbleDigest::num_bytes() + MetaBlock::num_bytes()) != 0 {
+      return Err(CustomSerdeError::IncorrectLength);
+    }
+    let mut ledger_tail_map = LedgerTailMap::new();
+    let mut pos = 0;
+    while pos < bytes.len() {
+      let handle = NimbleDigest::from_bytes(&bytes[pos..pos + NimbleDigest::num_bytes()])?;
+      pos += NimbleDigest::num_bytes();
+      let metablock = MetaBlock::from_bytes(&bytes[pos..pos + MetaBlock::num_bytes()])?;
+      pos += MetaBlock::num_bytes();
+      ledger_tail_map.insert(handle, metablock);
+    }
+    Ok(ledger_tail_map)
   }
 }
 

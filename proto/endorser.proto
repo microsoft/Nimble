@@ -6,13 +6,11 @@ service EndorserCall {
   // Protocol Endpoints
   rpc GetPublicKey(GetPublicKeyReq) returns (GetPublicKeyResp);
   rpc InitializeState(InitializeStateReq) returns (InitializeStateResp);
+  rpc FinalizeState(FinalizeStateReq) returns (FinalizeStateResp);
+  rpc ReadState(ReadStateReq) returns (ReadStateResp);
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
-  rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
-  rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
-  rpc Unlock(UnlockReq) returns (UnlockResp);
-  rpc ReadLatestViewLedger(ReadLatestViewLedgerReq) returns (ReadLatestViewLedgerResp);
 }
 
 message GetPublicKeyReq {
@@ -25,7 +23,6 @@ message GetPublicKeyResp {
 message NewLedgerReq {
   bytes handle = 1;
   bytes block_hash = 2;
-  bool ignore_lock = 3;
 }
 
 message NewLedgerResp {
@@ -45,20 +42,10 @@ message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
   uint64 expected_height = 3;
-  bool ignore_lock = 4;
 }
 
 message AppendResp {
   bytes receipt = 1;
-}
-
-message AppendViewLedgerReq {
-  bytes block_hash = 1;
-  uint64 expected_height = 2;
-}
-
-message AppendViewLedgerResp {
-  bytes receipt = 1; 
 }
 
 message LedgerTailMapEntry {
@@ -81,25 +68,27 @@ message InitializeStateResp {
   bytes receipt = 1;
 }
 
-message ReadLatestStateReq {
-  bool to_lock = 1;
+message FinalizeStateReq {
+  bytes block_hash = 1;
+  uint64 expected_height = 2;
 }
 
-message ReadLatestStateResp {
-  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
-  bytes view_tail_metablock = 2; // the view ledger tail's metablock
+message FinalizeStateResp {
+  bytes receipt = 1;
+  repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
 }
 
-message UnlockReq {
+enum EndorserMode {
+  Uninitialized = 0;
+  Active = 1;
+  Finalized = 2;
 }
 
-message UnlockResp {
-}
-
-message ReadLatestViewLedgerReq {
+message ReadStateReq {
 
 }
-
-message ReadLatestViewLedgerResp {
-  bytes view_tail_metablock = 1; // the view ledger tail's metablock
+message ReadStateResp {
+  bytes receipt = 1;
+  EndorserMode mode = 2;
+  repeated LedgerTailMapEntry ledger_tail_map = 3; // the list of ledger tails
 }

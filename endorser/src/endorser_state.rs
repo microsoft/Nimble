@@ -1,11 +1,20 @@
 use crate::errors::EndorserError;
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+pub mod endorser_proto {
+  tonic::include_proto!("endorser_proto");
+}
+
+use endorser_proto::EndorserMode;
+
 use ledger::{
   produce_hash_of_state,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey},
-  Handle, IdSig, LedgerTailMap, LedgerView, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  Handle, IdSig, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
 };
 use std::{
   collections::{hash_map, HashMap},
+  ops::DerefMut,
   sync::{Arc, RwLock},
 };
 
@@ -14,11 +23,8 @@ struct ViewLedgerState {
 
   view_ledger_tail_hash: NimbleDigest,
 
-  /// whether the endorser is initialized
-  is_initialized: bool,
-
-  /// whether the endorser is locked for append operations
-  is_locked: bool,
+  /// Endorser has 3 modes: uninitialized, active, finalized
+  endorser_mode: EndorserMode,
 }
 
 type ProtectedMetaBlock = Arc<RwLock<MetaBlock>>;
@@ -46,8 +52,7 @@ impl EndorserState {
       view_ledger_state: Arc::new(RwLock::new(ViewLedgerState {
         view_ledger_tail_metablock: MetaBlock::default(),
         view_ledger_tail_hash: MetaBlock::default().hash(),
-        is_initialized: false,
-        is_locked: false,
+        endorser_mode: EndorserMode::Uninitialized,
       })),
     }
   }
@@ -60,7 +65,7 @@ impl EndorserState {
     expected_height: usize,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      if view_ledger_state.is_initialized {
+      if view_ledger_state.endorser_mode != EndorserMode::Uninitialized {
         return Err(EndorserError::AlreadyInitialized);
       }
 
@@ -72,27 +77,33 @@ impl EndorserState {
 
       view_ledger_state.view_ledger_tail_metablock = view_ledger_tail_metablock.clone();
       view_ledger_state.view_ledger_tail_hash = view_ledger_tail_metablock.hash();
-      view_ledger_state.is_initialized = true;
-    } else {
-      return Err(EndorserError::FailedToAcquireViewLedgerWriteLock);
-    }
+      view_ledger_state.endorser_mode = EndorserMode::Active;
 
-    self.append_view_ledger(block_hash, expected_height)
+      self.append_view_ledger(
+        view_ledger_state.deref_mut(),
+        ledger_tail_map,
+        block_hash,
+        expected_height,
+      )
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
+    }
   }
 
   pub fn new_ledger(
     &self,
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
-    ignore_lock: bool,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
-      }
-
-      if !ignore_lock && view_ledger_state.is_locked {
-        return Err(EndorserError::IsLocked);
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
       }
 
       // create a genesis metablock that embeds the current tail of the view/membership ledger
@@ -123,8 +134,14 @@ impl EndorserState {
 
   pub fn read_latest(&self, handle: &NimbleDigest, nonce: &[u8]) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
       }
 
       if let Ok(ledger_tail_map) = self.ledger_tail_map.read() {
@@ -158,8 +175,14 @@ impl EndorserState {
 
   pub fn get_height(&self, handle: &NimbleDigest) -> Result<usize, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
       }
 
       if let Ok(ledger_tail_map) = self.ledger_tail_map.read() {
@@ -186,15 +209,16 @@ impl EndorserState {
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
     expected_height: usize,
-    ignore_lock: bool,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
-      }
-
-      if !ignore_lock && view_ledger_state.is_locked {
-        return Err(EndorserError::IsLocked);
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
       }
 
       if let Ok(ledger_tail_map) = self.ledger_tail_map.read() {
@@ -248,125 +272,122 @@ impl EndorserState {
     self.public_key.clone()
   }
 
-  pub fn append_view_ledger(
+  fn append_view_ledger(
     &self,
+    view_ledger_state: &mut ViewLedgerState,
+    ledger_tail_map: &LedgerTailMap,
     block_hash: &NimbleDigest,
     expected_height: usize,
   ) -> Result<Receipt, EndorserError> {
-    if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      if !view_ledger_state.is_initialized {
-        Err(EndorserError::NotInitialized)
-      } else {
-        let metablock = &view_ledger_state.view_ledger_tail_metablock;
+    let metablock = &view_ledger_state.view_ledger_tail_metablock;
 
-        // perform a checked addition of height with 1
-        let height_plus_one = {
-          let res = metablock.get_height().checked_add(1);
-          if res.is_none() {
-            return Err(EndorserError::LedgerHeightOverflow);
-          }
-          res.unwrap()
-        };
+    // perform a checked addition of height with 1
+    let height_plus_one = {
+      let res = metablock.get_height().checked_add(1);
+      if res.is_none() {
+        return Err(EndorserError::LedgerHeightOverflow);
+      }
+      res.unwrap()
+    };
 
-        assert!(expected_height != 0);
-        if expected_height < height_plus_one {
-          return Err(EndorserError::InvalidTailHeight);
-        }
+    assert!(expected_height != 0);
+    if expected_height < height_plus_one {
+      return Err(EndorserError::InvalidTailHeight);
+    }
 
-        if expected_height > height_plus_one {
-          return Err(EndorserError::OutOfOrder);
-        }
+    if expected_height > height_plus_one {
+      return Err(EndorserError::OutOfOrder);
+    }
 
-        let mut ledger_tail_map = HashMap::new();
-        if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
-          for (handle, value) in ledger_tail_map_rd.iter() {
-            if let Ok(metablock) = value.read() {
-              ledger_tail_map.insert(*handle, metablock.clone());
-            } else {
-              return Err(EndorserError::FailedToAcquireLedgerEntryReadLock);
-            }
-          }
+    // the view embedded in the view ledger is the hash of the current state of the endorser
+    let view = produce_hash_of_state(ledger_tail_map);
+    let prev = &view_ledger_state.view_ledger_tail_hash;
+
+    // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
+    let new_metablock = MetaBlock::new(prev, block_hash, height_plus_one);
+
+    // update the internal state
+    view_ledger_state.view_ledger_tail_metablock = new_metablock.clone();
+    view_ledger_state.view_ledger_tail_hash = new_metablock.hash();
+
+    // sign the hash of the new metablock
+    let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
+    let signature = self.private_key.sign(&message.to_bytes()).unwrap();
+
+    Ok(Receipt::new(
+      view,
+      new_metablock,
+      IdSig::new(self.public_key.clone(), signature),
+    ))
+  }
+
+  fn construct_ledger_tail_map(&self) -> Result<LedgerTailMap, EndorserError> {
+    let mut ledger_tail_map = HashMap::new();
+    if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
+      for (handle, value) in ledger_tail_map_rd.iter() {
+        if let Ok(metablock) = value.read() {
+          ledger_tail_map.insert(*handle, metablock.clone());
         } else {
-          return Err(EndorserError::FailedToAcquireLedgerMapReadLock);
+          return Err(EndorserError::FailedToAcquireLedgerEntryReadLock);
         }
+      }
+    } else {
+      return Err(EndorserError::FailedToAcquireLedgerMapReadLock);
+    }
 
-        // the view embedded in the view ledger is the hash of the current state of the endorser
-        let view = produce_hash_of_state(&ledger_tail_map);
-        let prev = &view_ledger_state.view_ledger_tail_hash;
+    Ok(ledger_tail_map)
+  }
 
-        // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
-        let new_metablock = MetaBlock::new(prev, block_hash, height_plus_one);
+  pub fn finalize_state(
+    &self,
+    block_hash: &NimbleDigest,
+    expected_height: usize,
+  ) -> Result<(Receipt, LedgerTailMap), EndorserError> {
+    if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {
+          view_ledger_state.endorser_mode = EndorserMode::Finalized;
+        },
+      }
 
-        // update the internal state
-        view_ledger_state.view_ledger_tail_metablock = new_metablock.clone();
-        view_ledger_state.view_ledger_tail_hash = new_metablock.hash();
+      let ledger_tail_map = self.construct_ledger_tail_map()?;
 
-        // sign the hash of the new metablock
-        let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
-        let signature = self.private_key.sign(&message.to_bytes()).unwrap();
+      let receipt = self.append_view_ledger(
+        view_ledger_state.deref_mut(),
+        &ledger_tail_map,
+        block_hash,
+        expected_height,
+      )?;
 
-        Ok(Receipt::new(
+      Ok((receipt, ledger_tail_map))
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
+    }
+  }
+
+  pub fn read_state(&self) -> Result<(Receipt, EndorserMode, LedgerTailMap), EndorserError> {
+    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
+      let ledger_tail_map = self.construct_ledger_tail_map()?;
+
+      let view = produce_hash_of_state(&ledger_tail_map);
+      let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
+      let signature = self.private_key.sign(&message.to_bytes()).unwrap();
+
+      Ok((
+        Receipt::new(
           view,
-          new_metablock,
+          view_ledger_state.view_ledger_tail_metablock.clone(),
           IdSig::new(self.public_key.clone(), signature),
-        ))
-      }
-    } else {
-      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
-    }
-  }
-
-  pub fn read_latest_state(&self) -> Result<LedgerView, EndorserError> {
-    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      if !view_ledger_state.is_initialized {
-        return Err(EndorserError::NotInitialized);
-      }
-
-      let mut ledger_tail_map = HashMap::new();
-      if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
-        for (handle, value) in ledger_tail_map_rd.iter() {
-          if let Ok(metablock) = value.read() {
-            ledger_tail_map.insert(*handle, metablock.clone());
-          } else {
-            return Err(EndorserError::FailedToAcquireLedgerEntryReadLock);
-          }
-        }
-      } else {
-        return Err(EndorserError::FailedToAcquireLedgerMapReadLock);
-      }
-
-      let ledger_view = LedgerView {
-        view_tail_metablock: view_ledger_state.view_ledger_tail_metablock.clone(),
+        ),
+        view_ledger_state.endorser_mode,
         ledger_tail_map,
-      };
-
-      Ok(ledger_view)
-    } else {
-      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
-    }
-  }
-
-  pub fn lock(&self) -> Result<(), EndorserError> {
-    if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      view_ledger_state.is_locked = true;
-      Ok(())
-    } else {
-      Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
-    }
-  }
-
-  pub fn unlock(&self) -> Result<(), EndorserError> {
-    if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      view_ledger_state.is_locked = false;
-      Ok(())
-    } else {
-      Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
-    }
-  }
-
-  pub fn read_latest_view_ledger(&self) -> Result<MetaBlock, EndorserError> {
-    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
-      Ok(view_ledger_state.view_ledger_tail_metablock.clone())
+      ))
     } else {
       Err(EndorserError::FailedToAcquireViewLedgerReadLock)
     }
@@ -429,7 +450,7 @@ mod tests {
       n.unwrap()
     };
 
-    let res = endorser_state.new_ledger(&handle, &block_hash, false);
+    let res = endorser_state.new_ledger(&handle, &block_hash);
     assert!(res.is_ok());
 
     let receipt = res.unwrap();
@@ -508,7 +529,7 @@ mod tests {
     let block = rand::thread_rng().gen::<[u8; 32]>();
     let handle = NimbleDigest::from_bytes(&block).unwrap();
     let block_hash = handle; // this need not be the case, but it does not matter for testing
-    let res = endorser_state.new_ledger(&handle, &block_hash, false);
+    let res = endorser_state.new_ledger(&handle, &block_hash);
     assert!(res.is_ok());
 
     // Fetch the value currently in the tail.
@@ -542,7 +563,7 @@ mod tests {
     };
 
     let receipt = endorser_state
-      .append(&handle, &block_hash_to_append, height_plus_one, false)
+      .append(&handle, &block_hash_to_append, height_plus_one)
       .unwrap();
     let new_ledger_height = endorser_state
       .ledger_tail_map

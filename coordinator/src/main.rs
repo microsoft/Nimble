@@ -234,7 +234,7 @@ async fn new_endorser(
   }
   let endorser_uri_string = res.unwrap();
 
-  let res = state.add_endorsers(&[endorser_uri_string]).await;
+  let res = state.replace_endorsers(&[endorser_uri_string]).await;
   if res.is_err() {
     eprintln!("failed to add the endorser ({:?})", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
@@ -289,7 +289,7 @@ async fn delete_endorser(
   let endorser_uri_str = res.unwrap();
 
   let res = state.get_endorser_pk(endorser_uri_str);
-  let resp = match res {
+  let pk = match res {
     None => {
       eprintln!(
         "failed to find the endorser {} ({:?})",
@@ -297,19 +297,16 @@ async fn delete_endorser(
       );
       return (StatusCode::BAD_REQUEST, Json(json!({})));
     },
-    Some(pk) => EndorserOpResponse {
-      pk: base64_url::encode(&pk),
-    },
+    Some(pk) => pk,
   };
 
-  let res = state.disconnect_endorser(endorser_uri_str).await;
-  if res.is_err() {
-    eprintln!(
-      "failed to delete the endorser {} ({:?})",
-      endorser_uri_str, res
-    );
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
+  let resp = EndorserOpResponse {
+    pk: base64_url::encode(&pk),
+  };
+
+  state
+    .disconnect_endorsers(&vec![(pk, endorser_uri_str.to_string())])
+    .await;
 
   (StatusCode::OK, Json(json!(resp)))
 }
@@ -413,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator = res.unwrap();
 
   if !endorser_hostnames.is_empty() {
-    let _ = coordinator.add_endorsers(&endorser_hostnames).await;
+    let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
   }
   if coordinator.get_endorser_pks().is_empty() {
     panic!("No endorsers are available!");
@@ -465,6 +462,7 @@ mod tests {
   use rand::Rng;
   use std::{
     collections::HashMap,
+    ffi::OsString,
     io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -478,6 +476,29 @@ mod tests {
     fn drop(&mut self) {
       self.child.kill().expect("failed to kill a child process");
     }
+  }
+
+  fn launch_endorser(cmd: &OsString, args: String) -> BoxChild {
+    let mut endorser = BoxChild {
+      child: Command::new(cmd)
+        .args(args.split_whitespace())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("endorser failed to start"),
+    };
+
+    let mut buf_reader = BufReader::new(endorser.child.stdout.take().unwrap());
+    let mut endorser_output = String::new();
+    while let Ok(buflen) = buf_reader.read_line(&mut endorser_output) {
+      if buflen == 0 {
+        break;
+      }
+      if endorser_output.contains("listening on") {
+        break;
+      }
+    }
+
+    endorser
   }
 
   #[tokio::test]
@@ -559,25 +580,7 @@ mod tests {
     }
 
     // Launch the endorser
-    let mut endorser = BoxChild {
-      child: Command::new(endorser_cmd.clone())
-        .args(endorser_args.clone().split_whitespace())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("endorser failed to start"),
-    };
-
-    // Wait for the endorser to be ready
-    let mut buf_reader = BufReader::new(endorser.child.stdout.take().unwrap());
-    let mut endorser_output = String::new();
-    while let Ok(buflen) = buf_reader.read_line(&mut endorser_output) {
-      if buflen == 0 {
-        break;
-      }
-      if endorser_output.contains("listening on") {
-        break;
-      }
-    }
+    let endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
 
     // Create the coordinator
     let coordinator = Arc::new(
@@ -587,7 +590,7 @@ mod tests {
     );
 
     let res = coordinator
-      .add_endorsers(&["http://[::1]:9090".to_string()])
+      .replace_endorsers(&["http://[::1]:9090".to_string()])
       .await;
     assert!(res.is_ok());
 
@@ -738,32 +741,20 @@ mod tests {
     println!("Verifying ReadByIndex Response: {:?}", res.is_ok());
     assert!(res.is_ok());
 
-    // Step 6: change the view by adding a new endorser
-    let endorser_args2 = endorser_args.clone() + " -p 9091";
-    let mut endorser2 = BoxChild {
-      child: Command::new(endorser_cmd.clone())
-        .args(endorser_args2.split_whitespace())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("endorser failed to start"),
-    };
-
-    let mut buf_reader2 = BufReader::new(endorser2.child.stdout.take().unwrap());
-    let mut endorser2_output = String::new();
-    while let Ok(buflen) = buf_reader2.read_line(&mut endorser2_output) {
-      if buflen == 0 {
-        break;
-      }
-      if endorser2_output.contains("listening on") {
-        break;
-      }
-    }
+    // Step 6: change the view by adding two new endorsers
+    let endorser_args2 = endorser_args.clone() + " -p 9092";
+    let endorser2 = launch_endorser(&endorser_cmd, endorser_args2);
+    let endorser_args3 = endorser_args.clone() + " -p 9093";
+    let endorser3 = launch_endorser(&endorser_cmd, endorser_args3);
 
     let res = server
       .get_state()
-      .add_endorsers(&["http://[::1]:9091".to_string()])
+      .replace_endorsers(&[
+        "http://[::1]:9092".to_string(),
+        "http://[::1]:9093".to_string(),
+      ])
       .await;
-    println!("Added a new endorser: {:?}", res);
+    println!("new config with 2 endorsers: {:?}", res);
     assert!(res.is_ok());
 
     view_height += 1;
@@ -936,32 +927,23 @@ mod tests {
     println!("Verifying ReadLatest Response : {:?}", is_latest_valid,);
     assert!(is_latest_valid.is_ok());
 
-    // Step 10: add the third endorser
-    let endorser_args3 = endorser_args.clone() + " -p 9092";
-    let mut endorser3 = BoxChild {
-      child: Command::new(endorser_cmd.clone())
-        .args(endorser_args3.split_whitespace())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("endorser failed to start"),
-    };
-
-    let mut buf_reader3 = BufReader::new(endorser3.child.stdout.take().unwrap());
-    let mut endorser3_output = String::new();
-    while let Ok(buflen) = buf_reader3.read_line(&mut endorser3_output) {
-      if buflen == 0 {
-        break;
-      }
-      if endorser3_output.contains("listening on") {
-        break;
-      }
-    }
+    // Step 10: replace the view with three endorsers
+    let endorser_args4 = endorser_args.clone() + " -p 9094";
+    let endorser4 = launch_endorser(&endorser_cmd, endorser_args4);
+    let endorser_args5 = endorser_args.clone() + " -p 9095";
+    let endorser5 = launch_endorser(&endorser_cmd, endorser_args5);
+    let endorser_args6 = endorser_args.clone() + " -p 9096";
+    let endorser6 = launch_endorser(&endorser_cmd, endorser_args6);
 
     let res = server
       .get_state()
-      .add_endorsers(&["http://[::1]:9092".to_string()])
+      .replace_endorsers(&[
+        "http://[::1]:9094".to_string(),
+        "http://[::1]:9095".to_string(),
+        "http://[::1]:9096".to_string(),
+      ])
       .await;
-    println!("Added a new endorser: {:?}", res);
+    println!("new config with 3 endorsers: {:?}", res);
     assert!(res.is_ok());
 
     view_height += 1;
@@ -1111,15 +1093,16 @@ mod tests {
       println!("Append verification: {:?}", res.is_ok());
       assert!(res.is_ok());
 
-      // Step 15: query the state of endorsers
-      let _pk_ledger_views = server2.get_state().query_endorsers().await.unwrap();
-
-      // We access endorser and endorser2 below
-      // to stop them from being dropped earlier
-      println!("endorser1 process ID is {}", endorser.child.id());
-      println!("endorser2 process ID is {}", endorser2.child.id());
-      println!("endorser3 process ID is {}", endorser3.child.id());
       server2.get_state().reset_ledger_store().await;
     }
+
+    // We access endorser and endorser2 below
+    // to stop them from being dropped earlier
+    println!("endorser1 process ID is {}", endorser.child.id());
+    println!("endorser2 process ID is {}", endorser2.child.id());
+    println!("endorser3 process ID is {}", endorser3.child.id());
+    println!("endorser4 process ID is {}", endorser4.child.id());
+    println!("endorser5 process ID is {}", endorser5.child.id());
+    println!("endorser6 process ID is {}", endorser6.child.id());
   }
 }

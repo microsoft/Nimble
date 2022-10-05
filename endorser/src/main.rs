@@ -14,10 +14,9 @@ pub mod endorser_proto {
 
 use endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
-  AppendReq, AppendResp, AppendViewLedgerReq, AppendViewLedgerResp, GetPublicKeyReq,
-  GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadLatestStateReq, ReadLatestStateResp,
-  ReadLatestViewLedgerReq, ReadLatestViewLedgerResp, UnlockReq, UnlockResp,
+  AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp, GetPublicKeyReq, GetPublicKeyResp,
+  InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq, NewLedgerResp,
+  ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
 };
 
 pub struct EndorserServiceState {
@@ -58,7 +57,7 @@ impl EndorserServiceState {
         Status::already_exists("Enodrser is already initialized")
       },
       EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
-      EndorserError::IsLocked => Status::cancelled("Endorser is locked"),
+      EndorserError::AlreadyFinalized => Status::unavailable("Endorser is already finalized"),
       _ => Status::internal(default_msg),
     }
   }
@@ -89,11 +88,7 @@ impl EndorserCall for EndorserServiceState {
     &self,
     req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
-    let NewLedgerReq {
-      handle,
-      block_hash,
-      ignore_lock,
-    } = req.into_inner();
+    let NewLedgerReq { handle, block_hash } = req.into_inner();
     let handle = {
       let res = NimbleDigest::from_bytes(&handle);
       if res.is_err() {
@@ -110,7 +105,7 @@ impl EndorserCall for EndorserServiceState {
       res.unwrap()
     };
 
-    let res = self.state.new_ledger(&handle, &block_hash, ignore_lock);
+    let res = self.state.new_ledger(&handle, &block_hash);
 
     match res {
       Ok(receipt) => {
@@ -135,7 +130,6 @@ impl EndorserCall for EndorserServiceState {
       handle,
       block_hash,
       expected_height,
-      ignore_lock,
     } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
@@ -154,7 +148,7 @@ impl EndorserCall for EndorserServiceState {
 
     let res = self
       .state
-      .append(&handle, &block_hash, expected_height as usize, ignore_lock);
+      .append(&handle, &block_hash, expected_height as usize);
 
     match res {
       Ok(receipt) => {
@@ -207,11 +201,11 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
-  async fn append_view_ledger(
+  async fn finalize_state(
     &self,
-    req: Request<AppendViewLedgerReq>,
-  ) -> Result<Response<AppendViewLedgerResp>, Status> {
-    let AppendViewLedgerReq {
+    req: Request<FinalizeStateReq>,
+  ) -> Result<Response<FinalizeStateResp>, Status> {
+    let FinalizeStateReq {
       block_hash,
       expected_height,
     } = req.into_inner();
@@ -224,12 +218,20 @@ impl EndorserCall for EndorserServiceState {
 
     let res = self
       .state
-      .append_view_ledger(&block_hash_instance.unwrap(), expected_height as usize);
+      .finalize_state(&block_hash_instance.unwrap(), expected_height as usize);
 
     match res {
-      Ok(receipt) => {
-        let reply = AppendViewLedgerResp {
+      Ok((receipt, ledger_tail_map)) => {
+        let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
+          .iter()
+          .map(|(handle, metablock)| LedgerTailMapEntry {
+            handle: handle.to_bytes(),
+            metablock: metablock.to_bytes(),
+          })
+          .collect();
+        let reply = FinalizeStateResp {
           receipt: receipt.to_bytes().to_vec(),
+          ledger_tail_map: ledger_tail_map_proto,
         };
         Ok(Response::new(reply))
       },
@@ -237,7 +239,7 @@ impl EndorserCall for EndorserServiceState {
         let status = self.process_error(
           error,
           None,
-          "Failed to append to the view ledger due to an internal error",
+          "Failed to finalize the endorser due to an internal error",
         );
         Err(status)
       },
@@ -290,34 +292,25 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
-  async fn read_latest_state(
+  async fn read_state(
     &self,
-    request: Request<ReadLatestStateReq>,
-  ) -> Result<Response<ReadLatestStateResp>, Status> {
-    let ReadLatestStateReq { to_lock } = request.into_inner();
-
-    if to_lock {
-      let res = self.state.lock();
-      if res.is_err() {
-        return Err(Status::aborted("Failed to lock"));
-      }
-    }
-
-    let res = self.state.read_latest_state();
+    _req: Request<ReadStateReq>,
+  ) -> Result<Response<ReadStateResp>, Status> {
+    let res = self.state.read_state();
 
     match res {
-      Ok(ledger_view) => {
-        let ledger_tail_map: Vec<LedgerTailMapEntry> = ledger_view
-          .ledger_tail_map
+      Ok((receipt, endorser_mode, ledger_tail_map)) => {
+        let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
           .iter()
           .map(|(handle, metablock)| LedgerTailMapEntry {
             handle: handle.to_bytes(),
             metablock: metablock.to_bytes(),
           })
           .collect();
-        let reply = ReadLatestStateResp {
-          ledger_tail_map,
-          view_tail_metablock: ledger_view.view_tail_metablock.to_bytes().to_vec(),
+        let reply = ReadStateResp {
+          receipt: receipt.to_bytes().to_vec(),
+          mode: endorser_mode as i32,
+          ledger_tail_map: ledger_tail_map_proto,
         };
         Ok(Response::new(reply))
       },
@@ -325,47 +318,8 @@ impl EndorserCall for EndorserServiceState {
         let status = self.process_error(
           error,
           None,
-          "Failed to read the latest state of an endorser due to an internal error",
+          "Failed to finalize the endorser due to an internal error",
         );
-        Err(status)
-      },
-    }
-  }
-
-  async fn unlock(&self, _req: Request<UnlockReq>) -> Result<Response<UnlockResp>, Status> {
-    let res = self.state.unlock();
-
-    match res {
-      Ok(()) => {
-        let reply = UnlockResp {};
-        Ok(Response::new(reply))
-      },
-      Err(error) => {
-        let status = self.process_error(
-          error,
-          None,
-          "Failed to unlock an endorser due to an internal error",
-        );
-        Err(status)
-      },
-    }
-  }
-
-  async fn read_latest_view_ledger(
-    &self,
-    _req: Request<ReadLatestViewLedgerReq>,
-  ) -> Result<Response<ReadLatestViewLedgerResp>, Status> {
-    let res = self.state.read_latest_view_ledger();
-
-    match res {
-      Ok(view_tail_metablock) => {
-        let reply = ReadLatestViewLedgerResp {
-          view_tail_metablock: view_tail_metablock.to_bytes(),
-        };
-        Ok(Response::new(reply))
-      },
-      Err(error) => {
-        let status = self.process_error(error, None, "Failed to read the view ledger");
         Err(status)
       },
     }
