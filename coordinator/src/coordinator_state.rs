@@ -1,6 +1,7 @@
 use crate::errors::CoordinatorError;
 use ledger::{
   compute_aggregated_block_hash, compute_max_cut,
+  errors::VerificationError,
   signature::{PublicKey, PublicKeyTrait},
   Block, CustomSerde, EndorserHostnames, Handle, LedgerTailMap, MetaBlock, NimbleDigest,
   NimbleHashTrait, Nonce, Receipt, Receipts, VerifierState,
@@ -33,7 +34,7 @@ type EndorserConnMap = HashMap<Vec<u8>, (EndorserCallClient<Channel>, String)>;
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
 
 pub struct CoordinatorState {
-  ledger_store: LedgerStoreRef,
+  pub(crate) ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
 }
@@ -234,7 +235,7 @@ impl CoordinatorState {
 
     let (view_ledger_tail, tail_height) = res.unwrap();
 
-    for idx in 1..=tail_height {
+    for idx in 1..tail_height {
       let res = coordinator
         .ledger_store
         .read_view_ledger_by_index(idx)
@@ -262,26 +263,65 @@ impl CoordinatorState {
     }
 
     if tail_height > 0 {
-      let res = bincode::deserialize(&view_ledger_tail.get_block().to_bytes());
-      if res.is_err() {
-        eprintln!(
-          "Failed to deserialize the view ledger tail's genesis block {:?}",
-          res
-        );
-        return Err(CoordinatorError::FailedToSerde);
+      // Connect to current endorsers
+      let curr_endorsers = coordinator
+        .connect_to_existing_endorsers(&view_ledger_tail.get_block().to_bytes())
+        .await?;
+
+      // Check if the latest view change was completed
+      let res = if let Ok(mut vs) = coordinator.verifier_state.write() {
+        vs.apply_view_change(
+          &view_ledger_tail.get_block().to_bytes(),
+          &view_ledger_tail.get_receipts().to_bytes(),
+        )
+      } else {
+        return Err(CoordinatorError::FailedToAcquireWriteLock);
+      };
+      if let Err(error) = res {
+        // Collect receipts again!
+        if error == VerificationError::InsufficientReceipts {
+          let res = coordinator
+            .ledger_store
+            .read_view_ledger_by_index(tail_height - 1)
+            .await;
+          if res.is_err() {
+            eprintln!(
+              "Failed to read the view ledger entry at index {} ({:?})",
+              tail_height - 1,
+              res
+            );
+            return Err(CoordinatorError::FailedToReadViewLedger);
+          }
+          let prev_view_ledger_entry = res.unwrap();
+          let prev_endorsers = coordinator
+            .connect_to_existing_endorsers(&prev_view_ledger_entry.get_block().to_bytes())
+            .await?;
+          let res = coordinator
+            .apply_view_change(
+              &prev_endorsers,
+              &curr_endorsers,
+              &prev_view_ledger_entry,
+              &view_ledger_tail.get_block().to_bytes(),
+              tail_height,
+            )
+            .await;
+          if let Err(error) = res {
+            eprintln!("Failed to re-apply view change {:?}", error);
+            return Err(error);
+          }
+        } else {
+          eprintln!(
+            "Failed to apply view change at the tail {} ({:?})",
+            tail_height, error
+          );
+          return Err(CoordinatorError::FailedToVerifyViewChange);
+        }
       }
-      let endorser_hostnames: EndorserHostnames = res.unwrap();
-
-      let hostnames = (0..endorser_hostnames.len())
-        .map(|i| endorser_hostnames[i].1.clone())
-        .collect::<Vec<String>>();
-
-      println!("endorsers in the latest view: {:?}", hostnames);
-
-      let pks = coordinator.connect_endorsers(&hostnames).await;
 
       // Remove endorsers that don't have the latest view
-      let res = coordinator.filter_endorsers(&pks, tail_height).await;
+      let res = coordinator
+        .filter_endorsers(&curr_endorsers, tail_height)
+        .await;
       if let Err(error) = res {
         eprintln!(
           "Failed to filter the endorsers with the latest view {:?}",
@@ -290,7 +330,34 @@ impl CoordinatorState {
         return Err(error);
       }
     }
+
     Ok(coordinator)
+  }
+
+  async fn connect_to_existing_endorsers(
+    &self,
+    view_ledger_block: &[u8],
+  ) -> Result<EndorserHostnames, CoordinatorError> {
+    let res = bincode::deserialize(view_ledger_block);
+    if res.is_err() {
+      eprintln!(
+        "Failed to deserialize the view ledger tail's genesis block {:?}",
+        res
+      );
+      return Err(CoordinatorError::FailedToSerde);
+    }
+    let endorser_hostnames: EndorserHostnames = res.unwrap();
+
+    let mut endorsers = EndorserHostnames::new();
+
+    for (pk, uri) in &endorser_hostnames {
+      let pks = self.connect_endorsers(&[uri.clone()]).await;
+      if pks.len() == 1 && pks[0].0 == *pk {
+        endorsers.push((pk.clone(), uri.clone()));
+      }
+    }
+
+    Ok(endorsers)
   }
 
   fn get_endorser_client(&self, pk: &[u8]) -> Option<(EndorserCallClient<Channel>, String)> {
@@ -354,7 +421,7 @@ impl CoordinatorState {
     None
   }
 
-  async fn connect_endorsers(&self, hostnames: &[String]) -> EndorserHostnames {
+  pub async fn connect_endorsers(&self, hostnames: &[String]) -> EndorserHostnames {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for hostname in hostnames {
       let tx = mpsc_tx.clone();
@@ -505,7 +572,7 @@ impl CoordinatorState {
     view_tail_metablock: &MetaBlock,
     block_hash: &NimbleDigest,
     expected_height: usize,
-  ) -> Result<Receipts, CoordinatorError> {
+  ) -> Receipts {
     let ledger_tail_map_proto: Vec<endorser_proto::LedgerTailMapEntry> = ledger_tail_map
       .iter()
       .map(|(handle, metablock)| endorser_proto::LedgerTailMapEntry {
@@ -568,7 +635,7 @@ impl CoordinatorState {
       }
     }
 
-    Ok(receipts)
+    receipts
   }
 
   async fn endorser_create_ledger(
@@ -951,7 +1018,7 @@ impl CoordinatorState {
     endorsers: &EndorserHostnames,
     block_hash: &NimbleDigest,
     expected_height: usize,
-  ) -> Result<(Receipts, HashMap<NimbleDigest, LedgerTailMap>), CoordinatorError> {
+  ) -> (Receipts, HashMap<NimbleDigest, LedgerTailMap>) {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for (pk, _uri) in endorsers {
@@ -1022,7 +1089,7 @@ impl CoordinatorState {
       }
     }
 
-    Ok((receipts, ledger_tail_maps))
+    (receipts, ledger_tail_maps)
   }
 
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
@@ -1073,36 +1140,33 @@ impl CoordinatorState {
 
     let view_ledger_height = res.unwrap();
 
-    let (finalize_receipts, ledger_tail_maps) = if existing_endorsers.is_empty() {
-      assert!(view_ledger_height == 1);
+    self
+      .apply_view_change(
+        &existing_endorsers,
+        &new_endorsers,
+        &tail,
+        &view_ledger_genesis_block.to_bytes(),
+        view_ledger_height,
+      )
+      .await
+  }
 
-      (Receipts::new(), HashMap::new())
-    } else {
-      let res = self
-        .endorser_finalize_state(
-          &existing_endorsers,
-          &view_ledger_genesis_block.hash(),
-          view_ledger_height,
-        )
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to read the latest state of endorsers ({:?})",
-          res.unwrap_err()
-        );
-        return Err(CoordinatorError::FailedToReadLatestState);
-      }
-      res.unwrap()
-    };
-
-    // Compute the max cut
-    let max_cut = compute_max_cut(&ledger_tail_maps);
-
+  async fn apply_view_change(
+    &self,
+    existing_endorsers: &EndorserHostnames,
+    new_endorsers: &EndorserHostnames,
+    view_ledger_entry: &LedgerEntry,
+    view_ledger_genesis_block: &[u8],
+    view_ledger_height: usize,
+  ) -> Result<(), CoordinatorError> {
     // Retrieve the view tail metablock
-    let view_tail_receipts = tail.get_receipts();
+    let view_tail_receipts = view_ledger_entry.get_receipts();
     let view_tail_metablock = if view_tail_receipts.is_empty() {
       if view_ledger_height != 1 {
-        eprintln!("cannot get view tail metablock from empty receipts");
+        eprintln!(
+          "cannot get view tail metablock from empty receipts (height = {}",
+          view_ledger_height
+        );
         return Err(CoordinatorError::UnexpectedError);
       } else {
         MetaBlock::default()
@@ -1118,24 +1182,33 @@ impl CoordinatorState {
       }
     };
 
+    let (finalize_receipts, ledger_tail_maps) = if existing_endorsers.is_empty() {
+      assert!(view_ledger_height == 1);
+
+      (Receipts::new(), HashMap::new())
+    } else {
+      self
+        .endorser_finalize_state(
+          existing_endorsers,
+          &NimbleDigest::digest(view_ledger_genesis_block),
+          view_ledger_height,
+        )
+        .await
+    };
+
+    // Compute the max cut
+    let max_cut = compute_max_cut(&ledger_tail_maps);
+
     // Initialize new endorsers
-    let res = self
+    let initialize_receipts = self
       .endorser_initialize_state(
-        &new_endorsers,
+        new_endorsers,
         &max_cut,
         &view_tail_metablock,
-        &view_ledger_genesis_block.hash(),
+        &NimbleDigest::digest(view_ledger_genesis_block),
         view_ledger_height,
       )
       .await;
-    if res.is_err() {
-      eprintln!(
-        "Failed to initialize the endorser state ({:?})",
-        res.unwrap_err()
-      );
-      return Err(CoordinatorError::FailedToInitializeEndorser);
-    }
-    let initialize_receipts = res.unwrap();
 
     // Store the receipts in the view ledger
     let mut receipts = Receipts::new();
@@ -1155,9 +1228,7 @@ impl CoordinatorState {
 
     // Apply view change to the verifier state
     if let Ok(mut vs) = self.verifier_state.write() {
-      if let Err(e) =
-        vs.apply_view_change(&view_ledger_genesis_block.to_bytes(), &receipts.to_bytes())
-      {
+      if let Err(e) = vs.apply_view_change(view_ledger_genesis_block, &receipts.to_bytes()) {
         eprintln!("Failed to apply view change: {:?}", e);
       }
     } else {
@@ -1165,7 +1236,7 @@ impl CoordinatorState {
     }
 
     // Disconnect existing endorsers
-    self.disconnect_endorsers(&existing_endorsers).await;
+    self.disconnect_endorsers(existing_endorsers).await;
 
     Ok(())
   }

@@ -14,7 +14,7 @@ use ledger::{
 };
 use std::{
   collections::{hash_map, HashMap},
-  ops::DerefMut,
+  ops::{Deref, DerefMut},
   sync::{Arc, RwLock},
 };
 
@@ -299,26 +299,32 @@ impl EndorserState {
       return Err(EndorserError::OutOfOrder);
     }
 
-    // the view embedded in the view ledger is the hash of the current state of the endorser
-    let view = produce_hash_of_state(ledger_tail_map);
-    let prev = &view_ledger_state.view_ledger_tail_hash;
-
     // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
+    let prev = &view_ledger_state.view_ledger_tail_hash;
     let new_metablock = MetaBlock::new(prev, block_hash, height_plus_one);
 
     // update the internal state
     view_ledger_state.view_ledger_tail_metablock = new_metablock.clone();
     view_ledger_state.view_ledger_tail_hash = new_metablock.hash();
 
-    // sign the hash of the new metablock
+    Ok(self.sign_view_ledger(view_ledger_state, ledger_tail_map))
+  }
+
+  fn sign_view_ledger(
+    &self,
+    view_ledger_state: &ViewLedgerState,
+    ledger_tail_map: &LedgerTailMap,
+  ) -> Receipt {
+    // the view embedded in the view ledger is the hash of the current state of the endorser
+    let view = produce_hash_of_state(ledger_tail_map);
     let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
     let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
-    Ok(Receipt::new(
+    Receipt::new(
       view,
-      new_metablock,
+      view_ledger_state.view_ledger_tail_metablock.clone(),
       IdSig::new(self.public_key.clone(), signature),
-    ))
+    )
   }
 
   fn construct_ledger_tail_map(&self) -> Result<LedgerTailMap, EndorserError> {
@@ -344,26 +350,24 @@ impl EndorserState {
     expected_height: usize,
   ) -> Result<(Receipt, LedgerTailMap), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      match view_ledger_state.endorser_mode {
-        EndorserMode::Uninitialized => {
-          return Err(EndorserError::NotInitialized);
-        },
-        EndorserMode::Finalized => {
-          return Err(EndorserError::AlreadyFinalized);
-        },
-        _ => {
-          view_ledger_state.endorser_mode = EndorserMode::Finalized;
-        },
-      }
+      if view_ledger_state.endorser_mode == EndorserMode::Uninitialized {
+        return Err(EndorserError::NotInitialized);
+      };
 
       let ledger_tail_map = self.construct_ledger_tail_map()?;
 
-      let receipt = self.append_view_ledger(
-        view_ledger_state.deref_mut(),
-        &ledger_tail_map,
-        block_hash,
-        expected_height,
-      )?;
+      let receipt = if view_ledger_state.endorser_mode == EndorserMode::Finalized {
+        self.sign_view_ledger(view_ledger_state.deref(), &ledger_tail_map)
+      } else {
+        view_ledger_state.endorser_mode = EndorserMode::Finalized;
+
+        self.append_view_ledger(
+          view_ledger_state.deref_mut(),
+          &ledger_tail_map,
+          block_hash,
+          expected_height,
+        )?
+      };
 
       Ok((receipt, ledger_tail_map))
     } else {

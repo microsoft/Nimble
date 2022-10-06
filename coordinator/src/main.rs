@@ -458,7 +458,7 @@ mod tests {
     },
     CoordinatorServiceState, CoordinatorState,
   };
-  use ledger::{CustomSerde, VerifierState};
+  use ledger::{Block, CustomSerde, VerifierState};
   use rand::Rng;
   use std::{
     collections::HashMap,
@@ -1049,6 +1049,36 @@ mod tests {
       println!("append_ledger with the first two endorser: {:?}", res);
       assert!(res.is_ok());
 
+      // Launch three new endorsers
+      let endorser_args7 = endorser_args.clone() + " -p 9097";
+      let endorser7 = launch_endorser(&endorser_cmd, endorser_args7);
+      let endorser_args8 = endorser_args.clone() + " -p 9098";
+      let endorser8 = launch_endorser(&endorser_cmd, endorser_args8);
+      let endorser_args9 = endorser_args.clone() + " -p 9099";
+      let endorser9 = launch_endorser(&endorser_cmd, endorser_args9);
+
+      // Connect to new endorsers
+      let new_endorsers = server
+        .state
+        .connect_endorsers(&[
+          "http://[::1]:9097".to_string(),
+          "http://[::1]:9098".to_string(),
+          "http://[::1]:9099".to_string(),
+        ])
+        .await;
+      assert!(new_endorsers.len() == 3);
+
+      // Package the list of endorsers into a genesis block of the view ledger
+      let view_ledger_genesis_block = bincode::serialize(&new_endorsers).unwrap();
+
+      // Store the genesis block of the view ledger in the ledger store
+      let res = server
+        .state
+        .ledger_store
+        .append_view_ledger(&Block::new(&view_ledger_genesis_block), view_height + 1)
+        .await;
+      assert!(res.is_ok());
+
       // Step 13: drop old coordinator and start a new coordinator
       drop(server);
 
@@ -1060,6 +1090,18 @@ mod tests {
 
       let server2 = CoordinatorServiceState::new(coordinator2);
       println!("Started a new coordinator");
+
+      view_height += 1;
+      let req = tonic::Request::new(ReadViewByIndexReq {
+        index: view_height as u64, // the first entry on the view ledger starts at 1
+      });
+
+      let ReadViewByIndexResp { block, receipts } =
+        server2.read_view_by_index(req).await.unwrap().into_inner();
+
+      let res = vs.apply_view_change(&block, &receipts);
+      println!("Applying ReadViewByIndexResp Response: {:?}", res);
+      assert!(res.is_ok());
 
       // Step 14: Append via the new coordinator
       let message = "data_block_append 4".as_bytes();
@@ -1094,6 +1136,10 @@ mod tests {
       assert!(res.is_ok());
 
       server2.get_state().reset_ledger_store().await;
+
+      println!("endorser7 process ID is {}", endorser7.child.id());
+      println!("endorser8 process ID is {}", endorser8.child.id());
+      println!("endorser9 process ID is {}", endorser9.child.id());
     }
 
     // We access endorser and endorser2 below
