@@ -663,14 +663,15 @@ async fn read_ledger_internal(
   req_idx: Option<usize>,
   ledger: Arc<TableClient>,
 ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
-  let index = if req_idx.is_some() {
-    checked_conversion!(req_idx.unwrap(), i64).to_string()
+  let actual_idx = if req_idx.is_some() {
+    req_idx.unwrap()
   } else {
-    TAIL.to_owned() // No index was requested, get the TAIL
+    let (entry, _etag) = find_db_entry(ledger.clone(), handle, TAIL).await?;
+    entry.height as usize
   };
+  let index = checked_conversion!(actual_idx, i64).to_string();
 
   let (entry, _etag) = find_db_entry(ledger, handle, &index).await?;
-
   let ret_block = match Block::from_bytes(&string_decode(&entry.block)?) {
     Ok(b) => b,
     Err(e) => {
