@@ -1,10 +1,10 @@
 use crate::errors::CoordinatorError;
 use ledger::{
-  compute_aggregated_block_hash, compute_max_cut,
+  compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut,
   errors::VerificationError,
   signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorserHostnames, Handle, LedgerTailMap, MetaBlock, NimbleDigest,
-  NimbleHashTrait, Nonce, Receipt, Receipts, VerifierState,
+  Block, CustomSerde, EndorserHostnames, Handle, LedgerChunk, LedgerTailMap, MetaBlock,
+  NimbleDigest, NimbleHashTrait, Nonce, Receipt, Receipts, VerifierState,
 };
 use std::{
   collections::HashMap,
@@ -42,6 +42,8 @@ pub struct CoordinatorState {
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
 const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
 const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
+
+const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
 async fn update_endorser(
   ledger_store: LedgerStoreRef,
@@ -235,34 +237,28 @@ impl CoordinatorState {
 
     let (view_ledger_tail, tail_height) = res.unwrap();
 
-    for idx in 1..tail_height {
-      let res = coordinator
-        .ledger_store
-        .read_view_ledger_by_index(idx)
-        .await;
-      if res.is_err() {
-        eprintln!(
-          "Failed to read the view ledger entry at index {} ({:?})",
-          idx, res
-        );
-        return Err(CoordinatorError::FailedToReadViewLedger);
-      }
-      let view_ledger_entry = res.unwrap();
-      if let Ok(mut vs) = coordinator.verifier_state.write() {
-        let res = vs.apply_view_change(
-          &view_ledger_entry.get_block().to_bytes(),
-          &view_ledger_entry.get_receipts().to_bytes(),
-        );
-        if res.is_err() {
-          eprintln!("Failed to apply view change at index {} ({:?})", idx, res);
-          return Err(CoordinatorError::FailedToVerifyViewChange);
+    if tail_height > 0 {
+      let view_ledger_head = if tail_height == 1 {
+        view_ledger_tail.clone()
+      } else {
+        let res = coordinator
+          .ledger_store
+          .read_view_ledger_by_index(1usize)
+          .await;
+        match res {
+          Ok(l) => l,
+          Err(e) => {
+            eprintln!("Failed to read the view ledger head {:?}", e);
+            return Err(CoordinatorError::FailedToReadViewLedger);
+          },
         }
+      };
+      if let Ok(mut vs) = coordinator.verifier_state.write() {
+        vs.set_group_identity(view_ledger_head.get_block().hash());
       } else {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
-    }
 
-    if tail_height > 0 {
       // Connect to current endorsers
       let curr_endorsers = coordinator
         .connect_to_existing_endorsers(&view_ledger_tail.get_block().to_bytes())
@@ -273,6 +269,7 @@ impl CoordinatorState {
         vs.apply_view_change(
           &view_ledger_tail.get_block().to_bytes(),
           &view_ledger_tail.get_receipts().to_bytes(),
+          Some(ATTESTATION_STR.as_bytes()),
         )
       } else {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
@@ -301,7 +298,7 @@ impl CoordinatorState {
               &prev_endorsers,
               &curr_endorsers,
               &prev_view_ledger_entry,
-              &view_ledger_tail.get_block().to_bytes(),
+              view_ledger_tail.get_block(),
               tail_height,
             )
             .await;
@@ -314,7 +311,7 @@ impl CoordinatorState {
             "Failed to apply view change at the tail {} ({:?})",
             tail_height, error
           );
-          return Err(CoordinatorError::FailedToVerifyViewChange);
+          return Err(CoordinatorError::FailedToActivate);
         }
       }
 
@@ -328,6 +325,38 @@ impl CoordinatorState {
           error
         );
         return Err(error);
+      }
+    }
+
+    for idx in (1..tail_height).rev() {
+      let res = coordinator
+        .ledger_store
+        .read_view_ledger_by_index(idx)
+        .await;
+      if res.is_err() {
+        eprintln!(
+          "Failed to read the view ledger entry at index {} ({:?})",
+          idx, res
+        );
+        return Err(CoordinatorError::FailedToReadViewLedger);
+      }
+      let view_ledger_entry = res.unwrap();
+      if let Ok(mut vs) = coordinator.verifier_state.write() {
+        // Set group identity
+        if idx == 1 {
+          vs.set_group_identity(view_ledger_entry.get_block().hash());
+        }
+        let res = vs.apply_view_change(
+          &view_ledger_entry.get_block().to_bytes(),
+          &view_ledger_entry.get_receipts().to_bytes(),
+          None,
+        );
+        if res.is_err() {
+          eprintln!("Failed to apply view change at index {} ({:?})", idx, res);
+          return Err(CoordinatorError::FailedToActivate);
+        }
+      } else {
+        return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
 
@@ -567,6 +596,7 @@ impl CoordinatorState {
 
   async fn endorser_initialize_state(
     &self,
+    group_identity: &NimbleDigest,
     endorsers: &EndorserHostnames,
     ledger_tail_map: &LedgerTailMap,
     view_tail_metablock: &MetaBlock,
@@ -593,9 +623,11 @@ impl CoordinatorState {
       let view_tail_metablock_bytes = view_tail_metablock.to_bytes().to_vec();
       let block_hash_copy = block_hash.to_bytes();
       let pk_bytes = pk.clone();
+      let group_identity_copy = (*group_identity).to_bytes();
       let _job = tokio::spawn(async move {
         let res = endorser_client
           .initialize_state(tonic::Request::new(endorser_proto::InitializeStateReq {
+            group_identity: group_identity_copy,
             ledger_tail_map: ledger_tail_map_copy,
             view_tail_metablock: view_tail_metablock_bytes,
             block_hash: block_hash_copy,
@@ -1092,6 +1124,91 @@ impl CoordinatorState {
     (receipts, ledger_tail_maps)
   }
 
+  async fn endorser_verify_view_change(
+    &self,
+    endorsers: &EndorserHostnames,
+    old_config: Block,
+    new_config: Block,
+    ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
+    ledger_chunks: &[LedgerChunk],
+    receipts: &Receipts,
+  ) -> usize {
+    let ledger_tail_maps_proto: Vec<endorser_proto::LedgerTailMap> = ledger_tail_maps
+      .iter()
+      .map(|(_h, m)| {
+        let entries = m
+          .iter()
+          .map(|(handle, metablock)| endorser_proto::LedgerTailMapEntry {
+            handle: handle.to_bytes(),
+            metablock: metablock.to_bytes(),
+          })
+          .collect();
+        endorser_proto::LedgerTailMap { entries }
+      })
+      .collect();
+    let ledger_chunks_proto: Vec<endorser_proto::LedgerChunkEntry> = ledger_chunks
+      .iter()
+      .map(|c| endorser_proto::LedgerChunkEntry {
+        handle: c.handle.to_bytes(),
+        hash: c.hash.to_bytes(),
+        height: c.height as u64,
+        block_hashes: c.block_hashes.iter().map(|b| b.to_bytes()).collect(),
+      })
+      .collect();
+
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+
+    for (pk, _uri) in endorsers {
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
+        Some((client, endorser)) => (client, endorser),
+        None => continue,
+      };
+
+      let tx = mpsc_tx.clone();
+      let pk_bytes = pk.clone();
+      let old_config_copy = old_config.clone();
+      let new_config_copy = new_config.clone();
+      let ledger_tail_maps_copy = ledger_tail_maps_proto.clone();
+      let ledger_chunks_copy = ledger_chunks_proto.clone();
+      let receipts_copy = receipts.to_bytes();
+      let _job = tokio::spawn(async move {
+        let res = endorser_client
+          .activate(tonic::Request::new(endorser_proto::ActivateReq {
+            old_config: old_config_copy.to_bytes(),
+            new_config: new_config_copy.to_bytes(),
+            ledger_tail_maps: ledger_tail_maps_copy,
+            ledger_chunks: ledger_chunks_copy,
+            receipts: receipts_copy.to_vec(),
+          }))
+          .await;
+        let _ = tx.send((endorser, pk_bytes, res)).await;
+      });
+    }
+
+    drop(mpsc_tx);
+
+    let mut num_verified_endorers = 0;
+
+    while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok(_resp) => {
+          num_verified_endorers += 1;
+        },
+        Err(status) => {
+          eprintln!(
+            "Failed to prove view change to endorser {} (status={:?})",
+            endorser, status
+          );
+          if let CoordinatorAction::RemoveEndorser = process_error(&endorser, None, &status) {
+            self.disconnect_endorsers(&vec![(pk_bytes, endorser)]).await;
+          }
+        },
+      }
+    }
+
+    num_verified_endorers
+  }
+
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     let existing_endorsers = self.get_endorser_hostnames();
 
@@ -1145,7 +1262,7 @@ impl CoordinatorState {
         &existing_endorsers,
         &new_endorsers,
         &tail,
-        &view_ledger_genesis_block.to_bytes(),
+        &view_ledger_genesis_block,
         view_ledger_height,
       )
       .await
@@ -1156,7 +1273,7 @@ impl CoordinatorState {
     existing_endorsers: &EndorserHostnames,
     new_endorsers: &EndorserHostnames,
     view_ledger_entry: &LedgerEntry,
-    view_ledger_genesis_block: &[u8],
+    view_ledger_genesis_block: &Block,
     view_ledger_height: usize,
   ) -> Result<(), CoordinatorError> {
     // Retrieve the view tail metablock
@@ -1190,7 +1307,7 @@ impl CoordinatorState {
       self
         .endorser_finalize_state(
           existing_endorsers,
-          &NimbleDigest::digest(view_ledger_genesis_block),
+          &view_ledger_genesis_block.hash(),
           view_ledger_height,
         )
         .await
@@ -1199,13 +1316,29 @@ impl CoordinatorState {
     // Compute the max cut
     let max_cut = compute_max_cut(&ledger_tail_maps);
 
+    // Set group identity if necessary
+    let group_identity = if view_ledger_height == 1 {
+      let id = view_ledger_genesis_block.hash();
+      if let Ok(mut vs) = self.verifier_state.write() {
+        vs.set_group_identity(id);
+        id
+      } else {
+        return Err(CoordinatorError::FailedToAcquireWriteLock);
+      }
+    } else if let Ok(vs) = self.verifier_state.read() {
+      *vs.get_group_identity()
+    } else {
+      return Err(CoordinatorError::FailedToAcquireReadLock);
+    };
+
     // Initialize new endorsers
     let initialize_receipts = self
       .endorser_initialize_state(
+        &group_identity,
         new_endorsers,
         &max_cut,
         &view_tail_metablock,
-        &NimbleDigest::digest(view_ledger_genesis_block),
+        &view_ledger_genesis_block.hash(),
         view_ledger_height,
       )
       .await;
@@ -1226,9 +1359,62 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
 
+    // Retrieve blocks that need for verifying the view change
+    let res = compute_cut_diffs(&ledger_tail_maps);
+    if let Err(e) = res {
+      eprintln!("the ledger tail maps are inconsistent {:?}", e);
+      return Err(CoordinatorError::FailedToActivate);
+    }
+    let cut_diffs = res.unwrap();
+    let mut ledger_chunks: Vec<LedgerChunk> = Vec::new();
+    for (handle, (hash, low, high)) in &cut_diffs {
+      let mut block_hashes: Vec<NimbleDigest> = Vec::new();
+      for index in (*low + 1)..=*high {
+        let res = self.ledger_store.read_ledger_by_index(handle, index).await;
+        if let Err(e) = res {
+          eprintln!("Failed to read the ledger store {:?}", e);
+          return Err(CoordinatorError::FailedToCallLedgerStore);
+        }
+        let ledger_entry = res.unwrap();
+        let block_hash = compute_aggregated_block_hash(
+          &ledger_entry.get_block().hash().to_bytes(),
+          &ledger_entry.get_nonces().hash().to_bytes(),
+        );
+        block_hashes.push(block_hash);
+      }
+      ledger_chunks.push(LedgerChunk {
+        handle: *handle,
+        hash: *hash,
+        height: *low,
+        block_hashes,
+      });
+    }
+
+    let num_verified_endorsers = self
+      .endorser_verify_view_change(
+        new_endorsers,
+        view_ledger_entry.get_block().clone(),
+        view_ledger_genesis_block.clone(),
+        &ledger_tail_maps,
+        &ledger_chunks,
+        &receipts,
+      )
+      .await;
+    if num_verified_endorsers * 2 <= new_endorsers.len() {
+      eprintln!(
+        "insufficient verified endorsers {} * 2 <= {}",
+        num_verified_endorsers,
+        new_endorsers.len()
+      );
+    }
+
     // Apply view change to the verifier state
     if let Ok(mut vs) = self.verifier_state.write() {
-      if let Err(e) = vs.apply_view_change(view_ledger_genesis_block, &receipts.to_bytes()) {
+      if let Err(e) = vs.apply_view_change(
+        &view_ledger_genesis_block.to_bytes(),
+        &receipts.to_bytes(),
+        Some(ATTESTATION_STR.as_bytes()),
+      ) {
         eprintln!("Failed to apply view change: {:?}", e);
       }
     } else {
@@ -1501,5 +1687,19 @@ impl CoordinatorState {
     };
 
     Ok(ledger_entry)
+  }
+
+  pub async fn read_view_tail(&self) -> Result<(LedgerEntry, usize, Vec<u8>), CoordinatorError> {
+    let res = self.ledger_store.read_view_ledger_tail().await;
+    if let Err(error) = res {
+      eprintln!(
+        "Failed to read the view ledger tail from the ledger store {:?}",
+        error,
+      );
+      return Err(CoordinatorError::FailedToReadViewLedger);
+    }
+
+    let (ledger_entry, height) = res.unwrap();
+    Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
   }
 }

@@ -9,10 +9,10 @@ use tokio::time::Instant;
 use tonic::transport::{Channel, Endpoint};
 
 use coordinator_proto::{
-  call_client::CallClient, AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadViewByIndexReq, ReadViewByIndexResp,
+  call_client::CallClient, AppendReq, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadViewTailReq,
+  ReadViewTailResp,
 };
-use ledger::VerifierState;
+use ledger::{NimbleDigest, VerifierState};
 
 use crate::{
   cli::Args,
@@ -476,17 +476,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Initialization: Fetch view ledger to build VerifierState
   let mut vs = VerifierState::new();
 
-  let req = tonic::Request::new(ReadViewByIndexReq {
-    index: 1, // the first entry on the view ledger starts at 1
-  });
+  let req = tonic::Request::new(ReadViewTailReq {});
 
-  let ReadViewByIndexResp { block, receipts } = coordinator_connection
+  let ReadViewTailResp {
+    block,
+    receipts,
+    height,
+    attestations,
+  } = coordinator_connection
     .client
-    .read_view_by_index(req)
+    .read_view_tail(req)
     .await?
     .into_inner();
 
-  let res = vs.apply_view_change(&block, &receipts);
+  assert!(height == 1);
+  vs.set_group_identity(NimbleDigest::digest(&block));
+
+  let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
   Timer::print(&format!(
     "Applying ReadViewByIndexResp Response: {:?}",
     res.is_ok()

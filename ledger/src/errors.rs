@@ -38,4 +38,22 @@ pub enum VerificationError {
   InvalidNonce,
   /// returned if the supplied hash nonces cannot be deserialized
   InvalidNoncesHash,
+  /// returned if the supplied group identity doesn't match the config
+  InvalidGroupIdentity,
+  /// returned if the metablock doesn't match
+  InvalidMetaBlock,
+  /// returned if the max cut is incorrect
+  InvalidMaxCut,
+  /// returned if a ledger tail map is incorrect
+  InvalidLedgerTailMap,
+  /// returned if a ledger tail map is missing
+  MissingLedgerTailMap,
+  /// returned if there exists redundant ledger tail map
+  RedundantLedgerTailMap,
+  /// returned if the config is invalid
+  InvalidConfig,
+  /// returnef if the number of endorsers is too few
+  InsufficentEndorsers,
+  /// returned if the ledger tail maps are inconsistent
+  InconsistentLedgerTailMaps,
 }

@@ -13,7 +13,7 @@ pub mod coordinator_proto {
 use crate::errors::EndpointError;
 use coordinator_proto::{
   call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
 };
 use ledger::{
   errors::VerificationError,
@@ -137,6 +137,22 @@ impl Connection {
       .into_inner();
     Ok((block, receipts))
   }
+
+  pub async fn read_view_tail(&self) -> Result<(Vec<u8>, Vec<u8>, usize, Vec<u8>), EndpointError> {
+    let ReadViewTailResp {
+      block,
+      receipts,
+      height,
+      attestations,
+    } = self
+      .client
+      .clone()
+      .read_view_tail(ReadViewTailReq {})
+      .await
+      .map_err(|_e| EndpointError::FailedToReadViewLedger)?
+      .into_inner();
+    Ok((block, receipts, height as usize, attestations))
+  }
 }
 
 pub struct EndpointState {
@@ -178,13 +194,21 @@ impl EndpointState {
     let (id, vs) = {
       let mut vs = VerifierState::default();
 
-      let (block, receipt) = conn.read_view_by_index(1usize).await.unwrap();
-
-      let res = vs.apply_view_change(&block, &receipt);
-      assert!(res.is_ok());
+      let (block, _r) = conn.read_view_by_index(1usize).await.unwrap();
 
       // the hash of the genesis block of the view ledger uniquely identifies a particular instance of NimbleLedger
       let id = Block::from_bytes(&block).unwrap().hash();
+      vs.set_group_identity(id);
+
+      let (block, receipts, height, attestations) = conn.read_view_tail().await.unwrap();
+      let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
+      assert!(res.is_ok());
+
+      for index in (1..height).rev() {
+        let (block, receipts) = conn.read_view_by_index(index).await.unwrap();
+        let res = vs.apply_view_change(&block, &receipts, None);
+        assert!(res.is_ok());
+      }
 
       (id, vs)
     };
@@ -227,24 +251,28 @@ impl EndpointState {
   }
 
   async fn update_view(&self) -> Result<(), EndpointError> {
-    loop {
-      let mut idx = {
-        if let Ok(vs_rd) = self.vs.read() {
-          vs_rd.get_view_ledger_height()
-        } else {
-          return Err(EndpointError::FailedToAcquireReadLock);
-        }
-      };
-
-      idx += 1;
-      let res = self.conn.read_view_by_index(idx).await;
-      if res.is_err() {
-        break;
+    let start_height = {
+      if let Ok(vs_rd) = self.vs.read() {
+        vs_rd.get_view_ledger_height() + 1
+      } else {
+        return Err(EndpointError::FailedToAcquireReadLock);
       }
+    };
 
-      let (block, receipts) = res.unwrap();
+    let (block, receipts, height, attestations) = self.conn.read_view_tail().await.unwrap();
+    if let Ok(mut vs_wr) = self.vs.write() {
+      let res = vs_wr.apply_view_change(&block, &receipts, Some(&attestations));
+      if res.is_err() {
+        return Err(EndpointError::FailedToApplyViewChange);
+      }
+    } else {
+      return Err(EndpointError::FailedToAcquireWriteLock);
+    }
+
+    for index in (start_height..height).rev() {
+      let (block, receipts) = self.conn.read_view_by_index(index).await.unwrap();
       if let Ok(mut vs_wr) = self.vs.write() {
-        let res = vs_wr.apply_view_change(&block, &receipts);
+        let res = vs_wr.apply_view_change(&block, &receipts, None);
         if res.is_err() {
           return Err(EndpointError::FailedToApplyViewChange);
         }
@@ -252,6 +280,7 @@ impl EndpointState {
         return Err(EndpointError::FailedToAcquireWriteLock);
       }
     }
+
     Ok(())
   }
 

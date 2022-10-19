@@ -10,7 +10,8 @@ use endorser_proto::EndorserMode;
 use ledger::{
   produce_hash_of_state,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey},
-  Handle, IdSig, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  Handle, IdSig, LedgerChunk, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
+  Receipts,
 };
 use std::{
   collections::{hash_map, HashMap},
@@ -23,8 +24,13 @@ struct ViewLedgerState {
 
   view_ledger_tail_hash: NimbleDigest,
 
-  /// Endorser has 3 modes: uninitialized, active, finalized
+  view_ledger_prev_metablock: MetaBlock,
+
+  /// Endorser has 4 modes: uninitialized, initialized, active, finalized
   endorser_mode: EndorserMode,
+
+  /// Endorser's group identity
+  group_identity: NimbleDigest,
 }
 
 type ProtectedMetaBlock = Arc<RwLock<MetaBlock>>;
@@ -52,13 +58,16 @@ impl EndorserState {
       view_ledger_state: Arc::new(RwLock::new(ViewLedgerState {
         view_ledger_tail_metablock: MetaBlock::default(),
         view_ledger_tail_hash: MetaBlock::default().hash(),
+        view_ledger_prev_metablock: MetaBlock::default(),
         endorser_mode: EndorserMode::Uninitialized,
+        group_identity: NimbleDigest::default(),
       })),
     }
   }
 
   pub fn initialize_state(
     &self,
+    group_identity: &NimbleDigest,
     ledger_tail_map: &LedgerTailMap,
     view_ledger_tail_metablock: &MetaBlock,
     block_hash: &NimbleDigest,
@@ -75,9 +84,12 @@ impl EndorserState {
         }
       }
 
+      view_ledger_state.view_ledger_prev_metablock =
+        view_ledger_state.view_ledger_tail_metablock.clone();
       view_ledger_state.view_ledger_tail_metablock = view_ledger_tail_metablock.clone();
-      view_ledger_state.view_ledger_tail_hash = view_ledger_tail_metablock.hash();
-      view_ledger_state.endorser_mode = EndorserMode::Active;
+      view_ledger_state.view_ledger_tail_hash = view_ledger_state.view_ledger_tail_metablock.hash();
+      view_ledger_state.endorser_mode = EndorserMode::Initialized;
+      view_ledger_state.group_identity = *group_identity;
 
       self.append_view_ledger(
         view_ledger_state.deref_mut(),
@@ -97,8 +109,8 @@ impl EndorserState {
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
-        EndorserMode::Uninitialized => {
-          return Err(EndorserError::NotInitialized);
+        EndorserMode::Uninitialized | EndorserMode::Initialized => {
+          return Err(EndorserError::NotActive);
         },
         EndorserMode::Finalized => {
           return Err(EndorserError::AlreadyFinalized);
@@ -109,7 +121,9 @@ impl EndorserState {
       // create a genesis metablock that embeds the current tail of the view/membership ledger
       let view = view_ledger_state.view_ledger_tail_hash;
       let metablock = MetaBlock::genesis(block_hash);
-      let message = view.digest_with(&handle.digest_with(&metablock.hash()));
+      let message = view_ledger_state
+        .group_identity
+        .digest_with(&view.digest_with(&handle.digest_with(&metablock.hash())));
       let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
       // check if the handle already exists, if so, return an error
@@ -135,8 +149,8 @@ impl EndorserState {
   pub fn read_latest(&self, handle: &NimbleDigest, nonce: &[u8]) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
-        EndorserMode::Uninitialized => {
-          return Err(EndorserError::NotInitialized);
+        EndorserMode::Uninitialized | EndorserMode::Initialized => {
+          return Err(EndorserError::NotActive);
         },
         EndorserMode::Finalized => {
           return Err(EndorserError::AlreadyFinalized);
@@ -151,8 +165,9 @@ impl EndorserState {
             if let Ok(metablock) = protected_metablock.read() {
               let view = view_ledger_state.view_ledger_tail_hash;
               let tail_hash = metablock.hash();
-              let message =
-                view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce)));
+              let message = view_ledger_state.group_identity.digest_with(
+                &view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce))),
+              );
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
               Ok(Receipt::new(
@@ -176,8 +191,8 @@ impl EndorserState {
   pub fn get_height(&self, handle: &NimbleDigest) -> Result<usize, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
-        EndorserMode::Uninitialized => {
-          return Err(EndorserError::NotInitialized);
+        EndorserMode::Uninitialized | EndorserMode::Initialized => {
+          return Err(EndorserError::NotActive);
         },
         EndorserMode::Finalized => {
           return Err(EndorserError::AlreadyFinalized);
@@ -212,8 +227,8 @@ impl EndorserState {
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
-        EndorserMode::Uninitialized => {
-          return Err(EndorserError::NotInitialized);
+        EndorserMode::Uninitialized | EndorserMode::Initialized => {
+          return Err(EndorserError::NotActive);
         },
         EndorserMode::Finalized => {
           return Err(EndorserError::AlreadyFinalized);
@@ -246,7 +261,10 @@ impl EndorserState {
               let new_metablock = MetaBlock::new(&metablock.hash(), block_hash, height_plus_one);
 
               let view = view_ledger_state.view_ledger_tail_hash;
-              let message = view.digest_with(&handle.digest_with(&new_metablock.hash()));
+              let message = view_ledger_state
+                .group_identity
+                .digest_with(&view.digest_with(&handle.digest_with(&new_metablock.hash())));
+
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
               *metablock = new_metablock.clone();
@@ -300,12 +318,14 @@ impl EndorserState {
     }
 
     // formulate a metablock for the new entry on the view ledger; and hash it to get the updated tail hash
-    let prev = &view_ledger_state.view_ledger_tail_hash;
-    let new_metablock = MetaBlock::new(prev, block_hash, height_plus_one);
+    let prev = view_ledger_state.view_ledger_tail_hash;
+    let new_metablock = MetaBlock::new(&prev, block_hash, height_plus_one);
 
     // update the internal state
-    view_ledger_state.view_ledger_tail_metablock = new_metablock.clone();
-    view_ledger_state.view_ledger_tail_hash = new_metablock.hash();
+    view_ledger_state.view_ledger_prev_metablock =
+      view_ledger_state.view_ledger_tail_metablock.clone();
+    view_ledger_state.view_ledger_tail_metablock = new_metablock;
+    view_ledger_state.view_ledger_tail_hash = view_ledger_state.view_ledger_tail_metablock.hash();
 
     Ok(self.sign_view_ledger(view_ledger_state, ledger_tail_map))
   }
@@ -317,7 +337,9 @@ impl EndorserState {
   ) -> Receipt {
     // the view embedded in the view ledger is the hash of the current state of the endorser
     let view = produce_hash_of_state(ledger_tail_map);
-    let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
+    let message = view_ledger_state
+      .group_identity
+      .digest_with(&view.digest_with(&view_ledger_state.view_ledger_tail_hash));
     let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
     Receipt::new(
@@ -350,8 +372,10 @@ impl EndorserState {
     expected_height: usize,
   ) -> Result<(Receipt, LedgerTailMap), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
-      if view_ledger_state.endorser_mode == EndorserMode::Uninitialized {
-        return Err(EndorserError::NotInitialized);
+      if view_ledger_state.endorser_mode == EndorserMode::Uninitialized
+        || view_ledger_state.endorser_mode == EndorserMode::Initialized
+      {
+        return Err(EndorserError::NotActive);
       };
 
       let ledger_tail_map = self.construct_ledger_tail_map()?;
@@ -396,6 +420,50 @@ impl EndorserState {
       Err(EndorserError::FailedToAcquireViewLedgerReadLock)
     }
   }
+
+  pub fn activate(
+    &self,
+    old_config: &[u8],
+    new_config: &[u8],
+    ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
+    ledger_chunks: &Vec<LedgerChunk>,
+    receipts: &Receipts,
+  ) -> Result<(), EndorserError> {
+    if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Uninitialized => {
+          return Err(EndorserError::NotInitialized);
+        },
+        EndorserMode::Active => {
+          return Err(EndorserError::AlreadyActivated);
+        },
+        EndorserMode::Finalized => {
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
+      }
+
+      let res = receipts.verify_view_change(
+        old_config,
+        new_config,
+        &self.public_key,
+        &view_ledger_state.group_identity,
+        &view_ledger_state.view_ledger_prev_metablock,
+        &view_ledger_state.view_ledger_tail_metablock,
+        ledger_tail_maps,
+        ledger_chunks,
+      );
+
+      if let Err(_e) = res {
+        Err(EndorserError::FailedToActivate)
+      } else {
+        view_ledger_state.endorser_mode = EndorserMode::Active;
+        Ok(())
+      }
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
+    }
+  }
 }
 
 #[cfg(test)]
@@ -432,12 +500,20 @@ mod tests {
 
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
+      &view_block_hash,
       &HashMap::new(),
       &MetaBlock::default(),
       &view_block_hash,
       height_plus_one,
     );
     assert!(res.is_ok());
+
+    // Set the endorser mode directly
+    endorser_state
+      .view_ledger_state
+      .write()
+      .expect("failed to acquire write lock")
+      .endorser_mode = endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let handle = {
@@ -472,9 +548,12 @@ mod tests {
       .get_sig()
       .verify(
         &endorser_state.public_key,
-        &receipt
-          .get_view()
-          .digest_with(&handle.digest_with(&genesis_tail_hash))
+        &view_block_hash
+          .digest_with(
+            &receipt
+              .get_view()
+              .digest_with(&handle.digest_with(&genesis_tail_hash))
+          )
           .to_bytes(),
       )
       .is_ok());
@@ -522,12 +601,20 @@ mod tests {
 
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
+      &view_block_hash,
       &HashMap::new(),
       &MetaBlock::default(),
       &view_block_hash,
       height_plus_one,
     );
     assert!(res.is_ok());
+
+    // Set the endorser mode directly
+    endorser_state
+      .view_ledger_state
+      .write()
+      .expect("failed to acquire write lock")
+      .endorser_mode = endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let block = rand::thread_rng().gen::<[u8; 32]>();
@@ -595,9 +682,8 @@ mod tests {
     let message = handle.digest_with(&endorser_tail_expectation);
     let tail_signature_verification = receipt.get_id_sig().get_sig().verify(
       &endorser_state.public_key,
-      &receipt
-        .get_view()
-        .digest_with_bytes(&message.to_bytes())
+      &view_block_hash
+        .digest_with(&receipt.get_view().digest_with_bytes(&message.to_bytes()))
         .to_bytes(),
     );
 

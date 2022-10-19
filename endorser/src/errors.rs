@@ -28,4 +28,10 @@ pub enum EndorserError {
   FailedToAcquireLedgerEntryWriteLock,
   /// returned if the endorser is already finalized
   AlreadyFinalized,
+  /// returned if failed to verify the view change
+  FailedToActivate,
+  /// returned if the endorser is not active
+  NotActive,
+  /// returned if the endorser is already activated
+  AlreadyActivated,
 }

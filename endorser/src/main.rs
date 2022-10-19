@@ -1,6 +1,9 @@
 use crate::{endorser_state::EndorserState, errors::EndorserError};
 use clap::{App, Arg};
-use ledger::{signature::PublicKeyTrait, CustomSerde, MetaBlock, NimbleDigest};
+use ledger::{
+  produce_hash_of_state, signature::PublicKeyTrait, CustomSerde, LedgerChunk, LedgerTailMap,
+  MetaBlock, NimbleDigest, Receipts,
+};
 use std::collections::HashMap;
 use tonic::{transport::Server, Code, Request, Response, Status};
 
@@ -14,9 +17,9 @@ pub mod endorser_proto {
 
 use endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
-  AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp, GetPublicKeyReq, GetPublicKeyResp,
-  InitializeStateReq, InitializeStateResp, LedgerTailMapEntry, NewLedgerReq, NewLedgerResp,
-  ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
+  ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
+  GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry,
+  NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
 };
 
 pub struct EndorserServiceState {
@@ -251,6 +254,7 @@ impl EndorserCall for EndorserServiceState {
     req: Request<InitializeStateReq>,
   ) -> Result<Response<InitializeStateResp>, Status> {
     let InitializeStateReq {
+      group_identity,
       ledger_tail_map,
       view_tail_metablock,
       block_hash,
@@ -265,9 +269,11 @@ impl EndorserCall for EndorserServiceState {
         )
       })
       .collect();
+    let group_identity_rs = NimbleDigest::from_bytes(&group_identity).unwrap();
     let view_tail_metablock_rs = MetaBlock::from_bytes(&view_tail_metablock).unwrap();
     let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
     let res = self.state.initialize_state(
+      &group_identity_rs,
       &ledger_tail_map_rs,
       &view_tail_metablock_rs,
       &block_hash_rs,
@@ -319,6 +325,72 @@ impl EndorserCall for EndorserServiceState {
           error,
           None,
           "Failed to finalize the endorser due to an internal error",
+        );
+        Err(status)
+      },
+    }
+  }
+
+  async fn activate(&self, req: Request<ActivateReq>) -> Result<Response<ActivateResp>, Status> {
+    let ActivateReq {
+      old_config,
+      new_config,
+      ledger_tail_maps,
+      ledger_chunks,
+      receipts,
+    } = req.into_inner();
+    let ledger_tail_maps_rs: HashMap<NimbleDigest, LedgerTailMap> = ledger_tail_maps
+      .into_iter()
+      .map(|m| {
+        let ledger_tail_map_rs = m
+          .entries
+          .into_iter()
+          .map(|e| {
+            (
+              NimbleDigest::from_bytes(&e.handle).unwrap(),
+              MetaBlock::from_bytes(&e.metablock).unwrap(),
+            )
+          })
+          .collect();
+        (
+          produce_hash_of_state(&ledger_tail_map_rs),
+          ledger_tail_map_rs,
+        )
+      })
+      .collect();
+    let ledger_chunks_rs: Vec<LedgerChunk> = ledger_chunks
+      .into_iter()
+      .map(|e| LedgerChunk {
+        handle: NimbleDigest::from_bytes(&e.handle).unwrap(),
+        hash: NimbleDigest::from_bytes(&e.hash).unwrap(),
+        height: e.height as usize,
+        block_hashes: e
+          .block_hashes
+          .iter()
+          .map(|b| NimbleDigest::from_bytes(b).unwrap())
+          .collect(),
+      })
+      .collect();
+    let receipts_rs = Receipts::from_bytes(&receipts).unwrap();
+
+    let res = self.state.activate(
+      &old_config,
+      &new_config,
+      &ledger_tail_maps_rs,
+      &ledger_chunks_rs,
+      &receipts_rs,
+    );
+
+    match res {
+      Ok(()) => {
+        let reply = ActivateResp {};
+        Ok(Response::new(reply))
+      },
+      Err(error) => {
+        let status = self.process_error(
+          error,
+          None,
+          "Failed to verify the view change due to an internal error",
         );
         Err(status)
       },

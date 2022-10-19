@@ -61,6 +61,13 @@ pub type Handle = NimbleDigest;
 
 pub type LedgerTailMap = HashMap<NimbleDigest, MetaBlock>;
 
+pub struct LedgerChunk {
+  pub handle: NimbleDigest,
+  pub hash: NimbleDigest,
+  pub height: usize,
+  pub block_hashes: Vec<NimbleDigest>,
+}
+
 pub fn produce_hash_of_state(ledger_tail_map: &LedgerTailMap) -> NimbleDigest {
   // for empty state, hash is a vector of zeros
   if ledger_tail_map.is_empty() {
@@ -286,6 +293,22 @@ pub fn compute_aggregated_block_hash(
   NimbleDigest::digest(hash_block_bytes).digest_with_bytes(hash_nonces_bytes)
 }
 
+pub fn retrieve_public_keys_from_config(
+  config: &[u8],
+) -> Result<HashSet<Vec<u8>>, VerificationError> {
+  let endorsers: EndorserHostnames = bincode::deserialize(config).map_err(|e| {
+    eprintln!("Failed to deserialize the view genesis block {:?}", e);
+    VerificationError::InvalidGenesisBlock
+  })?;
+  let mut pks = HashSet::new();
+  for (pk_bytes, _uri) in &endorsers {
+    let pk = PublicKey::from_bytes(pk_bytes).map_err(|_e| VerificationError::InvalidPublicKey)?;
+    pks.insert(pk.to_bytes());
+  }
+
+  Ok(pks)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Receipts {
   receipts: HashMap<ExtendedMetaBlock, Vec<IdSig>>,
@@ -308,6 +331,10 @@ impl Receipts {
       metablocks.insert(ex_meta_block.get_metablock().clone());
     }
     if metablocks.len() != 1 {
+      eprintln!("#metablocks: {}", metablocks.len());
+      for metablock in &metablocks {
+        eprintln!("metablock: {:?}", metablock);
+      }
       Err(VerificationError::InvalidViewChangeReceipt)
     } else {
       Ok(metablocks.iter().next().unwrap().clone())
@@ -448,9 +475,12 @@ impl Receipts {
         Some(n) => ex_meta_block.get_metablock().hash().digest_with_bytes(n),
         None => ex_meta_block.get_metablock().hash(),
       };
-      let message = ex_meta_block
-        .get_view()
-        .digest_with(&NimbleDigest::digest(handle_bytes).digest_with(&tail_hash));
+
+      let message = verifier_state.get_group_identity().digest_with(
+        &ex_meta_block
+          .get_view()
+          .digest_with(&NimbleDigest::digest(handle_bytes).digest_with(&tail_hash)),
+      );
 
       let mut num_receipts = 0;
       for id_sig in id_sigs {
@@ -472,78 +502,232 @@ impl Receipts {
     Err(VerificationError::InvalidReceipt)
   }
 
+  #[allow(clippy::too_many_arguments)]
   pub fn verify_view_change(
     &self,
-    verifier_state: &VerifierState,
-    block_bytes: &[u8],
-  ) -> Result<(NimbleDigest, HashSet<Vec<u8>>), VerificationError> {
-    // retrieve public keys of endorsers in the new configuration
-    let endorsers: EndorserHostnames = bincode::deserialize(block_bytes).map_err(|e| {
-      eprintln!("Failed to deserialize the view genesis block {:?}", e);
-      VerificationError::InvalidGenesisBlock
-    })?;
-    let mut new_pks = HashSet::new();
-    for (pk_bytes, _uri) in &endorsers {
-      let pk = PublicKey::from_bytes(pk_bytes).map_err(|_e| VerificationError::InvalidPublicKey)?;
-      new_pks.insert(pk.to_bytes());
+    old_config: &[u8],
+    new_config: &[u8],
+    own_pk: &PublicKey,
+    group_identity: &NimbleDigest,
+    old_metablock: &MetaBlock,
+    new_metablock: &MetaBlock,
+    ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
+    ledger_chunks: &Vec<LedgerChunk>,
+  ) -> Result<(), VerificationError> {
+    // check the conditions when this is the first view change
+    if old_metablock.get_height() == 0 {
+      if *old_metablock.get_prev() != NimbleDigest::default()
+        || *old_metablock.get_block_hash() != NimbleDigest::default()
+      {
+        eprintln!("metablock is malformed");
+        return Err(VerificationError::InvalidMetaBlock);
+      }
+
+      if !old_config.is_empty() {
+        eprintln!("config should be empty");
+        return Err(VerificationError::InvalidConfig);
+      }
+
+      if !ledger_tail_maps.is_empty() {
+        eprintln!("ledger tail maps should be empty");
+        return Err(VerificationError::InconsistentLedgerTailMaps);
+      }
     }
 
-    // retrieve public keys of endorsers in current view
-    let current_pks = verifier_state.get_current_pks();
-    assert!(current_pks.len() >= MIN_NUM_ENDORSERS || verifier_state.get_view_ledger_height() == 0);
+    // retrieve public keys of endorsers in the configuration
+    let new_pks = retrieve_public_keys_from_config(new_config)?;
+    let old_pks = if old_metablock.get_height() > 0 {
+      retrieve_public_keys_from_config(old_config)?
+    } else {
+      HashSet::new()
+    };
 
-    let mut num_receipts_for_current_pks = 0;
+    if new_pks.len() < MIN_NUM_ENDORSERS {
+      eprintln!("the number of endorser is less the required min number");
+      return Err(VerificationError::InsufficentEndorsers);
+    }
+
+    if !new_pks.contains(&own_pk.to_bytes()) {
+      eprintln!("own pk is missing in the config");
+      return Err(VerificationError::InvalidConfig);
+    }
+
+    // check the configs match with block hash
+    if NimbleDigest::digest(old_config) != *old_metablock.get_block_hash()
+      || NimbleDigest::digest(new_config) != *new_metablock.get_block_hash()
+    {
+      eprintln!("config doesn't match block hash");
+      return Err(VerificationError::InvalidBlockHash);
+    }
+
+    // check group identity
+    if old_metablock.get_height() == 0 && NimbleDigest::digest(new_config) != *group_identity {
+      eprintln!("group identity doesn't match with the config");
+      return Err(VerificationError::InvalidGroupIdentity);
+    }
+
+    // compute max cut
+    let max_cut = compute_max_cut(ledger_tail_maps);
+    let max_cut_hash = produce_hash_of_state(&max_cut);
+
+    // check ledger tail maps
+    for (hash, ledger_tail_map) in ledger_tail_maps {
+      if *hash != produce_hash_of_state(ledger_tail_map) {
+        eprintln!("ledger tail map doesn't match with the hash");
+        return Err(VerificationError::InvalidLedgerTailMap);
+      }
+    }
+    let res = compute_cut_diffs(ledger_tail_maps);
+    if res.is_err() {
+      eprintln!("ledger tail maps are inconsistent");
+      return Err(VerificationError::InconsistentLedgerTailMaps);
+    }
+    let mut ledger_entries: HashMap<(NimbleDigest, usize), MetaBlock> = HashMap::new();
+    for chunk in ledger_chunks {
+      let mut height = chunk.height;
+      if height.checked_add(chunk.block_hashes.len()).is_none() {
+        eprintln!("height overflow");
+        return Err(VerificationError::InvalidHeight);
+      }
+      let mut prev = chunk.hash;
+      for block_hash in &chunk.block_hashes {
+        height += 1;
+        let metablock = MetaBlock::new(&prev, block_hash, height);
+        prev = metablock.hash();
+        ledger_entries.insert((chunk.handle, height), metablock);
+      }
+    }
+    for ledger_tail_map in ledger_tail_maps.values() {
+      for (handle, metablock) in ledger_tail_map {
+        let res = ledger_entries.get(&(*handle, metablock.get_height()));
+        if let Some(metablock2) = res {
+          if metablock.hash() != metablock2.hash() {
+            eprintln!("metablock1={:?}", metablock);
+            eprintln!("metablock2={:?}", metablock2);
+            return Err(VerificationError::InconsistentLedgerTailMaps);
+          }
+        }
+      }
+    }
+
+    let mut num_receipts_for_old_pks = 0;
     let mut num_receipts_for_new_pks = 0;
-    let current_view = verifier_state.get_current_view();
-    let mut new_view = NimbleDigest::default();
+    let mut used_ledger_tail_maps = HashSet::<NimbleDigest>::new();
+
+    let new_metablock_hash = new_metablock.hash();
 
     for (ex_meta_block, id_sigs) in &self.receipts {
-      let metablock_hash = ex_meta_block.get_metablock().hash();
       // check the block hash matches with the block
-      if NimbleDigest::digest(block_bytes) != *ex_meta_block.get_metablock().get_block_hash() {
-        return Err(VerificationError::InvalidBlockHash);
+      if new_metablock_hash != ex_meta_block.get_metablock().hash() {
+        eprintln!("metablcok hash not match!");
+        return Err(VerificationError::InvalidMetaBlock);
       }
 
-      // check the previous hash matches current view
-      if *current_view != NimbleDigest::default()
-        && *current_view != *ex_meta_block.get_metablock().get_prev()
-      {
-        return Err(VerificationError::InvalidView);
-      }
-      let message = ex_meta_block.get_view().digest_with(&metablock_hash);
-
-      if new_view == NimbleDigest::default() {
-        new_view = metablock_hash;
-      } else if new_view != metablock_hash {
-        return Err(VerificationError::InvalidViewChangeReceipt);
-      }
+      let message =
+        group_identity.digest_with(&ex_meta_block.get_view().digest_with(&new_metablock_hash));
 
       for id_sig in id_sigs {
         let id = id_sig.get_id();
         id_sig
           .get_sig()
           .verify(id, &message.to_bytes())
-          .map_err(|_e| VerificationError::InvalidSignature)?;
+          .map_err(|_e| {
+            eprintln!("invalid signature");
+            VerificationError::InvalidSignature
+          })?;
+
         if new_pks.contains(&id.to_bytes()) {
+          if *ex_meta_block.get_view() != max_cut_hash {
+            eprintln!("the hashed state is invalid");
+            return Err(VerificationError::InvalidView);
+          }
           num_receipts_for_new_pks += 1;
         }
-        if current_pks.contains(&id.to_bytes()) {
-          num_receipts_for_current_pks += 1;
+
+        if old_pks.contains(&id.to_bytes()) {
+          if ledger_tail_maps.contains_key(ex_meta_block.get_view()) {
+            used_ledger_tail_maps.insert(*ex_meta_block.get_view());
+          } else {
+            eprintln!("ledger tail map is missing");
+            return Err(VerificationError::MissingLedgerTailMap);
+          }
+          num_receipts_for_old_pks += 1;
         }
       }
     }
 
-    if verifier_state.get_view_ledger_height() > 0
-      && num_receipts_for_current_pks < current_pks.len() / 2 + 1
-    {
+    if used_ledger_tail_maps.len() != ledger_tail_maps.len() {
+      eprintln!("redundant ledger tail maps");
+      return Err(VerificationError::RedundantLedgerTailMap);
+    }
+
+    if old_metablock.get_height() > 0 && num_receipts_for_old_pks < old_pks.len() / 2 + 1 {
+      eprintln!("insufficent receipts from old config");
       return Err(VerificationError::InsufficientReceipts);
     }
 
     if num_receipts_for_new_pks < new_pks.len() / 2 + 1 {
+      eprintln!("insufficent receipts from new config");
       return Err(VerificationError::InsufficientReceipts);
     }
 
-    Ok((new_view, new_pks))
+    Ok(())
+  }
+
+  pub fn verify_view_change_receipts(
+    &self,
+    verifier_state: &VerifierState,
+    config: &[u8],
+    attestations: Option<&[u8]>,
+  ) -> Result<(MetaBlock, HashSet<Vec<u8>>), VerificationError> {
+    if self.is_empty() {
+      return Err(VerificationError::InsufficientReceipts);
+    }
+
+    let config_hash = NimbleDigest::digest(config);
+
+    let pks = retrieve_public_keys_from_config(config)?;
+
+    for (ex_meta_block, id_sigs) in &self.receipts {
+      if config_hash != *ex_meta_block.get_metablock().get_block_hash() {
+        continue;
+      }
+
+      let message = verifier_state.get_group_identity().digest_with(
+        &ex_meta_block
+          .get_view()
+          .digest_with(&ex_meta_block.get_metablock().hash()),
+      );
+
+      let mut num_receipts = 0;
+      for id_sig in id_sigs {
+        let id = id_sig.get_id();
+
+        if !pks.contains(&id.to_bytes()) {
+          continue;
+        }
+
+        if id_sig.get_sig().verify(id, &message.to_bytes()).is_err() {
+          continue;
+        }
+
+        num_receipts += 1;
+      }
+
+      if num_receipts * 2 > pks.len() {
+        let is_verified = if let Some(attestation_reports) = attestations {
+          attestation_reports == "THIS IS A PLACE HOLDER FOR ATTESTATION".as_bytes().to_vec()
+        } else {
+          verifier_state.is_verified_view(&ex_meta_block.get_metablock().hash())
+        };
+
+        if is_verified {
+          return Ok((ex_meta_block.get_metablock().clone(), pks));
+        }
+      }
+    }
+
+    Err(VerificationError::InsufficientReceipts)
   }
 }
 
@@ -554,29 +738,23 @@ pub struct VerifierState {
   // In our context, we don't need views to be ordered, so we use a HashMap
   // However, we require that a new view is "authorized" by the latest view, so we keep track of the latest_view in a separate variable
   vk_map: HashMap<NimbleDigest, HashSet<Vec<u8>>>,
-  current_view: NimbleDigest,    // latest view
-  current_pks: HashSet<Vec<u8>>, // pk vec in the latest view
+  group_identity: NimbleDigest,
+  view_ledger_height: usize,
+  verified_views: HashSet<NimbleDigest>,
 }
 
 impl VerifierState {
   pub fn new() -> Self {
     VerifierState {
       vk_map: HashMap::new(),
-      current_view: NimbleDigest::default(),
-      current_pks: HashSet::new(),
+      group_identity: NimbleDigest::default(),
+      view_ledger_height: 0,
+      verified_views: HashSet::new(),
     }
   }
 
   pub fn get_view_ledger_height(&self) -> usize {
-    self.vk_map.len()
-  }
-
-  pub fn get_current_pks(&self) -> &HashSet<Vec<u8>> {
-    &self.current_pks
-  }
-
-  pub fn get_current_view(&self) -> &NimbleDigest {
-    &self.current_view
+    self.view_ledger_height
   }
 
   pub fn get_pks_for_view(
@@ -590,22 +768,38 @@ impl VerifierState {
     }
   }
 
+  pub fn get_group_identity(&self) -> &NimbleDigest {
+    &self.group_identity
+  }
+
+  pub fn set_group_identity(&mut self, id: NimbleDigest) {
+    self.group_identity = id;
+  }
+
+  pub fn is_verified_view(&self, view: &NimbleDigest) -> bool {
+    self.verified_views.contains(view)
+  }
+
   pub fn apply_view_change(
     &mut self,
-    block_bytes: &[u8],
+    config: &[u8],
     receipts_bytes: &[u8],
+    attestations: Option<&[u8]>,
   ) -> Result<(), VerificationError> {
     let receipts =
       Receipts::from_bytes(receipts_bytes).map_err(|_e| VerificationError::InvalidReceipt)?;
-    let res = receipts.verify_view_change(self, block_bytes);
+
+    let res = receipts.verify_view_change_receipts(self, config, attestations);
     match res {
-      Ok((new_view, new_pks)) => {
-        self.vk_map.insert(new_view, new_pks.clone());
-        self.current_pks = new_pks;
-        self.current_view = new_view;
+      Ok((meta_block, pks)) => {
+        self.verified_views.insert(*meta_block.get_prev());
+        self.vk_map.insert(meta_block.hash(), pks);
+        if self.view_ledger_height < meta_block.get_height() {
+          self.view_ledger_height = meta_block.get_height();
+        }
         Ok(())
       },
-      Err(error) => Err(error),
+      Err(e) => Err(e),
     }
   }
 
@@ -707,6 +901,49 @@ pub fn compute_max_cut(ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>) 
   }
 
   max_cut
+}
+
+pub fn compute_cut_diffs(
+  ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
+) -> Result<HashMap<NimbleDigest, (NimbleDigest, usize, usize)>, VerificationError> {
+  let mut cut_diffs: HashMap<NimbleDigest, (NimbleDigest, usize, usize)> = HashMap::new();
+  let mut entries: HashMap<(NimbleDigest, usize), NimbleDigest> = HashMap::new();
+
+  // Find the low/high heights of ledgers
+  for ledger_tail_map in ledger_tail_maps.values() {
+    for (handle, metablock) in ledger_tail_map.iter() {
+      let height = metablock.get_height();
+      let hash = metablock.hash();
+
+      if let std::collections::hash_map::Entry::Vacant(e) = entries.entry((*handle, height)) {
+        e.insert(hash);
+      } else if entries[&(*handle, height)] != hash {
+        return Err(VerificationError::InconsistentLedgerTailMaps);
+      }
+
+      if !cut_diffs.contains_key(handle) {
+        cut_diffs.insert(*handle, (hash, height, height));
+      } else if height < cut_diffs[handle].1 {
+        cut_diffs.get_mut(handle).unwrap().0 = hash;
+        cut_diffs.get_mut(handle).unwrap().1 = height;
+      } else if height > cut_diffs[handle].2 {
+        cut_diffs.get_mut(handle).unwrap().2 = height;
+      }
+    }
+  }
+
+  let mut ledgers_to_remove: HashSet<NimbleDigest> = HashSet::new();
+  for (handle, (_hash, low, high)) in &cut_diffs {
+    if low == high {
+      ledgers_to_remove.insert(*handle);
+    }
+  }
+
+  for handle in &ledgers_to_remove {
+    cut_diffs.remove(handle);
+  }
+
+  Ok(cut_diffs)
 }
 
 pub type EndorserHostnames = Vec<(Vec<u8>, String)>;

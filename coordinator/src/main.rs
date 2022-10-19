@@ -15,7 +15,8 @@ use clap::{App, Arg};
 use coordinator_proto::{
   call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
-  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+  ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
+  ReadViewTailResp,
 };
 
 use axum::{
@@ -162,6 +163,26 @@ impl Call for CoordinatorServiceState {
     let reply = ReadViewByIndexResp {
       block: ledger_entry.get_block().to_bytes(),
       receipts: ledger_entry.get_receipts().to_bytes(),
+    };
+
+    Ok(Response::new(reply))
+  }
+
+  async fn read_view_tail(
+    &self,
+    _request: Request<ReadViewTailReq>,
+  ) -> Result<Response<ReadViewTailResp>, Status> {
+    let res = self.state.read_view_tail().await;
+    if res.is_err() {
+      return Err(Status::aborted("Failed to read the view ledger tail"));
+    }
+
+    let (ledger_entry, height, attestation_reports) = res.unwrap();
+    let reply = ReadViewTailResp {
+      block: ledger_entry.get_block().to_bytes(),
+      receipts: ledger_entry.get_receipts().to_bytes(),
+      height: height as u64,
+      attestations: attestation_reports,
     };
 
     Ok(Response::new(reply))
@@ -454,11 +475,11 @@ mod tests {
   use crate::{
     coordinator_proto::{
       call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp,
+      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };
-  use ledger::{Block, CustomSerde, VerifierState};
+  use ledger::{Block, CustomSerde, NimbleDigest, VerifierState};
   use rand::Rng;
   use std::{
     collections::HashMap,
@@ -599,24 +620,21 @@ mod tests {
     // Initialization: Fetch view ledger to build VerifierState
     let mut vs = VerifierState::new();
 
-    let mut view_height: usize = 0;
-    loop {
-      let req = tonic::Request::new(ReadViewByIndexReq {
-        index: (view_height + 1) as u64,
-      });
+    let req = tonic::Request::new(ReadViewTailReq {});
+    let res = server.read_view_tail(req).await;
+    assert!(res.is_ok());
+    let ReadViewTailResp {
+      block,
+      receipts,
+      height: view_height,
+      attestations,
+    } = res.unwrap().into_inner();
 
-      let res = server.read_view_by_index(req).await;
-      if res.is_err() {
-        break;
-      }
+    assert!(view_height == 1);
+    vs.set_group_identity(NimbleDigest::digest(&block));
 
-      let ReadViewByIndexResp { block, receipts } = res.unwrap().into_inner();
-      let res = vs.apply_view_change(&block, &receipts);
-      println!("Applying ReadViewByIndexResp Response: {:?}", res);
-      assert!(res.is_ok());
-
-      view_height += 1;
-    }
+    let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
+    assert!(res.is_ok());
 
     // Step 0: Create some app data
     let block_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -757,15 +775,17 @@ mod tests {
     println!("new config with 2 endorsers: {:?}", res);
     assert!(res.is_ok());
 
-    view_height += 1;
-    let req = tonic::Request::new(ReadViewByIndexReq {
-      index: view_height as u64, // the first entry on the view ledger starts at 1
-    });
+    let req = tonic::Request::new(ReadViewTailReq {});
+    let res = server.read_view_tail(req).await;
+    assert!(res.is_ok());
+    let ReadViewTailResp {
+      block,
+      receipts,
+      height: _view_height,
+      attestations,
+    } = res.unwrap().into_inner();
 
-    let ReadViewByIndexResp { block, receipts } =
-      server.read_view_by_index(req).await.unwrap().into_inner();
-
-    let res = vs.apply_view_change(&block, &receipts);
+    let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
@@ -946,15 +966,17 @@ mod tests {
     println!("new config with 3 endorsers: {:?}", res);
     assert!(res.is_ok());
 
-    view_height += 1;
-    let req = tonic::Request::new(ReadViewByIndexReq {
-      index: view_height as u64, // the first entry on the view ledger starts at 1
-    });
+    let req = tonic::Request::new(ReadViewTailReq {});
+    let res = server.read_view_tail(req).await;
+    assert!(res.is_ok());
+    let ReadViewTailResp {
+      block,
+      receipts,
+      height: _view_height,
+      attestations,
+    } = res.unwrap().into_inner();
 
-    let ReadViewByIndexResp { block, receipts } =
-      server.read_view_by_index(req).await.unwrap().into_inner();
-
-    let res = vs.apply_view_change(&block, &receipts);
+    let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
     println!("Applying ReadViewByIndexResp Response: {:?}", res);
     assert!(res.is_ok());
 
@@ -1023,7 +1045,10 @@ mod tests {
           1usize,
         )
         .await;
-      println!("append_ledger with the first two endorser: {:?}", res);
+      println!(
+        "append_ledger new handle1 with the first two endorsers: {:?}",
+        res
+      );
       assert!(res.is_ok());
 
       let handle2_bytes = rand::thread_rng().gen::<[u8; 16]>();
@@ -1046,7 +1071,10 @@ mod tests {
           1usize,
         )
         .await;
-      println!("append_ledger with the first two endorser: {:?}", res);
+      println!(
+        "append_ledger new handle2 with the first two endorsers: {:?}",
+        res
+      );
       assert!(res.is_ok());
 
       // Launch three new endorsers
@@ -1075,7 +1103,7 @@ mod tests {
       let res = server
         .state
         .ledger_store
-        .append_view_ledger(&Block::new(&view_ledger_genesis_block), view_height + 1)
+        .append_view_ledger(&Block::new(&view_ledger_genesis_block), 4usize)
         .await;
       assert!(res.is_ok());
 
@@ -1091,15 +1119,17 @@ mod tests {
       let server2 = CoordinatorServiceState::new(coordinator2);
       println!("Started a new coordinator");
 
-      view_height += 1;
-      let req = tonic::Request::new(ReadViewByIndexReq {
-        index: view_height as u64, // the first entry on the view ledger starts at 1
-      });
+      let req = tonic::Request::new(ReadViewTailReq {});
+      let res = server2.read_view_tail(req).await;
+      assert!(res.is_ok());
+      let ReadViewTailResp {
+        block,
+        receipts,
+        height: _view_height,
+        attestations,
+      } = res.unwrap().into_inner();
 
-      let ReadViewByIndexResp { block, receipts } =
-        server2.read_view_by_index(req).await.unwrap().into_inner();
-
-      let res = vs.apply_view_change(&block, &receipts);
+      let res = vs.apply_view_change(&block, &receipts, Some(&attestations));
       println!("Applying ReadViewByIndexResp Response: {:?}", res);
       assert!(res.is_ok());
 
