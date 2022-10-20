@@ -1,4 +1,5 @@
 #include "endorser.h"
+#include <cassert>
 
 void calc_digest(unsigned char *m, unsigned long long len, digest_t *digest) {
   SHA256(m, len, digest->v);
