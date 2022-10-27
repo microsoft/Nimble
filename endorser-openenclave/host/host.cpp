@@ -19,21 +19,22 @@ using grpc::ServerBuilder;
 using endorser_proto::EndorserCall;
 using endorser_proto::GetPublicKeyReq;
 using endorser_proto::GetPublicKeyResp;
-using endorser_proto::InitializeStateReq;
-using endorser_proto::InitializeStateResp;
 using endorser_proto::NewLedgerReq;
 using endorser_proto::NewLedgerResp;
 using endorser_proto::ReadLatestReq;
 using endorser_proto::ReadLatestResp;
 using endorser_proto::AppendReq;
 using endorser_proto::AppendResp;
-using endorser_proto::AppendViewLedgerReq;
-using endorser_proto::AppendViewLedgerResp;
 using endorser_proto::LedgerTailMapEntry;
-using endorser_proto::ReadLatestStateReq;
-using endorser_proto::ReadLatestStateResp;
-using endorser_proto::UnlockReq;
-using endorser_proto::UnlockResp;
+using endorser_proto::EndorserMode;
+using endorser_proto::InitializeStateReq;
+using endorser_proto::InitializeStateResp;
+using endorser_proto::FinalizeStateReq;
+using endorser_proto::FinalizeStateResp;
+using endorser_proto::ReadStateReq;
+using endorser_proto::ReadStateResp;
+using endorser_proto::ActivateReq;
+using endorser_proto::ActivateResp;
 
 void print_hex(unsigned char* d, unsigned int len) {
   printf("0x");
@@ -45,7 +46,6 @@ void print_hex(unsigned char* d, unsigned int len) {
 }
 
 static mutex endorser_call_mutex;
-bool endorser_locked = false;
 
 oe_enclave_t *enclave = NULL;
 
@@ -80,12 +80,13 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     }
 
     Status InitializeState(ServerContext *context, const InitializeStateReq* request, InitializeStateResp* reply) override {
+        string id = request->group_identity();
         RepeatedPtrField<LedgerTailMapEntry> l_t_m = request->ledger_tail_map();
         string t = request->view_tail_metablock();
         string b_h = request->block_hash();
         unsigned long long h = request->expected_height();
 
-        if (t.size() != sizeof(metablock_t) || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
+        if (id.size() != HASH_VALUE_SIZE_IN_BYTES || t.size() != sizeof(metablock_t) || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
           return Status(StatusCode::INVALID_ARGUMENT, "invalid arguments in the request for InitializeState");
         }
 
@@ -107,6 +108,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(&state.view_tail_metablock, request->view_tail_metablock().c_str(), sizeof(metablock_t));
         memcpy(state.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         state.expected_height = h;
+        memcpy(state.group_identity.v, id.c_str(), HASH_VALUE_SIZE_IN_BYTES);
 
         endorser_status_code ret = endorser_status_code::OK;
         oe_result_t result;
@@ -135,7 +137,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
           return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
         }
-        bool ignore_lock = request->ignore_lock();
 
         endorser_status_code ret = endorser_status_code::OK;
         oe_result_t result;
@@ -146,10 +147,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         
         receipt_t receipt;
         endorser_call_mutex.lock();
-        if (endorser_locked && !ignore_lock) {
-          endorser_call_mutex.unlock();
-          return Status(StatusCode::CANCELLED, "endorser is locked");
-        }
         result = new_ledger(enclave, &ret, &handle, &block_hash, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
@@ -166,7 +163,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
         string h = request->handle();
         string n = request->nonce();
-        uint64_t expected_height = request->expected_height();
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
         }
@@ -183,19 +179,14 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         receipt_t receipt;
-        uint64_t current_height;
         endorser_call_mutex.lock();
-        result = read_latest(enclave, &ret, &handle, &nonce, expected_height, &current_height, &receipt);
+        result = read_latest(enclave, &ret, &handle, &nonce, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
-          if (ret == endorser_status_code::FAILED_PRECONDITION) {
-            return Status((StatusCode)ret, "Out of order", std::string((const char *)&current_height, sizeof(uint64_t)));
-          } else {
             return Status((StatusCode)ret, "enclave call to read_latest returned error");
-          }
         }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
@@ -206,7 +197,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         string h = request->handle();
         string b_h = request->block_hash();
         uint64_t expected_height = request->expected_height();
-        bool ignore_lock = request->ignore_lock();
 
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
@@ -226,10 +216,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         receipt_t receipt;
         uint64_t current_height;
         endorser_call_mutex.lock();
-        if (endorser_locked && !ignore_lock) {
-          endorser_call_mutex.unlock();
-          return Status(StatusCode::CANCELLED, "endorser is locked");
-        }
         result = append(enclave, &ret, &handle, &block_hash, expected_height, &current_height, &receipt);
         endorser_call_mutex.unlock();
         if (result != OE_OK) {
@@ -247,7 +233,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         return Status::OK;
     }
 
-    Status AppendViewLedger(ServerContext *context, const AppendViewLedgerReq* request, AppendViewLedgerResp* reply) override {
+    Status FinalizeState(ServerContext *context, const FinalizeStateReq* request, FinalizeStateResp* reply) override {
         string b_h = request->block_hash();
         uint64_t expected_height = request->expected_height();
 
@@ -265,59 +251,39 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         receipt_t receipt;
+        uint64_t ledger_tail_map_size;
+        ledger_tail_map_entry_t *ledger_tail_map = nullptr;
+
         endorser_call_mutex.lock();
-        result = append_view_ledger(enclave, &ret, &block_hash, expected_height, &receipt);
-        endorser_call_mutex.unlock();
+
+        result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
         if (result != OE_OK) {
+            endorser_call_mutex.unlock();
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
+            endorser_call_mutex.unlock();
+            return Status((StatusCode)ret, "enclave call to get ledger tail map size returned error");
+        }
+
+        if (ledger_tail_map_size > 0) {
+            ledger_tail_map = new ledger_tail_map_entry_t[ledger_tail_map_size];
+        }
+
+        result = finalize_state(enclave, &ret, &block_hash, expected_height, ledger_tail_map_size, ledger_tail_map, &receipt);
+
+        endorser_call_mutex.unlock();
+
+        if (result != OE_OK) {
+            delete[] ledger_tail_map;
+            return Status(StatusCode::INTERNAL, "enclave error");
+        }
+        if (ret != endorser_status_code::OK) {
+            delete[] ledger_tail_map;
             return Status((StatusCode)ret, "enclave call to append returned error");
         }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
-        return Status::OK;
-    }
-
-    Status ReadLatestState(ServerContext *context, const ReadLatestStateReq *request, ReadLatestStateResp *reply) override {
-        bool to_lock = request->to_lock();
-        endorser_status_code ret = endorser_status_code::OK;
-        oe_result_t result;
-        uint64_t ledger_tail_map_size;
-        ledger_tail_map_entry_t *ledger_tail_map = nullptr;
-        metablock_t view_tail_metablock;
-        Status status;
-
-        endorser_call_mutex.lock();
-
-        if (to_lock)
-          endorser_locked = true;
-
-        result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
-        if (result != OE_OK) {
-          status = Status(StatusCode::INTERNAL, "enclave error");
-          goto exit;
-        }
-        if (ret != endorser_status_code::OK) {
-          status = Status((StatusCode)ret, "enclave call to get ledger tail map size returned error");
-          goto exit;
-        }
-
-        if (ledger_tail_map_size > 0) {
-          ledger_tail_map = new ledger_tail_map_entry_t[ledger_tail_map_size];
-        }
-        result = read_latest_state(enclave, &ret, ledger_tail_map_size, ledger_tail_map, &view_tail_metablock);
-        if (result != OE_OK) {
-          status = Status(StatusCode::INTERNAL, "enclave error");
-          goto exit;
-        }
-        if (ret != endorser_status_code::OK) {
-          status = Status((StatusCode)ret, "enclave call to read latest state returned error");
-          goto exit;
-        }
-
-        reply->set_view_tail_metablock(reinterpret_cast<const char*>(&view_tail_metablock), sizeof(metablock_t));
-
         for (uint64_t index = 0; index < ledger_tail_map_size; index++) {
             ledger_tail_map_entry_t *input = &ledger_tail_map[index];
             auto entry = reply->add_ledger_tail_map();
@@ -325,17 +291,74 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             entry->set_metablock(reinterpret_cast<const char*>(&input->metablock), sizeof(metablock_t));
         }
 
-exit:
-        if (ledger_tail_map != nullptr)
-          delete[] ledger_tail_map;
-        endorser_call_mutex.unlock();
         return Status::OK;
     }
 
-    Status Unlock(ServerContext *context, const UnlockReq *request, UnlockResp *reply) {
+    Status ReadState(ServerContext *context, const ReadStateReq *request, ReadStateResp *reply) override {
+        endorser_status_code ret = endorser_status_code::OK;
+        oe_result_t result;
+        receipt_t receipt;
+        endorser_mode_t endorser_mode;
+        uint64_t ledger_tail_map_size;
+        ledger_tail_map_entry_t *ledger_tail_map = nullptr;
+
         endorser_call_mutex.lock();
-        endorser_locked = false;
+
+        result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
+        if (result != OE_OK) {
+            endorser_call_mutex.unlock();
+            return Status(StatusCode::INTERNAL, "enclave error");
+        }
+        if (ret != endorser_status_code::OK) {
+            endorser_call_mutex.unlock();
+            return Status((StatusCode)ret, "enclave call to get ledger tail map size returned error");
+        }
+
+        if (ledger_tail_map_size > 0) {
+            ledger_tail_map = new ledger_tail_map_entry_t[ledger_tail_map_size];
+        }
+
+        result = read_state(enclave, &ret, ledger_tail_map_size, ledger_tail_map, &endorser_mode, &receipt);
+
         endorser_call_mutex.unlock();
+
+        if (result != OE_OK) {
+            delete[] ledger_tail_map;
+            return Status(StatusCode::INTERNAL, "enclave error");
+        }
+        if (ret != endorser_status_code::OK) {
+            delete[] ledger_tail_map;
+            return Status((StatusCode)ret, "enclave call to read state returned error");
+        }
+
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
+        reply->set_mode((EndorserMode)endorser_mode);
+        for (uint64_t index = 0; index < ledger_tail_map_size; index++) {
+            ledger_tail_map_entry_t *input = &ledger_tail_map[index];
+            auto entry = reply->add_ledger_tail_map();
+            entry->set_handle(reinterpret_cast<const char*>(input->handle.v), HASH_VALUE_SIZE_IN_BYTES);
+            entry->set_metablock(reinterpret_cast<const char*>(&input->metablock), sizeof(metablock_t));
+        }
+
+        delete[] ledger_tail_map;
+        return Status::OK;
+    }
+
+    Status Activate(ServerContext *context, const ActivateReq *request, ActivateResp *reply) override {
+        endorser_status_code ret = endorser_status_code::OK;
+        oe_result_t result;
+
+        endorser_call_mutex.lock();
+        result = activate(enclave, &ret);
+        endorser_call_mutex.unlock();
+
+        if (result != OE_OK) {
+            return Status(StatusCode::INTERNAL, "enclave error");
+        }
+        if (ret != endorser_status_code::OK) {
+            return Status((StatusCode)ret, "enclave call to read state returned error");
+        }
+
         return Status::OK;
     }
 };

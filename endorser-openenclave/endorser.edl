@@ -8,12 +8,13 @@ enclave {
         public endorser_status_code setup([out] endorser_id_t* endorser_id);
         public endorser_status_code initialize_state([in] init_endorser_data_t* state, [out] receipt_t* receipt);
         public endorser_status_code new_ledger([in] handle_t* handle, [in] digest_t* block_hash, [out] receipt_t* receipt);
-        public endorser_status_code read_latest([in] handle_t* handle, [in] nonce_t* nonce, uint64_t expected_height, [out] uint64_t* current_height, [out] receipt_t* receipt);
+        public endorser_status_code read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] receipt_t* receipt);
         public endorser_status_code append([in] handle_t* handle, [in] digest_t* block_hash, uint64_t expected_height, [out] uint64_t* current_height, [out] receipt_t* receipt);
-        public endorser_status_code append_view_ledger([in] digest_t* block_hash, uint64_t expected_height, [out] receipt_t* receipt);
+        public endorser_status_code finalize_state([in] digest_t* block_hash, uint64_t expected_height, uint64_t ledger_tail_map_size, [out, count=ledger_tail_map_size] ledger_tail_map_entry_t* ledger_tail_map, [out] receipt_t* receipt);
         public endorser_status_code get_public_key([out] endorser_id_t* endorser_id);
         public endorser_status_code get_ledger_tail_map_size([out] uint64_t* ledger_tail_map_size);
-        public endorser_status_code read_latest_state(uint64_t ledger_tail_map_size, [out, count=ledger_tail_map_size] ledger_tail_map_entry_t *ledger_tail_map, [out] metablock_t* view_tail_metablock);
+        public endorser_status_code read_state(uint64_t ledger_tail_map_size, [out, count=ledger_tail_map_size] ledger_tail_map_entry_t* ledger_tail_map, [out] endorser_mode_t* endorser_mode, [out] receipt_t* receipt);
+        public endorser_status_code activate();
         public void terminate();
     };
     

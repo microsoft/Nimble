@@ -21,14 +21,9 @@ unsigned long long old_rsp;
 static digest_t zero_digest;
 static metablock_t view_ledger_tail_metablock;
 static digest_t view_ledger_tail_hash;
+static digest_t group_identity;
 
-typedef enum _state {
-  endorser_none = 0,
-  endorser_started = 1,
-  endorser_initialized = 2,
-} state_t;
-
-static state_t endorser_state = endorser_none;
+static endorser_mode_t endorser_mode = endorser_uninitialized;
 
 bool equal_32(const void *__s1, const void *__s2)
 {
@@ -138,7 +133,7 @@ endorser_status_code start_endorser(sgx_target_info_t *sgx_target_info, sgx_repo
   sgx_target_info_t target_info __attribute__ ((aligned (512))) = { 0 };
   unsigned char report_data[64] __attribute__ ((aligned (128))) = { 0 };
 
-  if (endorser_state != endorser_none)
+  if (endorser_mode != endorser_uninitialized)
     return UNAVAILABLE;
 
   _Static_assert(PRIVATE_KEY_SIZE_IN_BYTES % sizeof(unsigned long long) == 0);
@@ -168,7 +163,7 @@ endorser_status_code start_endorser(sgx_target_info_t *sgx_target_info, sgx_repo
   sgx_ereport(&target_info, report_data, &report);
   memcpy(sgx_report, &report, sizeof(sgx_report_t));
 
-  endorser_state = endorser_started;
+  endorser_mode = endorser_started;
 
   return OK;
 }
@@ -220,6 +215,7 @@ void calc_receipt(handle_t * handle, metablock_t *metablock, digest_t *hash, dig
   if (handle != NULL)
     digest_with_digest((digest_t*)handle, &digest);
   digest_with_digest(view, &digest);
+  digest_with_digest(&group_identity, &digest);
 
   // sign the message
   sign_digest(receipt->sig.v, digest.v);
@@ -236,7 +232,7 @@ endorser_status_code create_ledger(chain_t* outer_chain, append_ledger_data_t* l
   chain_t *chain;
   digest_t digest;
 
-  if (endorser_state != endorser_initialized)
+  if (endorser_mode != endorser_active)
     return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
@@ -260,7 +256,7 @@ endorser_status_code read_ledger(chain_t* outer_chain, read_ledger_data_t* read_
   chain_t local_chain;
   chain_t *chain;
 
-  if (endorser_state != endorser_initialized)
+  if (endorser_mode != endorser_active)
     return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
@@ -268,12 +264,6 @@ endorser_status_code read_ledger(chain_t* outer_chain, read_ledger_data_t* read_
     return INVALID_ARGUMENT;
 
   chain = &chains[local_chain.pos];
-
-  if (read_ledger_data->expected_height < chain->metablock.height)
-    return INVALID_ARGUMENT;
-
-  if (read_ledger_data->expected_height > chain->metablock.height)
-    return FAILED_PRECONDITION;
 
   calc_receipt(&chain->handle, &chain->metablock, &chain->hash, &view_ledger_tail_hash, &read_ledger_data->nonce, receipt);
   return OK;
@@ -284,7 +274,7 @@ endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* a
   chain_t *chain;
   digest_t digest;
 
-  if (endorser_state != endorser_initialized)
+  if (endorser_mode != endorser_active)
     return UNIMPLEMENTED;
 
   memcpy(&local_chain, outer_chain, sizeof(chain_t));
@@ -314,7 +304,7 @@ endorser_status_code append_ledger(chain_t* outer_chain, append_ledger_data_t* a
 }
 
 endorser_status_code get_pubkey(endorser_id_t* endorser_id) {
-  if (endorser_state == endorser_none)
+  if (endorser_mode == endorser_uninitialized)
     return UNIMPLEMENTED;
 
   memcpy(endorser_id->pk, public_key, PUBLIC_KEY_SIZE_IN_BYTES);
@@ -362,14 +352,14 @@ void hash_state(digest_t *state_hash) {
   return;
 }
 
-endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, receipt_t *receipt) {
+void sign_view_ledger(receipt_t *receipt) {
   digest_t state;
 
-  if (endorser_state != endorser_initialized)
-    return UNIMPLEMENTED;
-
   hash_state(&state);
+  calc_receipt(NULL, &view_ledger_tail_metablock, &view_ledger_tail_hash, &state, NULL, receipt);
+}
 
+endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, receipt_t *receipt) {
   // check for integer overflow of height
   if (view_ledger_tail_metablock.height == ULLONG_MAX)
     return OUT_OF_RANGE;
@@ -385,8 +375,8 @@ endorser_status_code append_view_ledger(append_ledger_data_t *ledger_data, recei
   memcpy(view_ledger_tail_metablock.block_hash.v, ledger_data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
   view_ledger_tail_metablock.height += 1;
   calc_digest((unsigned char *)&view_ledger_tail_metablock, sizeof(metablock_t), &view_ledger_tail_hash);
+  sign_view_ledger(receipt);
 
-  calc_receipt(NULL, &view_ledger_tail_metablock, &view_ledger_tail_hash, &state, NULL, receipt);
   return OK;
 }
 
@@ -395,7 +385,7 @@ endorser_status_code init_endorser(init_endorser_data_t *data, receipt_t *receip
   chain_t *chain;
   append_ledger_data_t ledger_data;
 
-  if (endorser_state != endorser_started)
+  if (endorser_mode != endorser_started)
     return UNIMPLEMENTED;
 
   if (!check_pointer(data->chains, sizeof(chain_t) * MAX_NUM_CHAINS))
@@ -424,16 +414,46 @@ endorser_status_code init_endorser(init_endorser_data_t *data, receipt_t *receip
   }
   num_chains = data->num_chains;
 
-  endorser_state = endorser_initialized;
-
+  endorser_mode = endorser_initialized;
+  memcpy(group_identity.v, data->group_identity.v, HASH_VALUE_SIZE_IN_BYTES);
   memcpy(ledger_data.block_hash.v, data->block_hash.v, HASH_VALUE_SIZE_IN_BYTES);
   ledger_data.expected_height = data->expected_height;
   return append_view_ledger(&ledger_data, receipt);
 }
 
-endorser_status_code read_view_tail(metablock_t *metablock) {
-  memcpy(metablock, &view_ledger_tail_metablock, sizeof(metablock_t));
+endorser_status_code read_endorser(receipt_t *receipt, endorser_mode_t *mode) {
+  *mode = endorser_mode;
+  sign_view_ledger(receipt);
   return OK;
+}
+
+endorser_status_code finalize_endorser(append_ledger_data_t *ledger_data, receipt_t *receipt) {
+  endorser_status_code ret;
+
+  if (endorser_mode == endorser_uninitialized || endorser_mode == endorser_initialized) {
+    return UNIMPLEMENTED;
+  }
+
+  if (endorser_mode == endorser_active) {
+    ret = append_view_ledger(ledger_data, receipt);
+    if (ret == OK) {
+      endorser_mode = endorser_finalized;
+    }
+    return ret;
+  } else {
+    sign_view_ledger(receipt);
+    return OK;
+  }
+}
+
+// TODO: implement the logic to verify view change
+endorser_status_code activate_endorser() {
+  if (endorser_mode != endorser_initialized) {
+    return UNIMPLEMENTED;
+  } else {
+    endorser_mode = endorser_active;
+    return OK;
+  }
 }
 
 endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1, void *param2, void *param3) {
@@ -464,13 +484,16 @@ endorser_status_code endorser_entry(endorser_call_t endorser_call, void *param1,
     if (check_pointer(param1, sizeof(chain_t)) && check_pointer(param2, sizeof(append_ledger_data_t)) && check_pointer(param3, sizeof(receipt_t)))
       ret = append_ledger((chain_t *)param1, (append_ledger_data_t *)param2, (receipt_t *)param3);
     break;
-  case append_view_ledger_call:
+  case finalize_endorser_call:
     if (check_pointer(param1, sizeof(append_ledger_data_t)) && check_pointer(param2, sizeof(receipt_t)))
-      ret = append_view_ledger((append_ledger_data_t *)param1, (receipt_t *)param2);
+      ret = finalize_endorser((append_ledger_data_t *)param1, (receipt_t *)param2);
     break;
-  case read_view_tail_call:
-    if (check_pointer(param1, sizeof(metablock_t)))
-      ret = read_view_tail((metablock_t *)param1);
+  case read_endorser_call:
+    if (check_pointer(param1, sizeof(receipt_t)) && check_pointer(param2, sizeof(endorser_mode_t)))
+      ret = read_endorser((receipt_t *)param1, (endorser_mode_t *)param2);
+    break;
+  case activate_endorser_call:
+    ret = activate_endorser();
     break;
   default:
     break;

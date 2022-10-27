@@ -6,12 +6,12 @@ service EndorserCall {
   // Protocol Endpoints
   rpc GetPublicKey(GetPublicKeyReq) returns (GetPublicKeyResp);
   rpc InitializeState(InitializeStateReq) returns (InitializeStateResp);
+  rpc FinalizeState(FinalizeStateReq) returns (FinalizeStateResp);
+  rpc ReadState(ReadStateReq) returns (ReadStateResp);
   rpc NewLedger(NewLedgerReq) returns (NewLedgerResp);
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
-  rpc AppendViewLedger(AppendViewLedgerReq) returns (AppendViewLedgerResp);
-  rpc ReadLatestState(ReadLatestStateReq) returns (ReadLatestStateResp);
-  rpc Unlock(UnlockReq) returns (UnlockResp);
+  rpc Activate(ActivateReq) returns (ActivateResp);
 }
 
 message GetPublicKeyReq {
@@ -24,7 +24,6 @@ message GetPublicKeyResp {
 message NewLedgerReq {
   bytes handle = 1;
   bytes block_hash = 2;
-  bool ignore_lock = 3;
 }
 
 message NewLedgerResp {
@@ -34,7 +33,6 @@ message NewLedgerResp {
 message ReadLatestReq {
   bytes handle = 1;
   bytes nonce = 2;
-  uint64 expected_height = 3;
 }
 
 message ReadLatestResp {
@@ -45,20 +43,10 @@ message AppendReq {
   bytes handle = 1;
   bytes block_hash = 2;
   uint64 expected_height = 3;
-  bool ignore_lock = 4;
 }
 
 message AppendResp {
   bytes receipt = 1;
-}
-
-message AppendViewLedgerReq {
-  bytes block_hash = 1;
-  uint64 expected_height = 2;
-}
-
-message AppendViewLedgerResp {
-  bytes receipt = 1; 
 }
 
 message LedgerTailMapEntry {
@@ -66,32 +54,69 @@ message LedgerTailMapEntry {
   bytes metablock = 2;
 }
 
+message LedgerTailMap {
+  repeated LedgerTailMapEntry entries = 1;
+}
+
 // protobuf supports maps (https://developers.google.com/protocol-buffers/docs/proto#maps), 
 // but it does not allow using bytes as keys in the map
 // gRPC messages are limited to 4 MB, which allows about 50+K entries. 
 // In the future, we can either increase the limit on gRPC messages or switch to gRPC streaming 
 message InitializeStateReq {
-  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
-  bytes view_tail_metablock = 2; // the view ledger tail's metablock
-  bytes block_hash = 3; // the block hash of the latest block on the view ledger
-  uint64 expected_height = 4; // the conditional updated height of the latest block on the view ledger
+  bytes group_identity = 1;
+  repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
+  bytes view_tail_metablock = 3; // the view ledger tail's metablock
+  bytes block_hash = 4; // the block hash of the latest block on the view ledger
+  uint64 expected_height = 5; // the conditional updated height of the latest block on the view ledger
 }
 
 message InitializeStateResp {
   bytes receipt = 1;
 }
 
-message ReadLatestStateReq {
-  bool to_lock = 1;
+message FinalizeStateReq {
+  bytes block_hash = 1;
+  uint64 expected_height = 2;
 }
 
-message ReadLatestStateResp {
-  repeated LedgerTailMapEntry ledger_tail_map = 1; // the list of ledger tails
-  bytes view_tail_metablock = 2; // the view ledger tail's metablock
+message FinalizeStateResp {
+  bytes receipt = 1;
+  repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
 }
 
-message UnlockReq {
+enum EndorserMode {
+  Uninitialized = 0;
+  Initialized = 1;
+  Active = 2;
+  Finalized = 3;
 }
 
-message UnlockResp {
+message ReadStateReq {
+
 }
+
+message ReadStateResp {
+  bytes receipt = 1;
+  EndorserMode mode = 2;
+  repeated LedgerTailMapEntry ledger_tail_map = 3; // the list of ledger tails
+}
+
+message LedgerChunkEntry {
+  bytes handle = 1;
+  bytes hash = 2;
+  uint64 height = 3;
+  repeated bytes block_hashes = 4;
+}
+
+message ActivateReq {
+  bytes old_config = 1;
+  bytes new_config = 2;
+  repeated LedgerTailMap ledger_tail_maps = 3;
+  repeated LedgerChunkEntry ledger_chunks = 4;
+  bytes receipts = 5;
+}
+
+message ActivateResp {
+
+}
+

@@ -28,15 +28,16 @@ using endorser_proto::ReadLatestReq;
 using endorser_proto::ReadLatestResp;
 using endorser_proto::AppendReq;
 using endorser_proto::AppendResp;
-using endorser_proto::AppendViewLedgerReq;
-using endorser_proto::AppendViewLedgerResp;
+using endorser_proto::LedgerTailMapEntry;
+using endorser_proto::EndorserMode;
 using endorser_proto::InitializeStateReq;
 using endorser_proto::InitializeStateResp;
-using endorser_proto::LedgerTailMapEntry;
-using endorser_proto::ReadLatestStateReq;
-using endorser_proto::ReadLatestStateResp;
-using endorser_proto::UnlockReq;
-using endorser_proto::UnlockResp;
+using endorser_proto::FinalizeStateReq;
+using endorser_proto::FinalizeStateResp;
+using endorser_proto::ReadStateReq;
+using endorser_proto::ReadStateResp;
+using endorser_proto::ActivateReq;
+using endorser_proto::ActivateResp;
 
 static map<handle_t, chain_t *> hash_chain_map;
 static chain_t chains[MAX_NUM_CHAINS];
@@ -107,8 +108,7 @@ static StatusCode call_endorser(
     handle_t *handle,
     receipt_t *receipt,
     read_ledger_data_t *read_ledger_data,
-    append_ledger_data_t *append_ledger_data,
-    bool ignore_lock
+    append_ledger_data_t *append_ledger_data
 ) {
     chain_t chain;
     StatusCode status;
@@ -122,9 +122,7 @@ static StatusCode call_endorser(
         status = enclu_call(get_pubkey_call, endorser_id, NULL, NULL);
         break;
     case create_ledger_call:
-        if (endorser_locked && !ignore_lock) {
-            status = StatusCode::CANCELLED;
-        } else if (init_chain(handle, NULL, &chain)) {
+        if (init_chain(handle, NULL, &chain)) {
             status = enclu_call(create_ledger_call, &chain, append_ledger_data, receipt);
             if (status == StatusCode::OK)
                 insert_chain(&chain);
@@ -142,18 +140,13 @@ static StatusCode call_endorser(
         }
         break;
     case append_ledger_call:
-        if (endorser_locked && !ignore_lock) {
-            status = StatusCode::CANCELLED;
-        } else if (find_chain(handle, &chain)) {
+        if (find_chain(handle, &chain)) {
             status = enclu_call(append_ledger_call, &chain, append_ledger_data, receipt);
             if (status == StatusCode::OK)
                 update_chain(&chain);
         } else {
             status = StatusCode::NOT_FOUND;
         }
-        break;
-    case append_view_ledger_call:
-        status = enclu_call(append_view_ledger_call, append_ledger_data, receipt, NULL);
         break;
     default:
         status = StatusCode::INVALID_ARGUMENT;
@@ -201,17 +194,21 @@ int start_endorser() {
     return 0;
 }
 
-StatusCode init_endorser(const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail_map,
-                  const char *view_tail_metablock,
-                  const char *block_hash,
-                  unsigned long long expected_height,
-                  receipt_t *receipt) {
+StatusCode init_endorser(
+    const char *group_identity,
+    const RepeatedPtrField<LedgerTailMapEntry> &ledger_tail_map,
+    const char *view_tail_metablock,
+    const char *block_hash,
+    unsigned long long expected_height,
+    receipt_t *receipt
+) {
     static bool initialized = false;
     StatusCode status;
     init_endorser_data_t init_endorser_data;
 
     memcpy((char *)&init_endorser_data.view_tail_metablock, view_tail_metablock, sizeof(metablock_t));
     memcpy(init_endorser_data.block_hash.v, block_hash, HASH_VALUE_SIZE_IN_BYTES);
+    memcpy(init_endorser_data.group_identity.v, group_identity, HASH_VALUE_SIZE_IN_BYTES);
     init_endorser_data.expected_height = expected_height;
 
     endorser_call_mutex.lock();
@@ -264,8 +261,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           NULL,
                                           NULL,
                                           NULL,
-                                          NULL,
-                                          true);
+                                          NULL);
         if (status != StatusCode::OK)
             return Status(status, "failed to get the endorser identity");
 
@@ -276,7 +272,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status NewLedger(ServerContext *context, const NewLedgerReq* request, NewLedgerResp* reply) override {
         string h = request->handle();
         string b_h = request->block_hash();
-        bool ignore_lock = request->ignore_lock();
 
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
@@ -290,7 +285,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         ledger_data.expected_height = 0;
-        ledger_data.ignore_lock = ignore_lock;
 
         receipt_t receipt;
         StatusCode status = call_endorser(create_ledger_call,
@@ -298,8 +292,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           &handle,
                                           &receipt,
                                           NULL,
-                                          &ledger_data,
-                                          ignore_lock);
+                                          &ledger_data);
         if (status != StatusCode::OK)
             return Status(status, "failed to create a ledger");
 
@@ -310,7 +303,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
     Status ReadLatest(ServerContext *context, const ReadLatestReq* request, ReadLatestResp* reply) override {
         string h = request->handle();
         string n = request->nonce();
-        uint64_t expected_height = request->expected_height();
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
         }
@@ -324,7 +316,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(read_ledger_data.block_hash.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(read_ledger_data.nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
-        read_ledger_data.expected_height = expected_height;
 
         // Response data
         receipt_t receipt;
@@ -333,8 +324,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           &handle,
                                           &receipt,
                                           &read_ledger_data,
-                                          NULL,
-                                          true);
+                                          NULL);
         if (status != StatusCode::OK) {
             if (status == StatusCode::FAILED_PRECONDITION) {
                 uint64_t height = get_height(&handle);
@@ -352,7 +342,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         string h = request->handle();
         string b_h = request->block_hash();
         uint64_t expected_height = request->expected_height();
-        bool ignore_lock = request->ignore_lock();
 
         if (h.size() != HASH_VALUE_SIZE_IN_BYTES) {
             return Status(StatusCode::INVALID_ARGUMENT, "handle size is invalid");
@@ -367,7 +356,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(append_ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         append_ledger_data.expected_height = expected_height;
-        append_ledger_data.ignore_lock = ignore_lock;
 
         // Response data
         receipt_t receipt;
@@ -376,8 +364,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
                                           &handle,
                                           &receipt,
                                           NULL,
-                                          &append_ledger_data,
-                                          ignore_lock);
+                                          &append_ledger_data);
         if (status != StatusCode::OK) {
             if (status == StatusCode::FAILED_PRECONDITION) {
                 uint64_t height = get_height(&handle);
@@ -391,7 +378,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         return Status::OK;
     }
 
-    Status AppendViewLedger(ServerContext *context, const AppendViewLedgerReq* request, AppendViewLedgerResp* reply) override {
+    Status FinalizeState(ServerContext *context, const FinalizeStateReq* request, FinalizeStateResp* reply) override {
         string b_h = request->block_hash();
         uint64_t expected_height = request->expected_height();
 
@@ -403,31 +390,40 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         append_ledger_data_t ledger_data;
         memcpy(ledger_data.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         ledger_data.expected_height = expected_height;
-        ledger_data.ignore_lock = true;
 
         // Response data
         receipt_t receipt;
-        StatusCode status = call_endorser(append_view_ledger_call,
-                                          NULL,
-                                          NULL,
-                                          &receipt,
-                                          NULL,
-                                          &ledger_data,
-                                          true);
-        if (status != StatusCode::OK)
-            return Status(status, "failed to append the view ledger");
 
+        endorser_call_mutex.lock();
+
+        StatusCode status = enclu_call(finalize_endorser_call, &ledger_data, &receipt, NULL);
+        if (status != StatusCode::OK) {
+            endorser_call_mutex.unlock();
+            return Status(status, "failed to finalize state");
+        }
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
+
+        for (unsigned long long pos = chains[0].next; pos != MAX_NUM_CHAINS-1; pos = chains[pos].next) {
+            chain_t *chain = &chains[pos];
+            auto entry = reply->add_ledger_tail_map();
+            entry->set_handle(reinterpret_cast<const char*>(chain->handle.v), HASH_VALUE_SIZE_IN_BYTES);
+            entry->set_metablock(reinterpret_cast<const char*>(&chain->metablock), sizeof(metablock_t));
+        }
+
+        endorser_call_mutex.unlock();
         return Status::OK;
     }
 
     Status InitializeState(ServerContext *context, const InitializeStateReq *request, InitializeStateResp* reply) override {
         receipt_t receipt;
-        StatusCode status = init_endorser(request->ledger_tail_map(),
-                                          request->view_tail_metablock().c_str(),
-                                          request->block_hash().c_str(),
-                                          request->expected_height(),
-                                          &receipt);
+        StatusCode status = init_endorser(
+            request->group_identity().c_str(),
+            request->ledger_tail_map(),
+            request->view_tail_metablock().c_str(),
+            request->block_hash().c_str(),
+            request->expected_height(),
+            &receipt
+        );
         if (status != StatusCode::OK)
             return Status(status, "failed to initialize the endorser state");
 
@@ -435,21 +431,19 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         return Status::OK;
     }
 
-    Status ReadLatestState(ServerContext *context, const ReadLatestStateReq *request, ReadLatestStateResp *reply) override {
-        bool to_lock = request->to_lock();
-        metablock_t metablock;
+    Status ReadState(ServerContext *context, const ReadStateReq *request, ReadStateResp *reply) override {
+        receipt_t receipt;
+        endorser_mode_t endorser_mode;
 
         endorser_call_mutex.lock();
 
-        if (to_lock)
-            endorser_locked = true;
-
-        StatusCode status = enclu_call(read_view_tail_call, &metablock, NULL, NULL);
+        StatusCode status = enclu_call(read_endorser_call, &receipt, &endorser_mode, NULL);
         if (status != StatusCode::OK) {
             endorser_call_mutex.unlock();
-            return Status(status, "failed to read view tail metablock");
+            return Status(status, "failed to read state");
         }
-        reply->set_view_tail_metablock(reinterpret_cast<const char*>(&metablock), sizeof(metablock_t));
+        reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
+        reply->set_mode((EndorserMode)endorser_mode);
 
         for (unsigned long long pos = chains[0].next; pos != MAX_NUM_CHAINS-1; pos = chains[pos].next) {
             chain_t *chain = &chains[pos];
@@ -462,10 +456,14 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         return Status::OK;
     }
 
-    Status Unlock(ServerContext *context, const UnlockReq *request, UnlockResp *reply) {
+    Status Activate(ServerContext *context, const ActivateReq *request, ActivateResp *reply) override {
         endorser_call_mutex.lock();
-        endorser_locked = false;
+        StatusCode status = enclu_call(activate_endorser_call, NULL, NULL, NULL);
         endorser_call_mutex.unlock();
+
+        if (status != StatusCode::OK)
+            return Status(status, "failed to activate the endorser");
+
         return Status::OK;
     }
 };

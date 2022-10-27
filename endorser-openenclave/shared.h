@@ -62,6 +62,7 @@ typedef struct _init_endorser_data {
   metablock_t view_tail_metablock;
   digest_t block_hash;
   unsigned long long expected_height;
+  digest_t group_identity;
 } init_endorser_data_t;
 
 typedef struct _ledger_tail_entry {
@@ -83,6 +84,14 @@ typedef enum _endorser_status_code {
   INTERNAL = 13,
   UNAVAILABLE = 14,
 } endorser_status_code;
+
+typedef enum _endorser_mode {
+  endorser_uninitialized = -1,
+  endorser_started = 0,
+  endorser_initialized = 1,
+  endorser_active = 2,
+  endorser_finalized = 3,
+} endorser_mode_t;
 
 #pragma pack(pop)
 
