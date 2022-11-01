@@ -1,6 +1,7 @@
 #include "../shared.h"
 #include <iostream>
 #include <memory>
+#include <thread>
 
 #include <openenclave/host.h>
 #include "endorser_u.h"
@@ -401,7 +402,8 @@ int main(int argc, const char *argv[]) {
       std::cout << "Attempting to run Endorser at Address " << server_address << std::endl;
       EndorserCallServiceImpl service;
       ResourceQuota resource_quota;
-      resource_quota.SetMaxThreads(16); // must match with the max number of TCS in endorser.conf.
+      const auto processor_count = std::thread::hardware_concurrency();
+      resource_quota.SetMaxThreads(processor_count > 0 ? processor_count : 16);
       ServerBuilder builder;
       builder.SetResourceQuota(resource_quota);
       builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());

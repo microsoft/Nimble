@@ -38,3 +38,18 @@ add_custom_target(
   simulate
   DEPENDS endorser_host sign testfile
   COMMAND endorser_host ${CMAKE_BINARY_DIR}/enclave/enclave.signed --simulate)
+
+# Sign enclave
+add_custom_command(
+  OUTPUT enclave/enclave-sgx2
+  DEPENDS enclave
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:enclave> $<TARGET_FILE:enclave>-sgx2
+)
+
+add_custom_command(
+  OUTPUT enclave/enclave-sgx2.signed
+  DEPENDS enclave enclave/endorser-sgx2.conf private.pem enclave/enclave-sgx2
+  COMMAND openenclave::oesign sign -e $<TARGET_FILE:enclave>-sgx2 -c
+          ${CMAKE_SOURCE_DIR}/enclave/endorser-sgx2.conf -k private.pem)
+
+add_custom_target(sign2 ALL DEPENDS enclave/enclave-sgx2.signed)
