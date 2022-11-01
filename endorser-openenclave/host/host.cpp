@@ -1,6 +1,6 @@
 #include "../shared.h"
 #include <iostream>
-#include <mutex>
+#include <memory>
 
 #include <openenclave/host.h>
 #include "endorser_u.h"
@@ -15,6 +15,7 @@ using grpc::ServerContext;
 using grpc::Status;
 using grpc::StatusCode;
 using grpc::ServerBuilder;
+using grpc::ResourceQuota;
 
 using endorser_proto::EndorserCall;
 using endorser_proto::GetPublicKeyReq;
@@ -45,8 +46,6 @@ void print_hex(unsigned char* d, unsigned int len) {
   cout << endl;
 }
 
-static mutex endorser_call_mutex;
-
 oe_enclave_t *enclave = NULL;
 
 bool check_simulate_opt(int *argc, const char *argv[]) {
@@ -66,9 +65,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         endorser_status_code ret = endorser_status_code::OK;
         oe_result_t result;
         endorser_id_t eid;
-        endorser_call_mutex.lock();
         result = get_public_key(enclave, &ret,  &eid);
-        endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -114,9 +111,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         oe_result_t result;
         
         receipt_t receipt;
-        endorser_call_mutex.lock();
         result = initialize_state(enclave, &ret, &state, &receipt);
-        endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -146,9 +141,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         
         receipt_t receipt;
-        endorser_call_mutex.lock();
         result = new_ledger(enclave, &ret, &handle, &block_hash, &receipt);
-        endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }
@@ -179,9 +172,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
 
         // Response data
         receipt_t receipt;
-        endorser_call_mutex.lock();
         result = read_latest(enclave, &ret, &handle, &nonce, &receipt);
-        endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -215,9 +206,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         // Response data
         receipt_t receipt;
         uint64_t current_height;
-        endorser_call_mutex.lock();
         result = append(enclave, &ret, &handle, &block_hash, expected_height, &current_height, &receipt);
-        endorser_call_mutex.unlock();
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -252,34 +241,26 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         // Response data
         receipt_t receipt;
         uint64_t ledger_tail_map_size;
-        ledger_tail_map_entry_t *ledger_tail_map = nullptr;
-
-        endorser_call_mutex.lock();
+        std::unique_ptr<ledger_tail_map_entry_t[]> ledger_tail_map = nullptr;
 
         result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
         if (result != OE_OK) {
-            endorser_call_mutex.unlock();
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
-            endorser_call_mutex.unlock();
             return Status((StatusCode)ret, "enclave call to get ledger tail map size returned error");
         }
 
         if (ledger_tail_map_size > 0) {
-            ledger_tail_map = new ledger_tail_map_entry_t[ledger_tail_map_size];
+            ledger_tail_map = std::unique_ptr<ledger_tail_map_entry_t[]>(new ledger_tail_map_entry_t[ledger_tail_map_size]);
         }
 
-        result = finalize_state(enclave, &ret, &block_hash, expected_height, ledger_tail_map_size, ledger_tail_map, &receipt);
-
-        endorser_call_mutex.unlock();
+        result = finalize_state(enclave, &ret, &block_hash, expected_height, ledger_tail_map_size, ledger_tail_map.get(), &receipt);
 
         if (result != OE_OK) {
-            delete[] ledger_tail_map;
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
-            delete[] ledger_tail_map;
             return Status((StatusCode)ret, "enclave call to append returned error");
         }
 
@@ -300,34 +281,26 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         receipt_t receipt;
         endorser_mode_t endorser_mode;
         uint64_t ledger_tail_map_size;
-        ledger_tail_map_entry_t *ledger_tail_map = nullptr;
-
-        endorser_call_mutex.lock();
+        std::unique_ptr<ledger_tail_map_entry_t[]> ledger_tail_map = nullptr;
 
         result = get_ledger_tail_map_size(enclave, &ret, &ledger_tail_map_size);
         if (result != OE_OK) {
-            endorser_call_mutex.unlock();
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
-            endorser_call_mutex.unlock();
             return Status((StatusCode)ret, "enclave call to get ledger tail map size returned error");
         }
 
         if (ledger_tail_map_size > 0) {
-            ledger_tail_map = new ledger_tail_map_entry_t[ledger_tail_map_size];
+            ledger_tail_map = std::unique_ptr<ledger_tail_map_entry_t[]>(new ledger_tail_map_entry_t[ledger_tail_map_size]);
         }
 
-        result = read_state(enclave, &ret, ledger_tail_map_size, ledger_tail_map, &endorser_mode, &receipt);
-
-        endorser_call_mutex.unlock();
+        result = read_state(enclave, &ret, ledger_tail_map_size, ledger_tail_map.get(), &endorser_mode, &receipt);
 
         if (result != OE_OK) {
-            delete[] ledger_tail_map;
             return Status(StatusCode::INTERNAL, "enclave error");
         }
         if (ret != endorser_status_code::OK) {
-            delete[] ledger_tail_map;
             return Status((StatusCode)ret, "enclave call to read state returned error");
         }
 
@@ -340,7 +313,6 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             entry->set_metablock(reinterpret_cast<const char*>(&input->metablock), sizeof(metablock_t));
         }
 
-        delete[] ledger_tail_map;
         return Status::OK;
     }
 
@@ -348,10 +320,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         endorser_status_code ret = endorser_status_code::OK;
         oe_result_t result;
 
-        endorser_call_mutex.lock();
         result = activate(enclave, &ret);
-        endorser_call_mutex.unlock();
-
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -392,10 +361,7 @@ int main(int argc, const char *argv[]) {
 
   // set the endorser 
   endorser_id_t endorser_id;
-  endorser_call_mutex.lock();
   result = setup(enclave, &ret, &endorser_id);
-  endorser_call_mutex.unlock();
- 
   if (result != OE_OK) {
     ret = endorser_status_code::INTERNAL;
     goto exit;
@@ -410,9 +376,7 @@ int main(int argc, const char *argv[]) {
 
   // Call get_public_key
   endorser_id_t get_id_info;
-  endorser_call_mutex.lock();
   result = get_public_key(enclave, &ret,  &get_id_info);
-  endorser_call_mutex.unlock();
   if (result != 0) {
       cerr << "Host: Failed to retrieve public key" << result << endl;
       goto exit;
@@ -436,7 +400,10 @@ int main(int argc, const char *argv[]) {
       }
       std::cout << "Attempting to run Endorser at Address " << server_address << std::endl;
       EndorserCallServiceImpl service;
+      ResourceQuota resource_quota;
+      resource_quota.SetMaxThreads(16); // must match with the max number of TCS in endorser.conf.
       ServerBuilder builder;
+      builder.SetResourceQuota(resource_quota);
       builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
       builder.RegisterService(&service);
       std::unique_ptr<Server> server(builder.BuildAndStart());

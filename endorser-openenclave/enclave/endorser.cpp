@@ -1,5 +1,4 @@
 #include "endorser.h"
-#include <cassert>
 
 void calc_digest(unsigned char *m, unsigned long long len, digest_t *digest) {
   SHA256(m, len, digest->v);
@@ -99,6 +98,18 @@ endorser_status_code ecall_dispatcher::setup(endorser_id_t* endorser_id) {
   this->endorser_mode = endorser_started;
   memset(this->group_identity.v, 0, HASH_VALUE_SIZE_IN_BYTES);
 
+  if (pthread_rwlock_init(&this->view_ledger_rwlock, nullptr) != 0) {
+    ret = endorser_status_code::INTERNAL;
+    TRACE_ENCLAVE("Error initializing rwlock");
+    goto exit;
+  }
+
+  if (pthread_rwlock_init(&this->ledger_map_rwlock, nullptr) != 0) {
+    ret = endorser_status_code::INTERNAL;
+    TRACE_ENCLAVE("Error initializing rwlock");
+    goto exit;
+  }
+
 exit:
   return ret;
 }
@@ -110,15 +121,17 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
   // check if the endorser is already initialized 
   // and return an error if the endorser is already initialized
   if (this->endorser_mode != endorser_started) {
-    ret = endorser_status_code::UNIMPLEMENTED;
-    goto exit;
+    return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (pthread_rwlock_wrlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
   }
 
   // copy each element from ledger_tail_map to this->ledger_tail_map
   for (i = 0; i < state->ledger_tail_map_size; i++) { 
     handle_t *handle = &state->ledger_tail_map[i].handle;
-    metablock_t *metablock = &state->ledger_tail_map[i].metablock;
-    digest_t metablock_hash;
+    protected_metablock_t* protected_metablock = new protected_metablock_t;
 
     // check if the handle already exists
     if (this->ledger_tail_map.find(*handle) != this->ledger_tail_map.end()) {
@@ -127,9 +140,14 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
       goto exit;
     }
  
-    // since the requested handle isn't already inserted, we insert it into state 
-    calc_digest((unsigned char*)metablock, sizeof(metablock_t), &metablock_hash);
-    this->ledger_tail_map.emplace(*handle, make_pair(*metablock, metablock_hash));
+    // since the requested handle isn't already inserted, we insert it into state
+    if (pthread_rwlock_init(&protected_metablock->rwlock, nullptr) != 0) {
+      ret = endorser_status_code::INTERNAL;
+      goto exit;
+    }
+    memcpy(&protected_metablock->metablock, &state->ledger_tail_map[i].metablock, sizeof(metablock_t));
+    calc_digest((unsigned char*)&protected_metablock->metablock, sizeof(metablock_t), &protected_metablock->hash);
+    this->ledger_tail_map.insert(make_pair(*handle, protected_metablock));
   }
 
   // copy the view ledger tail metablock
@@ -141,57 +159,87 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
 
   this->endorser_mode = endorser_initialized;
 
-  return append_view_ledger(&state->block_hash, state->expected_height, receipt);
+  ret = append_view_ledger(&state->block_hash, state->expected_height, receipt);
 
- exit:
+exit:
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
   return ret;
 }
 
 endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *block_hash, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
+  protected_metablock_t* protected_metablock = nullptr;
 
   // check if the state is initialized
   if (this->endorser_mode != endorser_active) {
-    ret = endorser_status_code::UNIMPLEMENTED;
-    goto exit;
+    return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
+  if (pthread_rwlock_wrlock(&this->ledger_map_rwlock) != 0) {
+    ret = endorser_status_code::INTERNAL;
+    goto exit_view_lock;
   }
 
   // check if the handle already exists
   if (this->ledger_tail_map.find(*handle) != this->ledger_tail_map.end()) {
     TRACE_ENCLAVE("[Enclave] New Ledger :: Handle already exists %d",(int) this->ledger_tail_map.count(*handle));
     ret = endorser_status_code::ALREADY_EXISTS;
-    goto exit;
+    goto exit_map_lock;
   }
 
-  metablock_t metablock;
-  digest_t metablock_hash;
-  memset(metablock.prev.v, 0, HASH_VALUE_SIZE_IN_BYTES);
-  memcpy(metablock.block_hash.v, block_hash->v, HASH_VALUE_SIZE_IN_BYTES);
-  metablock.height = 0;
-  calc_digest((unsigned char *)&metablock, sizeof(metablock_t), &metablock_hash);
+  protected_metablock = new protected_metablock_t;
 
-  // store handle under the same name in the map
-  this->ledger_tail_map.emplace(*handle, make_tuple(metablock, metablock_hash));
+  if (pthread_rwlock_init(&protected_metablock->rwlock, nullptr) != 0) {
+    ret = endorser_status_code::INTERNAL;
+    goto exit_map_lock;
+  }
 
-  res = calc_receipt(handle, &metablock, &metablock_hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
+  memset(protected_metablock->metablock.prev.v, 0, HASH_VALUE_SIZE_IN_BYTES);
+  memcpy(protected_metablock->metablock.block_hash.v, block_hash->v, HASH_VALUE_SIZE_IN_BYTES);
+  protected_metablock->metablock.height = 0;
+  calc_digest((unsigned char *)&protected_metablock->metablock, sizeof(metablock_t), &protected_metablock->hash);
+
+  res = calc_receipt(handle, &protected_metablock->metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
   if (res == 0) {
     ret = endorser_status_code::INTERNAL;
 	  TRACE_ENCLAVE("Error producing a signature");
-    goto exit;
+    goto exit_map_lock;
   }
 
-exit:
+  // store handle under the same name in the map
+  this->ledger_tail_map.insert(std::make_pair(*handle, protected_metablock));
+
+exit_map_lock:
+  pthread_rwlock_unlock(&this->ledger_map_rwlock);
+
+exit_view_lock:
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
   return ret;
 }
   
 endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
+  protected_metablock_t* protected_metablock = nullptr;
 
   // check if the state is initialized
   if (this->endorser_mode != endorser_active) {
-    ret = endorser_status_code::UNIMPLEMENTED;
+    return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
+  if (pthread_rwlock_rdlock(&this->ledger_map_rwlock) != 0) {
+    ret = endorser_status_code::INTERNAL;
   } else {
     // check if the handle exists, exit if there is no handle found to read
     auto it = this->ledger_tail_map.find(*handle);
@@ -199,16 +247,22 @@ endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* no
       ret = endorser_status_code::NOT_FOUND;
       TRACE_ENCLAVE("[Read Latest] Exited at the handle existence check. Requested Handle does not exist\n");
     } else {
-      metablock_t *metablock = &it->second.first;
-      digest_t *metablock_hash = &it->second.second;
-
-      res = calc_receipt(handle, metablock, metablock_hash, &this->group_identity, &this->view_ledger_tail_hash, nonce, this->eckey, this->public_key, receipt);
-      if (res == 0) {
+      protected_metablock = it->second;
+      if (pthread_rwlock_rdlock(&protected_metablock->rwlock) != 0) {
         ret = endorser_status_code::INTERNAL;
-        TRACE_ENCLAVE("Error producing a signature");
+      } else {
+        res = calc_receipt(handle, &protected_metablock->metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nonce, this->eckey, this->public_key, receipt);
+        pthread_rwlock_unlock(&protected_metablock->rwlock);
+        if (res == 0) {
+          ret = endorser_status_code::INTERNAL;
+          TRACE_ENCLAVE("Error producing a signature");
+        }
       }
     }
+    pthread_rwlock_unlock(&this->ledger_map_rwlock);
   }
+
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
 
   return ret;
 }
@@ -217,59 +271,66 @@ endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
-  digest_t prev;
+  metablock_t* metablock = nullptr;
   unsigned long long height;
  
   // check if the state is initialized
   if (this->endorser_mode != endorser_active) {
-    ret = endorser_status_code::UNIMPLEMENTED;
+    return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
+  if (pthread_rwlock_rdlock(&this->ledger_map_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
   } else {
     // check if the handle exists
     auto it = this->ledger_tail_map.find(*handle);
     if (it == this->ledger_tail_map.end()) {
       TRACE_ENCLAVE("[Append] Exited at the handle existence check. Requested handle does not exist\n");
       ret = endorser_status_code::NOT_FOUND;
-      goto exit;
+    } else {
+      // obtain the current value of the current tail and height
+      protected_metablock_t* protected_metablock = it->second;
+
+      if (pthread_rwlock_wrlock(&protected_metablock->rwlock) != 0) {
+        ret = endorser_status_code::INTERNAL;
+      } else {
+        metablock = &protected_metablock->metablock;
+        height = metablock->height;
+        *current_height = height;
+
+        // check for integer overflow of height
+        if (height == ULLONG_MAX) {
+          TRACE_ENCLAVE("The number of blocks has reached ULLONG_MAX");
+          ret = endorser_status_code::OUT_OF_RANGE;
+        } else if (expected_height <= height) {
+          TRACE_ENCLAVE("The new tail height is too small");
+          ret = endorser_status_code::ALREADY_EXISTS;
+        } else if (expected_height > height + 1) {
+          TRACE_ENCLAVE("The new append entry is out of order");
+          ret = endorser_status_code::FAILED_PRECONDITION;
+        } else {
+          memcpy(metablock->prev.v, protected_metablock->hash.v, HASH_VALUE_SIZE_IN_BYTES);
+          memcpy(metablock->block_hash.v, block_hash->v, HASH_VALUE_SIZE_IN_BYTES);
+          metablock->height += 1;
+          calc_digest((unsigned char *)metablock, sizeof(metablock_t), &protected_metablock->hash);
+
+          res = calc_receipt(handle, metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
+          if (res == 0) {
+            ret = endorser_status_code::INTERNAL;
+            TRACE_ENCLAVE("Error producing a signature");
+          }
+        }
+        pthread_rwlock_unlock(&protected_metablock->rwlock);
+      }
     }
-
-    // obtain the current value of the current tail and height
-    metablock_t *metablock = &it->second.first;
-    digest_t *metablock_hash = &it->second.second;
-    *current_height = metablock->height;
-
-    // check for integer overflow of height
-    if (metablock->height == ULLONG_MAX) {
-      TRACE_ENCLAVE("The number of blocks has reached ULLONG_MAX");
-      ret = endorser_status_code::OUT_OF_RANGE;
-      goto exit;
-    }
-
-    if (expected_height <= metablock->height) {
-      TRACE_ENCLAVE("The new tail height is too small");
-      ret = endorser_status_code::ALREADY_EXISTS;
-      goto exit;
-    }
-
-    if (expected_height > metablock->height + 1) {
-      TRACE_ENCLAVE("The new append entry is out of order");
-      ret = endorser_status_code::FAILED_PRECONDITION;
-      goto exit;
-    }
-
-    memcpy(metablock->prev.v, metablock_hash->v, HASH_VALUE_SIZE_IN_BYTES);
-    memcpy(metablock->block_hash.v, block_hash->v, HASH_VALUE_SIZE_IN_BYTES);
-    metablock->height += 1;
-    calc_digest((unsigned char *)metablock, sizeof(metablock_t), metablock_hash);
-
-    res = calc_receipt(handle, metablock, metablock_hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
-    if (res == 0) {
-      ret = endorser_status_code::INTERNAL;
-      TRACE_ENCLAVE("Error producing a signature");
-      goto exit;
-    }
+    pthread_rwlock_unlock(&this->ledger_map_rwlock);
   }
 
-exit:
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
   return ret;
 }
   
@@ -278,7 +339,7 @@ endorser_status_code ecall_dispatcher::get_public_key(endorser_id_t* endorser_id
   return endorser_status_code::OK;
 }
 
-void calc_hash_of_state(map<handle_t, pair<metablock_t, digest_t>, comparator> *ledger_tail_map, digest_t *hash_of_state) {
+void calc_hash_of_state(map<handle_t, protected_metablock_t*, comparator> *ledger_tail_map, digest_t *hash_of_state) {
   int num_entries = ledger_tail_map->size();
   ledger_tail_entry_t entries[num_entries];
   int i = 0;
@@ -289,8 +350,8 @@ void calc_hash_of_state(map<handle_t, pair<metablock_t, digest_t>, comparator> *
   } else {
     for (auto it = ledger_tail_map->begin(); it != ledger_tail_map->end(); it++) {
       memcpy(entries[i].handle.v, it->first.v, HASH_VALUE_SIZE_IN_BYTES);
-      memcpy(entries[i].tail.v, it->second.second.v, HASH_VALUE_SIZE_IN_BYTES);
-      entries[i].height = it->second.first.height;
+      memcpy(entries[i].tail.v, it->second->hash.v, HASH_VALUE_SIZE_IN_BYTES);
+      entries[i].height = it->second->metablock.height;
       i++;
     }
     calc_digest((unsigned char *) entries, num_entries * sizeof(ledger_tail_entry_t), hash_of_state);
@@ -346,7 +407,7 @@ endorser_status_code ecall_dispatcher::fill_ledger_tail_map(uint64_t ledger_tail
   uint64_t index = 0;
   for (auto it = this->ledger_tail_map.begin(); it != this->ledger_tail_map.end(); it++) {
     memcpy(&ledger_tail_map[index].handle, &it->first, sizeof(handle_t));
-    memcpy(&ledger_tail_map[index].metablock, &it->second.first, sizeof(metablock_t));
+    memcpy(&ledger_tail_map[index].metablock, &it->second->metablock, sizeof(metablock_t));
     index++;
   }
 
@@ -360,48 +421,90 @@ endorser_status_code ecall_dispatcher::finalize_state(digest_t* block_hash, uint
     return endorser_status_code::UNIMPLEMENTED;
   }
 
+  if (pthread_rwlock_wrlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
   if (endorser_mode == endorser_active) {
     ret = this->append_view_ledger(block_hash, expected_height, receipt);
     if (ret == endorser_status_code::OK) {
       endorser_mode = endorser_finalized;
-    } else {
-      return ret;
     }
   } else {
     ret = sign_view_ledger(receipt);
-    if (ret != endorser_status_code::OK) {
-      return ret;
-    }
   }
 
-  return this->fill_ledger_tail_map(ledger_tail_map_size, ledger_tail_map);
+  if (ret == endorser_status_code::OK) {
+    ret = this->fill_ledger_tail_map(ledger_tail_map_size, ledger_tail_map);
+  }
+
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
+  return ret;
 }
 
 endorser_status_code ecall_dispatcher::get_ledger_tail_map_size(uint64_t* ledger_tail_map_size) {
-  *ledger_tail_map_size = this->ledger_tail_map.size();
-  return endorser_status_code::OK;
+  endorser_status_code ret = endorser_status_code::OK;
+
+  if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
+  if (pthread_rwlock_rdlock(&this->ledger_map_rwlock) != 0) {
+    ret = endorser_status_code::INTERNAL;
+  } else {
+    *ledger_tail_map_size = this->ledger_tail_map.size();
+    pthread_rwlock_unlock(&this->ledger_map_rwlock);
+  }
+
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
+  return ret;
 }
 
 endorser_status_code ecall_dispatcher::read_state(uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, endorser_mode_t* endorser_mode, receipt_t* receipt) {
   endorser_status_code ret;
 
-  *endorser_mode = this->endorser_mode;
+  if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
 
-  ret = this->fill_ledger_tail_map(ledger_tail_map_size, ledger_tail_map);
-  if (ret != endorser_status_code::OK)
-    return ret;
+  if (pthread_rwlock_rdlock(&this->ledger_map_rwlock) != 0) {
+    ret = endorser_status_code::INTERNAL;
+  } else {
+    *endorser_mode = this->endorser_mode;
 
-  return this->sign_view_ledger(receipt);
+    ret = this->fill_ledger_tail_map(ledger_tail_map_size, ledger_tail_map);
+    if (ret == endorser_status_code::OK) {
+      ret = this->sign_view_ledger(receipt);
+    }
+
+    pthread_rwlock_unlock(&this->ledger_map_rwlock);
+  }
+
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
+  return ret;
 }
 
 // TODO: implement the logic to verify view change
 endorser_status_code ecall_dispatcher::activate() {
+  endorser_status_code ret;
+
+  if (pthread_rwlock_wrlock(&this->view_ledger_rwlock) != 0) {
+    return endorser_status_code::INTERNAL;
+  }
+
   if (this->endorser_mode != endorser_initialized) {
-    return endorser_status_code::UNIMPLEMENTED;
+    ret = endorser_status_code::UNIMPLEMENTED;
   } else {
     this->endorser_mode = endorser_active;
-    return endorser_status_code::OK;
+    ret = endorser_status_code::OK;
   }
+
+  pthread_rwlock_unlock(&this->view_ledger_rwlock);
+
+  return ret;
 }
 
 void ecall_dispatcher::terminate() {
