@@ -45,9 +45,217 @@ const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to end
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
+async fn get_public_key_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::GetPublicKeyReq,
+) -> Result<tonic::Response<endorser_proto::GetPublicKeyResp>, Status> {
+  loop {
+    let res = endorser_client
+      .get_public_key(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn new_ledger_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::NewLedgerReq,
+) -> Result<tonic::Response<endorser_proto::NewLedgerResp>, Status> {
+  loop {
+    let res = endorser_client
+      .new_ledger(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn append_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::AppendReq,
+) -> Result<tonic::Response<endorser_proto::AppendResp>, Status> {
+  loop {
+    let res = endorser_client
+      .append(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn read_latest_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::ReadLatestReq,
+) -> Result<tonic::Response<endorser_proto::ReadLatestResp>, Status> {
+  loop {
+    let res = endorser_client
+      .read_latest(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn initialize_state_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::InitializeStateReq,
+) -> Result<tonic::Response<endorser_proto::InitializeStateResp>, Status> {
+  loop {
+    let res = endorser_client
+      .initialize_state(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn finalize_state_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::FinalizeStateReq,
+) -> Result<tonic::Response<endorser_proto::FinalizeStateResp>, Status> {
+  loop {
+    let res = endorser_client
+      .finalize_state(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn read_state_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::ReadStateReq,
+) -> Result<tonic::Response<endorser_proto::ReadStateResp>, Status> {
+  loop {
+    let res = endorser_client
+      .read_state(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn activate_with_retry(
+  endorser_client: &mut EndorserCallClient<Channel>,
+  request: endorser_proto::ActivateReq,
+) -> Result<tonic::Response<endorser_proto::ActivateResp>, Status> {
+  loop {
+    let res = endorser_client
+      .activate(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
 async fn update_endorser(
   ledger_store: LedgerStoreRef,
-  mut endorser_client: EndorserCallClient<Channel>,
+  endorser_client: &mut EndorserCallClient<Channel>,
   handle: NimbleDigest,
   start: usize,
   end: usize,
@@ -63,22 +271,24 @@ async fn update_endorser(
     };
 
     let receipt = if idx == 0 {
-      let endorser_proto::NewLedgerResp { receipt } = endorser_client
-        .new_ledger(tonic::Request::new(endorser_proto::NewLedgerReq {
+      let endorser_proto::NewLedgerResp { receipt } = new_ledger_with_retry(
+        endorser_client,
+        endorser_proto::NewLedgerReq {
           handle: handle.to_bytes(),
           block_hash: compute_aggregated_block_hash(
             &ledger_entry.get_block().hash().to_bytes(),
             &ledger_entry.get_nonces().hash().to_bytes(),
           )
           .to_bytes(),
-        }))
-        .await?
-        .into_inner();
-
+        },
+      )
+      .await?
+      .into_inner();
       receipt
     } else {
-      let endorser_proto::AppendResp { receipt } = endorser_client
-        .append(tonic::Request::new(endorser_proto::AppendReq {
+      let endorser_proto::AppendResp { receipt } = append_with_retry(
+        endorser_client,
+        endorser_proto::AppendReq {
           handle: handle.to_bytes(),
           block_hash: compute_aggregated_block_hash(
             &ledger_entry.get_block().hash().to_bytes(),
@@ -86,9 +296,10 @@ async fn update_endorser(
           )
           .to_bytes(),
           expected_height: idx as u64,
-        }))
-        .await?
-        .into_inner();
+        },
+      )
+      .await?
+      .into_inner();
 
       receipt
     };
@@ -121,6 +332,7 @@ enum CoordinatorAction {
   IncrementReceipt,
   UpdateEndorser,
   RemoveEndorser,
+  Retry,
 }
 
 fn process_error(
@@ -193,7 +405,8 @@ fn process_error(
       eprintln!("the endorser is not initialized");
       CoordinatorAction::DoNothing
     },
-    Code::Internal | Code::Unknown | Code::ResourceExhausted => CoordinatorAction::RemoveEndorser,
+    Code::ResourceExhausted => CoordinatorAction::Retry,
+    Code::Internal | Code::Unknown => CoordinatorAction::RemoveEndorser,
     _ => {
       eprintln!("Unhandled status={:?}", status);
       CoordinatorAction::DoNothing
@@ -467,8 +680,8 @@ impl CoordinatorState {
           if let Ok(channel) = res {
             let mut client = EndorserCallClient::new(channel);
 
-            let req = tonic::Request::new(endorser_proto::GetPublicKeyReq {});
-            let res = client.get_public_key(req).await;
+            let res =
+              get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
             if let Ok(resp) = res {
               let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
               let _ = tx.send((endorser, Ok((client, pk)))).await;
@@ -547,9 +760,8 @@ impl CoordinatorState {
       let tx = mpsc_tx.clone();
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .read_state(tonic::Request::new(endorser_proto::ReadStateReq {}))
-          .await;
+        let res =
+          read_state_with_retry(&mut endorser_client, endorser_proto::ReadStateReq {}).await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
       });
     }
@@ -625,15 +837,17 @@ impl CoordinatorState {
       let pk_bytes = pk.clone();
       let group_identity_copy = (*group_identity).to_bytes();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .initialize_state(tonic::Request::new(endorser_proto::InitializeStateReq {
+        let res = initialize_state_with_retry(
+          &mut endorser_client,
+          endorser_proto::InitializeStateReq {
             group_identity: group_identity_copy,
             ledger_tail_map: ledger_tail_map_copy,
             view_tail_metablock: view_tail_metablock_bytes,
             block_hash: block_hash_copy,
             expected_height: expected_height as u64,
-          }))
-          .await;
+          },
+        )
+        .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
       });
     }
@@ -688,12 +902,14 @@ impl CoordinatorState {
       let block_hash = *ledger_block_hash;
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .new_ledger(tonic::Request::new(endorser_proto::NewLedgerReq {
+        let res = new_ledger_with_retry(
+          &mut endorser_client,
+          endorser_proto::NewLedgerReq {
             handle: handle.to_bytes(),
             block_hash: block_hash.to_bytes(),
-          }))
-          .await;
+          },
+        )
+        .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
       });
     }
@@ -761,13 +977,15 @@ impl CoordinatorState {
       let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
         loop {
-          let res = endorser_client
-            .append(tonic::Request::new(endorser_proto::AppendReq {
+          let res = append_with_retry(
+            &mut endorser_client,
+            endorser_proto::AppendReq {
               handle: handle.to_bytes(),
               block_hash: block.to_bytes(),
               expected_height: expected_height as u64,
-            }))
-            .await;
+            },
+          )
+          .await;
           match res {
             Ok(resp) => {
               let endorser_proto::AppendResp { receipt } = resp.into_inner();
@@ -788,7 +1006,7 @@ impl CoordinatorState {
                 let height_to_end = expected_height - 1;
                 let res = update_endorser(
                   ledger_store.clone(),
-                  endorser_client.clone(),
+                  &mut endorser_client,
                   handle,
                   height_to_start,
                   height_to_end,
@@ -896,7 +1114,7 @@ impl CoordinatorState {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
-      let (endorser_client, endorser) = match self.get_endorser_client(pk) {
+      let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
         Some((client, endorser)) => (client, endorser),
         None => continue,
       };
@@ -920,7 +1138,7 @@ impl CoordinatorState {
       let _job = tokio::spawn(async move {
         let res = update_endorser(
           ledger_store,
-          endorser_client,
+          &mut endorser_client,
           handle,
           height_to_start,
           max_height,
@@ -969,12 +1187,14 @@ impl CoordinatorState {
       let nonce = *client_nonce;
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .read_latest(tonic::Request::new(endorser_proto::ReadLatestReq {
+        let res = read_latest_with_retry(
+          &mut endorser_client,
+          endorser_proto::ReadLatestReq {
             handle: handle.to_bytes(),
             nonce: nonce.to_bytes(),
-          }))
-          .await;
+          },
+        )
+        .await;
         match res {
           Ok(resp) => {
             let endorser_proto::ReadLatestResp { receipt } = resp.into_inner();
@@ -1063,12 +1283,14 @@ impl CoordinatorState {
       let block = *block_hash;
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .finalize_state(tonic::Request::new(endorser_proto::FinalizeStateReq {
+        let res = finalize_state_with_retry(
+          &mut endorser_client,
+          endorser_proto::FinalizeStateReq {
             block_hash: block.to_bytes(),
             expected_height: expected_height as u64,
-          }))
-          .await;
+          },
+        )
+        .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
       });
     }
@@ -1172,15 +1394,17 @@ impl CoordinatorState {
       let ledger_chunks_copy = ledger_chunks_proto.clone();
       let receipts_copy = receipts.to_bytes();
       let _job = tokio::spawn(async move {
-        let res = endorser_client
-          .activate(tonic::Request::new(endorser_proto::ActivateReq {
+        let res = activate_with_retry(
+          &mut endorser_client,
+          endorser_proto::ActivateReq {
             old_config: old_config_copy.to_bytes(),
             new_config: new_config_copy.to_bytes(),
             ledger_tail_maps: ledger_tail_maps_copy,
             ledger_chunks: ledger_chunks_copy,
             receipts: receipts_copy.to_vec(),
-          }))
-          .await;
+          },
+        )
+        .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
       });
     }
