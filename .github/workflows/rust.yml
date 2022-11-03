@@ -12,6 +12,8 @@ jobs:
       RUST_VERSION: 1.63.0
     runs-on: ubuntu-latest
     steps:
+    - name: Install protoc
+      run: sudo apt install -y protobuf-compiler
     - uses: actions/checkout@v2
     - name: Install
       run: rustup install ${{ env.RUST_VERSION }} && rustup default ${{ env.RUST_VERSION }}
