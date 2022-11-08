@@ -207,27 +207,43 @@ impl ExtendedMetaBlock {
   }
 }
 
+// We store id and sig in raw form and convert them to
+// appropriate types only when verifying signatures.
+// This reduces the CPU work on the coordinator since
+// the coordinator only needs to perform a simple quorum check
+// and does not have to incur CPU cycles to convert compressed
+// elliptic curve points into uncompressed form
 #[derive(Debug, Clone)]
 pub struct IdSig {
-  id: PublicKey,
-  sig: Signature,
+  id: Vec<u8>,
+  sig: Vec<u8>,
 }
 
 impl IdSig {
   pub fn new(id: PublicKey, sig: Signature) -> Self {
-    Self { id, sig }
+    Self {
+      id: id.to_bytes(),
+      sig: sig.to_bytes(),
+    }
   }
 
-  pub fn get(&self) -> (&PublicKey, &Signature) {
-    (&self.id, &self.sig)
-  }
-
-  pub fn get_id(&self) -> &PublicKey {
+  pub fn get_id(&self) -> &Vec<u8> {
     &self.id
   }
 
-  pub fn get_sig(&self) -> &Signature {
-    &self.sig
+  pub fn verify(&self, message: &[u8]) -> Result<(), VerificationError> {
+    let id = PublicKey::from_bytes(&self.id).map_err(|_| VerificationError::InvalidPublicKey)?;
+    let sig = Signature::from_bytes(&self.sig).map_err(|_| VerificationError::InvalidSignature)?;
+    sig
+      .verify(&id, message)
+      .map_err(|_| VerificationError::InvalidSignature)
+  }
+
+  pub fn verify_with_id(&self, id: &PublicKey, message: &[u8]) -> Result<(), VerificationError> {
+    let sig = Signature::from_bytes(&self.sig).map_err(|_| VerificationError::InvalidSignature)?;
+    sig
+      .verify(id, message)
+      .map_err(|_| VerificationError::InvalidSignature)
   }
 
   pub fn num_bytes() -> usize {
@@ -349,9 +365,10 @@ impl Receipts {
     let ex_meta_block = ExtendedMetaBlock::new(receipt.get_view(), receipt.get_metablock());
     if let hash_map::Entry::Occupied(mut e) = self.receipts.entry(ex_meta_block.clone()) {
       let new_id_sig = receipt.get_id_sig();
-      let id_sig = e.get().iter().find(|existing_id_sig| {
-        existing_id_sig.get_id().to_bytes() == new_id_sig.get_id().to_bytes()
-      });
+      let id_sig = e
+        .get()
+        .iter()
+        .find(|existing_id_sig| existing_id_sig.get_id() == new_id_sig.get_id());
       if id_sig.is_none() {
         e.get_mut().push(receipt.get_id_sig().clone());
       }
@@ -386,7 +403,7 @@ impl Receipts {
       let mut num_receipts = 0;
       for id_sig in id_sigs {
         let id = id_sig.get_id();
-        if pks.contains(&id.to_bytes()) {
+        if pks.contains(id) {
           num_receipts += 1;
         }
       }
@@ -484,12 +501,10 @@ impl Receipts {
 
       let mut num_receipts = 0;
       for id_sig in id_sigs {
-        let id = id_sig.get_id();
         id_sig
-          .get_sig()
-          .verify(id, &message.to_bytes())
+          .verify(&message.to_bytes())
           .map_err(|_e| VerificationError::InvalidSignature)?;
-        if pks.contains(&id.to_bytes()) {
+        if pks.contains(id_sig.get_id()) {
           num_receipts += 1;
         }
       }
@@ -627,16 +642,12 @@ impl Receipts {
         group_identity.digest_with(&ex_meta_block.get_view().digest_with(&new_metablock_hash));
 
       for id_sig in id_sigs {
-        let id = id_sig.get_id();
-        id_sig
-          .get_sig()
-          .verify(id, &message.to_bytes())
-          .map_err(|_e| {
-            eprintln!("invalid signature");
-            VerificationError::InvalidSignature
-          })?;
+        id_sig.verify(&message.to_bytes()).map_err(|_e| {
+          eprintln!("invalid signature");
+          VerificationError::InvalidSignature
+        })?;
 
-        if new_pks.contains(&id.to_bytes()) {
+        if new_pks.contains(id_sig.get_id()) {
           if *ex_meta_block.get_view() != max_cut_hash {
             eprintln!("the hashed state is invalid");
             return Err(VerificationError::InvalidView);
@@ -644,7 +655,7 @@ impl Receipts {
           num_receipts_for_new_pks += 1;
         }
 
-        if old_pks.contains(&id.to_bytes()) {
+        if old_pks.contains(id_sig.get_id()) {
           if ledger_tail_maps.contains_key(ex_meta_block.get_view()) {
             used_ledger_tail_maps.insert(*ex_meta_block.get_view());
           } else {
@@ -703,11 +714,11 @@ impl Receipts {
       for id_sig in id_sigs {
         let id = id_sig.get_id();
 
-        if !pks.contains(&id.to_bytes()) {
+        if !pks.contains(id) {
           continue;
         }
 
-        if id_sig.get_sig().verify(id, &message.to_bytes()).is_err() {
+        if id_sig.verify(&message.to_bytes()).is_err() {
           continue;
         }
 
@@ -1069,8 +1080,8 @@ impl CustomSerde for MetaBlock {
 impl CustomSerde for IdSig {
   fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend(&self.id.to_bytes());
-    bytes.extend(&self.sig.to_bytes());
+    bytes.extend(&self.id);
+    bytes.extend(&self.sig);
     bytes
   }
 
@@ -1083,10 +1094,8 @@ impl CustomSerde for IdSig {
       );
       return Err(CustomSerdeError::IncorrectLength);
     }
-    let id = PublicKey::from_bytes(&bytes[0..PublicKey::num_bytes()])
-      .map_err(|_| CustomSerdeError::InternalError)?;
-    let sig = Signature::from_bytes(&bytes[PublicKey::num_bytes()..])
-      .map_err(|_| CustomSerdeError::InternalError)?;
+    let id = bytes[0..PublicKey::num_bytes()].to_vec();
+    let sig = bytes[PublicKey::num_bytes()..].to_vec();
 
     Ok(IdSig { id, sig })
   }

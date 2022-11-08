@@ -469,7 +469,6 @@ impl EndorserState {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use ledger::signature::SignatureTrait;
   use rand::Rng;
 
   #[test]
@@ -545,8 +544,7 @@ mod tests {
     );
     assert!(receipt
       .get_id_sig()
-      .get_sig()
-      .verify(
+      .verify_with_id(
         &endorser_state.public_key,
         &view_block_hash
           .digest_with(
@@ -680,7 +678,7 @@ mod tests {
 
     let endorser_tail_expectation = metadata.hash();
     let message = handle.digest_with(&endorser_tail_expectation);
-    let tail_signature_verification = receipt.get_id_sig().get_sig().verify(
+    let tail_signature_verification = receipt.get_id_sig().verify_with_id(
       &endorser_state.public_key,
       &view_block_hash
         .digest_with(&receipt.get_view().digest_with_bytes(&message.to_bytes()))
