@@ -20,6 +20,7 @@ use ledger::{
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, PublicKeyTrait, Signature, SignatureTrait},
   Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
+use rand::random;
 use std::{
   convert::TryFrom,
   sync::{Arc, RwLock},
@@ -35,21 +36,38 @@ enum MessageType {
   ReadCounterResp,
 }
 
+const DEFAULT_NUM_GRPC_CHANNELS: usize = 1;
+
 #[derive(Debug, Clone)]
 pub struct Connection {
-  client: CallClient<Channel>,
+  clients: Vec<CallClient<Channel>>,
+  num_grpc_channels: usize,
 }
 
 impl Connection {
-  pub async fn new(coordinator_endpoint_address: String) -> Result<Self, EndpointError> {
-    let connection_attempt = Endpoint::from_shared(coordinator_endpoint_address);
-    let connection = match connection_attempt {
-      Ok(connection) => connection,
-      Err(_err) => return Err(EndpointError::CoordinatorHostNameNotFound),
+  pub async fn new(
+    coordinator_endpoint_address: String,
+    num_grpc_channels_opt: Option<usize>,
+  ) -> Result<Self, EndpointError> {
+    let num_grpc_channels = match num_grpc_channels_opt {
+      Some(n) => n,
+      None => DEFAULT_NUM_GRPC_CHANNELS,
     };
-    let channel = connection.connect_lazy();
-    let client = CallClient::new(channel);
-    Ok(Self { client })
+    let mut clients = Vec::new();
+    for _idx in 0..num_grpc_channels {
+      let connection_attempt = Endpoint::from_shared(coordinator_endpoint_address.clone());
+      let connection = match connection_attempt {
+        Ok(connection) => connection,
+        Err(_err) => return Err(EndpointError::CoordinatorHostNameNotFound),
+      };
+      let channel = connection.connect_lazy();
+      let client = CallClient::new(channel);
+      clients.push(client);
+    }
+    Ok(Self {
+      clients,
+      num_grpc_channels,
+    })
   }
 
   pub async fn new_ledger(&self, handle: &[u8], block: &[u8]) -> Result<Vec<u8>, EndpointError> {
@@ -57,8 +75,7 @@ impl Connection {
       handle: handle.to_vec(),
       block: block.to_vec(),
     });
-    let NewLedgerResp { receipts } = self
-      .client
+    let NewLedgerResp { receipts } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .new_ledger(req)
       .await
@@ -84,8 +101,7 @@ impl Connection {
     let AppendResp {
       hash_nonces,
       receipts,
-    } = self
-      .client
+    } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .append(req)
       .await
@@ -106,8 +122,7 @@ impl Connection {
       block,
       nonces,
       receipts,
-    } = self
-      .client
+    } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .read_latest(ReadLatestReq {
         handle: handle.to_vec(),
@@ -126,8 +141,8 @@ impl Connection {
     &self,
     index: usize,
   ) -> Result<(Vec<u8>, Vec<u8>), EndpointError> {
-    let ReadViewByIndexResp { block, receipts } = self
-      .client
+    let ReadViewByIndexResp { block, receipts } = self.clients
+      [random::<usize>() % self.num_grpc_channels]
       .clone()
       .read_view_by_index(ReadViewByIndexReq {
         index: index as u64,
@@ -144,8 +159,7 @@ impl Connection {
       receipts,
       height,
       attestations,
-    } = self
-      .client
+    } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .read_view_tail(ReadViewTailReq {})
       .await
@@ -177,10 +191,14 @@ pub enum SignatureFormat {
 }
 
 impl EndpointState {
-  pub async fn new(hostname: String, pem_opt: Option<String>) -> Result<Self, EndpointError> {
+  pub async fn new(
+    hostname: String,
+    pem_opt: Option<String>,
+    num_grpc_channels_opt: Option<usize>,
+  ) -> Result<Self, EndpointError> {
     // make a connection to the coordinator
     let conn = {
-      let res = Connection::new(hostname).await;
+      let res = Connection::new(hostname, num_grpc_channels_opt).await;
 
       match res {
         Ok(conn) => conn,

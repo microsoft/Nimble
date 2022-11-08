@@ -60,6 +60,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("pem")
         .takes_value(true)
         .help("The ECDSA prime256v1 private key pem file"),
+    )
+    .arg(
+      Arg::with_name("channels")
+        .short("l")
+        .long("channels")
+        .takes_value(true)
+        .help("The number of grpc channels"),
     );
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
@@ -72,7 +79,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .value_of("pem")
     .map(|p| std::fs::read_to_string(p).expect("Failed to read the private key pem file"));
 
-  let endpoint_state = Arc::new(EndpointState::new(coordinator_hostname, pem).await.unwrap());
+  let num_grpc_channels: Option<usize> = if let Some(x) = cli_matches.value_of("channels") {
+    match x.to_string().parse() {
+      Ok(v) => Some(v),
+      Err(_) => panic!("Failed to parse the number of grpc channels"),
+    }
+  } else {
+    None
+  };
+
+  let endpoint_state = Arc::new(
+    EndpointState::new(coordinator_hostname, pem, num_grpc_channels)
+      .await
+      .unwrap(),
+  );
 
   // Build our application by composing routes
   let app = Router::new()
@@ -88,23 +108,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Run our app with hyper
   println!("Running endpoint at {}", addr);
-  if let Some(c) = cert {
+  let job = if let Some(c) = cert {
     if let Some(k) = key {
       let config = RustlsConfig::from_pem_file(c, k).await.unwrap();
 
-      axum_server::bind_rustls(addr, config)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+      tokio::spawn(async move {
+        let _ = axum_server::bind_rustls(addr, config)
+          .serve(app.into_make_service())
+          .await;
+      })
     } else {
       panic!("cert and key must be provided together!");
     }
   } else {
-    axum::Server::bind(&addr)
-      .serve(app.into_make_service())
-      .await
-      .unwrap();
-  }
+    tokio::spawn(async move {
+      let _ = axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await;
+    })
+  };
+
+  job.await?;
+
   Ok(())
 }
 

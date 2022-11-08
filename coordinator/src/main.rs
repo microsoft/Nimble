@@ -398,6 +398,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help("List of URLs to Endorser Services")
         .use_delimiter(true)
         .default_value("http://[::1]:9090"),
+    )
+    .arg(
+      Arg::with_name("channels")
+        .short("l")
+        .long("channels")
+        .takes_value(true)
+        .help("The number of grpc channels"),
     );
 
   let cli_matches = config.get_matches();
@@ -426,7 +433,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Some(x) = cli_matches.value_of("storage_master_key") {
     ledger_store_args.insert(String::from("STORAGE_MASTER_KEY"), x.to_string());
   }
-  let res = CoordinatorState::new(store, &ledger_store_args).await;
+  let num_grpc_channels: Option<usize> = if let Some(x) = cli_matches.value_of("channels") {
+    match x.to_string().parse() {
+      Ok(v) => Some(v),
+      Err(_) => panic!("Failed to parse the number of grpc channels"),
+    }
+  } else {
+    None
+  };
+  let res = CoordinatorState::new(store, &ledger_store_args, num_grpc_channels).await;
   assert!(res.is_ok());
   let coordinator = res.unwrap();
 
@@ -461,11 +476,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .await;
   });
 
-  println!("Running gRPC Coordinator Service at {:?}", addr);
-  Server::builder()
-    .add_service(CallServer::new(server))
-    .serve(addr)
-    .await?;
+  let job2 = tokio::spawn(async move {
+    println!("Running gRPC Coordinator Service at {:?}", addr);
+    let _ = Server::builder()
+      .add_service(CallServer::new(server))
+      .serve(addr)
+      .await;
+  });
+
+  job2.await?;
 
   Ok(())
 }
@@ -605,7 +624,7 @@ mod tests {
 
     // Create the coordinator
     let coordinator = Arc::new(
-      CoordinatorState::new(&store, &ledger_store_args)
+      CoordinatorState::new(&store, &ledger_store_args, None)
         .await
         .unwrap(),
     );
@@ -1111,7 +1130,7 @@ mod tests {
       drop(server);
 
       let coordinator2 = Arc::new(
-        CoordinatorState::new(&store, &ledger_store_args)
+        CoordinatorState::new(&store, &ledger_store_args, None)
           .await
           .unwrap(),
       );

@@ -6,6 +6,7 @@ use ledger::{
   Block, CustomSerde, EndorserHostnames, Handle, LedgerChunk, LedgerTailMap, MetaBlock,
   NimbleDigest, NimbleHashTrait, Nonce, Receipt, Receipts, VerifierState,
 };
+use rand::random;
 use std::{
   collections::HashMap,
   convert::TryInto,
@@ -29,7 +30,14 @@ pub mod endorser_proto {
 
 use endorser_proto::endorser_call_client::EndorserCallClient;
 
-type EndorserConnMap = HashMap<Vec<u8>, (EndorserCallClient<Channel>, String)>;
+const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
+
+struct EndorserClients {
+  clients: Vec<EndorserCallClient<Channel>>,
+  uri: String,
+}
+
+type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
 
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
 
@@ -37,6 +45,7 @@ pub struct CoordinatorState {
   pub(crate) ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
+  num_grpc_channels: usize,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
@@ -418,27 +427,36 @@ impl CoordinatorState {
   pub async fn new(
     ledger_store_type: &str,
     args: &HashMap<String, String>,
+    num_grpc_channels_opt: Option<usize>,
   ) -> Result<CoordinatorState, CoordinatorError> {
+    let num_grpc_channels = match num_grpc_channels_opt {
+      Some(n) => n,
+      None => DEFAULT_NUM_GRPC_CHANNELS,
+    };
     let coordinator = match ledger_store_type {
       "mongodb_cosmos" => CoordinatorState {
         ledger_store: Arc::new(Box::new(MongoCosmosLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
+        num_grpc_channels,
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
+        num_grpc_channels,
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
+        num_grpc_channels,
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
+        num_grpc_channels,
       },
     };
 
@@ -604,11 +622,16 @@ impl CoordinatorState {
 
   fn get_endorser_client(&self, pk: &[u8]) -> Option<(EndorserCallClient<Channel>, String)> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
-      if !conn_map_rd.contains_key(pk) {
-        eprintln!("No endorser has this public key {:?}", pk);
-        None
-      } else {
-        Some((conn_map_rd[pk].0.clone(), conn_map_rd[pk].1.clone()))
+      let e = conn_map_rd.get(pk);
+      match e {
+        None => {
+          eprintln!("No endorser has this public key {:?}", pk);
+          None
+        },
+        Some(v) => Some((
+          v.clients[random::<usize>() % self.num_grpc_channels].clone(),
+          v.uri.clone(),
+        )),
       }
     } else {
       eprintln!("Failed to acquire read lock");
@@ -620,7 +643,7 @@ impl CoordinatorState {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
         .iter()
-        .map(|(pk, (_ec, _hostname))| pk.clone())
+        .map(|(pk, _endorser)| pk.clone())
         .collect::<Vec<Vec<u8>>>()
     } else {
       eprintln!("Failed to acquire read lock");
@@ -632,7 +655,7 @@ impl CoordinatorState {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
         .iter()
-        .map(|(_pk, (_ec, hostname))| hostname.clone())
+        .map(|(_pk, endorser)| endorser.uri.clone())
         .collect::<Vec<String>>()
     } else {
       eprintln!("Failed to acquire read lock");
@@ -644,7 +667,7 @@ impl CoordinatorState {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
         .iter()
-        .map(|(pk, (_ec, hostname))| (pk.clone(), hostname.clone()))
+        .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
         .collect::<Vec<(Vec<u8>, String)>>()
     } else {
       eprintln!("Failed to acquire read lock");
@@ -654,8 +677,8 @@ impl CoordinatorState {
 
   pub fn get_endorser_pk(&self, hostname: &str) -> Option<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
-      for (pk, (_client, uri)) in conn_map_rd.iter() {
-        if uri == hostname {
+      for (pk, endorser) in conn_map_rd.iter() {
+        if endorser.uri == hostname {
           return Some(pk.clone());
         }
       }
@@ -666,44 +689,46 @@ impl CoordinatorState {
   pub async fn connect_endorsers(&self, hostnames: &[String]) -> EndorserHostnames {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for hostname in hostnames {
-      let tx = mpsc_tx.clone();
-      let endorser = hostname.clone();
+      for _idx in 0..self.num_grpc_channels {
+        let tx = mpsc_tx.clone();
+        let endorser = hostname.clone();
 
-      let _job = tokio::spawn(async move {
-        let res = Endpoint::from_shared(endorser.to_string());
-        if let Ok(endorser_endpoint) = res {
-          let endorser_endpoint = endorser_endpoint
-            .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
-          let endorser_endpoint =
-            endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
-          let res = endorser_endpoint.connect().await;
-          if let Ok(channel) = res {
-            let mut client = EndorserCallClient::new(channel);
+        let _job = tokio::spawn(async move {
+          let res = Endpoint::from_shared(endorser.to_string());
+          if let Ok(endorser_endpoint) = res {
+            let endorser_endpoint = endorser_endpoint
+              .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
+            let endorser_endpoint =
+              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+            let res = endorser_endpoint.connect().await;
+            if let Ok(channel) = res {
+              let mut client = EndorserCallClient::new(channel);
 
-            let res =
-              get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
-            if let Ok(resp) = res {
-              let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
-              let _ = tx.send((endorser, Ok((client, pk)))).await;
+              let res =
+                get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
+              if let Ok(resp) = res {
+                let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
+                let _ = tx.send((endorser, Ok((client, pk)))).await;
+              } else {
+                eprintln!("Failed to retrieve the public key: {:?}", res);
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey)))
+                  .await;
+              }
             } else {
-              eprintln!("Failed to retrieve the public key: {:?}", res);
+              eprintln!("Failed to connect to the endorser {}: {:?}", endorser, res);
               let _ = tx
-                .send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey)))
+                .send((endorser, Err(CoordinatorError::FailedToConnectToEndorser)))
                 .await;
             }
           } else {
-            eprintln!("Failed to connect to the endorser {}: {:?}", endorser, res);
+            eprintln!("Failed to resolve the endorser host name: {:?}", res);
             let _ = tx
-              .send((endorser, Err(CoordinatorError::FailedToConnectToEndorser)))
+              .send((endorser, Err(CoordinatorError::CannotResolveHostName)))
               .await;
           }
-        } else {
-          eprintln!("Failed to resolve the endorser host name: {:?}", res);
-          let _ = tx
-            .send((endorser, Err(CoordinatorError::CannotResolveHostName)))
-            .await;
-        }
-      });
+        });
+      }
     }
 
     drop(mpsc_tx);
@@ -716,10 +741,21 @@ impl CoordinatorState {
           continue;
         }
         if let Ok(mut conn_map_wr) = self.conn_map.write() {
-          conn_map_wr.entry(pk.clone()).or_insert_with(|| {
-            endorser_hostnames.push((pk, endorser.clone()));
-            (client, endorser)
-          });
+          let e = conn_map_wr.get_mut(&pk);
+          match e {
+            None => {
+              endorser_hostnames.push((pk.clone(), endorser.clone()));
+              let mut endorser_clients = EndorserClients {
+                clients: Vec::new(),
+                uri: endorser,
+              };
+              endorser_clients.clients.push(client);
+              conn_map_wr.insert(pk, endorser_clients);
+            },
+            Some(v) => {
+              v.clients.push(client);
+            },
+          };
         } else {
           eprintln!("Failed to acquire the write lock");
         }
@@ -733,8 +769,11 @@ impl CoordinatorState {
     if let Ok(mut conn_map_wr) = self.conn_map.write() {
       for (pk, uri) in endorsers {
         let res = conn_map_wr.remove_entry(pk);
-        if let Some((_pk, (client, _uri))) = res {
-          drop(client);
+        if let Some((_pk, mut endorser)) = res {
+          for _idx in 0..self.num_grpc_channels {
+            let client = endorser.clients.pop();
+            drop(client);
+          }
           eprintln!("Removed endorser {}", uri);
         } else {
           eprintln!("Failed to find the endorser to disconnect {}", uri);

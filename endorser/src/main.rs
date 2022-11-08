@@ -421,12 +421,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let server = EndorserServiceState::new();
 
-  println!("Endorser host listening on {:?}", addr);
+  let job = tokio::spawn(async move {
+    println!("Endorser host listening on {:?}", addr);
 
-  Server::builder()
-    .add_service(EndorserCallServer::new(server))
-    .serve(addr)
-    .await?;
+    let _ = Server::builder()
+      .add_service(EndorserCallServer::new(server))
+      .serve(addr)
+      .await;
+  });
+
+  job.await?;
 
   Ok(())
 }

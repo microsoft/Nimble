@@ -18,9 +18,13 @@ pub struct EndpointGrpcState {
 }
 
 impl EndpointGrpcState {
-  async fn new(coordinator_endpoint_address: String, pem: Option<String>) -> Self {
+  async fn new(
+    coordinator_endpoint_address: String,
+    pem: Option<String>,
+    num_grpc_channels: Option<usize>,
+  ) -> Self {
     EndpointGrpcState {
-      state: EndpointState::new(coordinator_endpoint_address, pem)
+      state: EndpointState::new(coordinator_endpoint_address, pem, num_grpc_channels)
         .await
         .unwrap(),
     }
@@ -153,6 +157,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("pem")
         .takes_value(true)
         .help("The ECDSA prime256v1 private key pem file"),
+    )
+    .arg(
+      Arg::with_name("channels")
+        .short("l")
+        .long("channels")
+        .takes_value(true)
+        .help("The number of grpc channels"),
     );
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
@@ -163,13 +174,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .value_of("pem")
     .map(|p| std::fs::read_to_string(p).expect("Failed to read the private key pem file"));
 
-  let endpoint_grpc_state = EndpointGrpcState::new(coordinator_hostname.to_string(), pem).await;
+  let num_grpc_channels: Option<usize> = if let Some(x) = cli_matches.value_of("channels") {
+    match x.to_string().parse() {
+      Ok(v) => Some(v),
+      Err(_) => panic!("Failed to parse the number of grpc channels"),
+    }
+  } else {
+    None
+  };
+
+  let endpoint_grpc_state =
+    EndpointGrpcState::new(coordinator_hostname.to_string(), pem, num_grpc_channels).await;
 
   println!("Running endpoint at {}", addr);
-  Server::builder()
-    .add_service(CallServer::new(endpoint_grpc_state))
-    .serve(addr)
-    .await?;
+  let job = tokio::spawn(async move {
+    let _ = Server::builder()
+      .add_service(CallServer::new(endpoint_grpc_state))
+      .serve(addr)
+      .await;
+  });
+
+  job.await?;
 
   Ok(())
 }
