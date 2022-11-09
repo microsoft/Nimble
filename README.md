@@ -2,10 +2,10 @@
 
 # Dependencies
 
-Install make, gcc, perl, libssl-dev, pkg-config. In Ubuntu, you can type:
+Install make, gcc, protobuf-copiler, perl, libssl-dev, pkg-config. In Ubuntu, you can type:
 
 ```text
-sudo apt install make gcc libssl-dev pkg-config perl
+sudo apt install make gcc libssl-dev pkg-config perl protobuf-compiler
 ```
 
 ## Building and running tests
