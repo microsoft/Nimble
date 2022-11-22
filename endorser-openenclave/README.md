@@ -3,11 +3,16 @@
 ## Setup instructions
 * Install the [OpenEnclave SDK](https://github.com/openenclave/openenclave/tree/master/docs/GettingStartedDocs)
 
+* Install cmake and g++
+ ```
+    sudo apt install cmake g++
+ ```
+
 * Run the following commands, after cloning this repository:
     ```
-    cd endorser
+    cd endorser-openenclave
     mkdir build
-    cmake ..
+    cmake .
     make run
     ```
 
