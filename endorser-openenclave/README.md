@@ -12,7 +12,7 @@
     ```
     cd endorser-openenclave
     mkdir build
-    cmake .
+    cmake -DCMAKE_BUILD_TYPE=Release .
     make run
     ```
 
