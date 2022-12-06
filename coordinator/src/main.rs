@@ -255,37 +255,27 @@ async fn new_endorser(
   }
   let endorser_uri_string = res.unwrap();
 
-  let res = state.replace_endorsers(&[endorser_uri_string]).await;
+  let endorsers = endorser_uri_string
+    .split(';')
+    .filter(|e| !e.is_empty())
+    .map(|e| e.to_string())
+    .collect::<Vec<String>>();
+
+  let res = state.replace_endorsers(&endorsers).await;
   if res.is_err() {
     eprintln!("failed to add the endorser ({:?})", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
 
-  let res = std::str::from_utf8(&endorser_uri);
-  if res.is_err() {
-    eprintln!(
-      "cannot convert the endorser uri {:?} to string {:?}",
-      endorser_uri, res
-    );
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  let pks = state.get_endorser_pks();
+  let mut pks_vec = Vec::new();
+  for pk in pks {
+    pks_vec.extend(pk);
   }
-  let endorser_uri_str = res.unwrap();
-  let res = state.get_endorser_pk(endorser_uri_str);
-  match res {
-    None => {
-      eprintln!(
-        "failed to add the endorser {} ({:?})",
-        endorser_uri_str, res
-      );
-      (StatusCode::BAD_REQUEST, Json(json!({})))
-    },
-    Some(pk) => {
-      let resp = EndorserOpResponse {
-        pk: base64_url::encode(&pk),
-      };
-      (StatusCode::OK, Json(json!(resp)))
-    },
-  }
+  let resp = EndorserOpResponse {
+    pk: base64_url::encode(&pks_vec),
+  };
+  (StatusCode::OK, Json(json!(resp)))
 }
 
 async fn delete_endorser(
