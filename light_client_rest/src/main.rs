@@ -65,14 +65,29 @@ enum MessageType {
 
 #[tokio::main]
 async fn main() {
-  let config = App::new("client").arg(
-    Arg::with_name("endpoint")
-      .help("The hostname of the endpoint")
-      .default_value("http://[::1]:8082")
-      .index(1),
-  );
+  let config = App::new("client")
+    .arg(
+      Arg::with_name("endpoint")
+        .long("endorser")
+        .short("e")
+        .help("The hostname of the endpoint")
+        .default_value("http://[::1]:8082"),
+    )
+    .arg(
+      Arg::with_name("num")
+        .long("num")
+        .short("n")
+        .help("The number of ledgers")
+        .default_value("0"),
+    );
   let cli_matches = config.get_matches();
   let endpoint_addr = cli_matches.value_of("endpoint").unwrap();
+  let num_ledgers = cli_matches
+    .value_of("num")
+    .unwrap()
+    .to_string()
+    .parse::<usize>()
+    .unwrap();
 
   let client = reqwest::ClientBuilder::new()
     .danger_accept_invalid_certs(true)
@@ -277,4 +292,24 @@ async fn main() {
   let res = signature.verify(&pk, &msg.to_bytes());
   println!("ReadCounter: {:?}", res.is_ok());
   assert!(res.is_ok());
+
+  if num_ledgers == 0 {
+    return;
+  }
+
+  let tag_bytes: Vec<u8> = NimbleDigest::digest(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to_bytes();
+  let new_counter_req = NewCounterRequest {
+    tag: base64_url::encode(&tag_bytes),
+  };
+  for _idx in 0..num_ledgers {
+    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let handle = base64_url::encode(&handle_bytes);
+    let new_counter_url =
+      reqwest::Url::parse(&format!("{}/counters/{}", endpoint_addr, handle)).unwrap();
+    let _ = client
+      .put(new_counter_url)
+      .json(&new_counter_req)
+      .send()
+      .await;
+  }
 }
