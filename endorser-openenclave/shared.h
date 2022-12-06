@@ -5,6 +5,8 @@
 #define PUBLIC_KEY_SIZE_IN_BYTES 33
 #define SIGNATURE_SIZE_IN_BYTES 64 
 #define NONCE_SIZE_IN_BYTES 16
+#define MAX_BLOCK_SIZE_IN_BYTES 1024
+#define MAX_NONCES_SIZE_IN_BYTES 1024
 
 #pragma pack(push, 1)
 
@@ -54,11 +56,13 @@ typedef struct _receipt {
 typedef struct _ledger_tail_map_entry {
   handle_t handle;
   metablock_t metablock;
+  uint64_t block_size;
+  uint64_t nonces_size;
+  uint8_t block[MAX_BLOCK_SIZE_IN_BYTES];
+  uint8_t nonces[MAX_NONCES_SIZE_IN_BYTES];
 } ledger_tail_map_entry_t;
 
 typedef struct _init_endorser_data {
-  unsigned long long ledger_tail_map_size;
-  ledger_tail_map_entry_t *ledger_tail_map;
   metablock_t view_tail_metablock;
   digest_t block_hash;
   unsigned long long expected_height;

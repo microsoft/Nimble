@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../shared.h"
 #include <openenclave/enclave.h>
+#include "../shared.h"
 #include <pthread.h>
 #include <string>
 #include <map>
@@ -32,6 +32,10 @@ typedef struct _protected_metablock_t {
   pthread_rwlock_t rwlock;
   metablock_t metablock;
   digest_t hash;
+  uint64_t block_size;
+  uint8_t block[MAX_BLOCK_SIZE_IN_BYTES];
+  uint64_t nonces_size;
+  uint8_t* nonces; // allocate buffer for nonces on demand
 } protected_metablock_t;
 
 class ecall_dispatcher {
@@ -63,10 +67,10 @@ private:
 
 public:
   endorser_status_code setup(endorser_id_t* endorser_id);
-  endorser_status_code initialize_state(init_endorser_data_t *state, receipt_t* receipt);
-  endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, receipt_t* receipt);
-  endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt);
-  endorser_status_code append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt);
+  endorser_status_code initialize_state(init_endorser_data_t *state, uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, receipt_t* receipt);
+  endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, uint64_t block_size, uint8_t* block, receipt_t* receipt);
+  endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, uint64_t* block_size, uint8_t* block, uint64_t* nonces_size, uint8_t* nonces, receipt_t* receipt);
+  endorser_status_code append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, uint64_t block_size, uint8_t* block, uint64_t nonces_size, uint8_t* nonces, receipt_t* receipt);
   endorser_status_code finalize_state(digest_t* block_hash, uint64_t expected_height, uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, receipt_t* receipt);
   endorser_status_code get_public_key(endorser_id_t* endorser_id);
   endorser_status_code get_ledger_tail_map_size(uint64_t* ledger_tail_map_size);

@@ -10,3 +10,8 @@ Cargo.lock
 **/*.rs.bk
 
 *.txt
+
+/.vscode/*
+
+*.pem
+*.key

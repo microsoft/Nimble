@@ -59,7 +59,7 @@ impl NimbleDigest {
 
 pub type Handle = NimbleDigest;
 
-pub type LedgerTailMap = HashMap<NimbleDigest, MetaBlock>;
+pub type LedgerTailMap = HashMap<NimbleDigest, (MetaBlock, Block, Nonces)>;
 
 pub struct LedgerChunk {
   pub handle: NimbleDigest,
@@ -124,6 +124,14 @@ impl Nonces {
   pub fn contains(&self, nonce: &Nonce) -> bool {
     self.nonces.iter().any(|nonce_iter| *nonce_iter == *nonce)
   }
+
+  pub fn len(&self) -> usize {
+    self.nonces.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.nonces.is_empty()
+  }
 }
 
 /// A block in a ledger is a byte array
@@ -137,6 +145,14 @@ impl Block {
     Block {
       block: bytes.to_vec(),
     }
+  }
+
+  pub fn len(&self) -> usize {
+    self.block.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.block.is_empty()
   }
 }
 
@@ -613,7 +629,7 @@ impl Receipts {
       }
     }
     for ledger_tail_map in ledger_tail_maps.values() {
-      for (handle, metablock) in ledger_tail_map {
+      for (handle, (metablock, _block, _nonces)) in ledger_tail_map {
         let res = ledger_entries.get(&(*handle, metablock.get_height()));
         if let Some(metablock2) = res {
           if metablock.hash() != metablock2.hash() {
@@ -904,9 +920,9 @@ pub fn compute_max_cut(ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>) 
 
   // Find the tails in the max cut
   for ledger_tail_map in ledger_tail_maps.values() {
-    for (handle, metablock) in ledger_tail_map.iter() {
-      if !max_cut.contains_key(handle) || max_cut[handle].get_height() < metablock.get_height() {
-        max_cut.insert(*handle, metablock.clone());
+    for (handle, (metablock, block, nonces)) in ledger_tail_map.iter() {
+      if !max_cut.contains_key(handle) || max_cut[handle].0.get_height() < metablock.get_height() {
+        max_cut.insert(*handle, (metablock.clone(), block.clone(), nonces.clone()));
       }
     }
   }
@@ -922,7 +938,7 @@ pub fn compute_cut_diffs(
 
   // Find the low/high heights of ledgers
   for ledger_tail_map in ledger_tail_maps.values() {
-    for (handle, metablock) in ledger_tail_map.iter() {
+    for (handle, (metablock, _block, _nonces)) in ledger_tail_map.iter() {
       let height = metablock.get_height();
       let hash = metablock.hash();
 
@@ -1170,9 +1186,13 @@ impl CustomSerde for LedgerTailMap {
   fn to_bytes(&self) -> Vec<u8> {
     let mut bytes = Vec::new();
     for handle in self.keys().sorted() {
-      let metablock = self.get(handle).unwrap();
+      let (metablock, block, nonces) = self.get(handle).unwrap();
       bytes.extend_from_slice(&handle.to_bytes());
       bytes.extend_from_slice(&metablock.to_bytes());
+      bytes.extend(&(block.len() as u64).to_le_bytes().to_vec());
+      bytes.extend_from_slice(&block.to_bytes());
+      bytes.extend(&(nonces.len() as u64).to_le_bytes().to_vec());
+      bytes.extend_from_slice(&nonces.to_bytes());
     }
     bytes
   }
@@ -1188,7 +1208,26 @@ impl CustomSerde for LedgerTailMap {
       pos += NimbleDigest::num_bytes();
       let metablock = MetaBlock::from_bytes(&bytes[pos..pos + MetaBlock::num_bytes()])?;
       pos += MetaBlock::num_bytes();
-      ledger_tail_map.insert(handle, metablock);
+      let block_len = u64::from_le_bytes(
+        bytes[pos..pos + 0_u64.to_le_bytes().to_vec().len()]
+          .try_into()
+          .map_err(|_| CustomSerdeError::IncorrectLength)?,
+      ) as usize;
+      pos += 0_u64.to_le_bytes().to_vec().len();
+      let block = Block::from_bytes(&bytes[pos..pos + block_len])?;
+      pos += block_len;
+      let nonces_len = u64::from_le_bytes(
+        bytes[pos..pos + 0_u64.to_le_bytes().to_vec().len()]
+          .try_into()
+          .map_err(|_| CustomSerdeError::IncorrectLength)?,
+      ) as usize;
+      let mut nonces = Nonces::new();
+      for _ in 0..nonces_len {
+        let nonce = Nonce::from_bytes(&bytes[pos..pos + Nonce::num_bytes()])?;
+        pos += Nonce::num_bytes();
+        nonces.add(nonce);
+      }
+      ledger_tail_map.insert(handle, (metablock, block, nonces));
     }
     Ok(ledger_tail_map)
   }

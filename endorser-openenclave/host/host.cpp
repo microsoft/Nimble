@@ -1,9 +1,9 @@
-#include "../shared.h"
 #include <iostream>
 #include <memory>
 #include <thread>
 
 #include <openenclave/host.h>
+#include "../shared.h"
 #include "endorser_u.h"
 
 #include <grpcpp/grpcpp.h>
@@ -38,7 +38,7 @@ using endorser_proto::ReadStateResp;
 using endorser_proto::ActivateReq;
 using endorser_proto::ActivateResp;
 
-void print_hex(unsigned char* d, unsigned int len) {
+void print_hex(const unsigned char* d, unsigned int len) {
   printf("0x");
   for (int i = 0; i < len; i++) {
     printf("%c%c", "0123456789ABCDEF"[d[i] / 16],
@@ -85,24 +85,40 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         unsigned long long h = request->expected_height();
 
         if (id.size() != HASH_VALUE_SIZE_IN_BYTES || t.size() != sizeof(metablock_t) || b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
-          return Status(StatusCode::INVALID_ARGUMENT, "invalid arguments in the request for InitializeState");
+            return Status(StatusCode::INVALID_ARGUMENT, "invalid arguments in the request for InitializeState");
         }
 
-        auto num_entries = l_t_m.size();
-        ledger_tail_map_entry_t ledger_tail_map[num_entries];
+        uint64_t ledger_tail_map_size = l_t_m.size();
+        std::unique_ptr<ledger_tail_map_entry_t[]> ledger_tail_map = nullptr;
+        if (ledger_tail_map_size > 0) {
+            ledger_tail_map = std::unique_ptr<ledger_tail_map_entry_t[]>(new ledger_tail_map_entry_t[ledger_tail_map_size]);
+        }
+
         int i = 0;
         for (auto it = l_t_m.begin(); it != l_t_m.end(); it++) {
-          if (it->handle().size() != HASH_VALUE_SIZE_IN_BYTES || it->metablock().size() != sizeof(metablock_t)) {
-            return Status(StatusCode::INVALID_ARGUMENT, "handle or metablock in the ledger tail has wrong size");
-          }
-          memcpy(ledger_tail_map[i].handle.v, it->handle().c_str(), HASH_VALUE_SIZE_IN_BYTES);
-          memcpy(&ledger_tail_map[i].metablock, it->metablock().c_str(), sizeof(metablock_t));
-          i++;
+            if (it->handle().size() != HASH_VALUE_SIZE_IN_BYTES || it->metablock().size() != sizeof(metablock_t)) {
+                return Status(StatusCode::INVALID_ARGUMENT, "handle or metablock in the ledger tail has wrong size");
+            }
+            if (it->block().size() > MAX_BLOCK_SIZE_IN_BYTES) {
+                return Status(StatusCode::INVALID_ARGUMENT, "block size in the ledger tail is over the limit");
+            }
+            if (it->nonces().size() > MAX_NONCES_SIZE_IN_BYTES) {
+                return Status(StatusCode::INVALID_ARGUMENT, "nonces size in the ledger tail is over the limit");
+            }
+            memcpy(ledger_tail_map[i].handle.v, it->handle().c_str(), HASH_VALUE_SIZE_IN_BYTES);
+            memcpy(&ledger_tail_map[i].metablock, it->metablock().c_str(), sizeof(metablock_t));
+            ledger_tail_map[i].block_size = (uint64_t)it->block().size();
+            ledger_tail_map[i].nonces_size = (uint64_t)it->nonces().size();
+            if (it->block().size() > 0) {
+                memcpy(&ledger_tail_map[i].block, it->block().c_str(), it->block().size());
+            }
+            if (it->nonces().size() > 0) {
+                memcpy(&ledger_tail_map[i].nonces, it->nonces().c_str(), it->nonces().size());
+            }
+            i++;
         }
 
         init_endorser_data_t state;
-        state.ledger_tail_map_size = num_entries;
-        state.ledger_tail_map = ledger_tail_map;
         memcpy(&state.view_tail_metablock, request->view_tail_metablock().c_str(), sizeof(metablock_t));
         memcpy(state.block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         state.expected_height = h;
@@ -112,7 +128,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         oe_result_t result;
         
         receipt_t receipt;
-        result = initialize_state(enclave, &ret, &state, &receipt);
+        result = initialize_state(enclave, &ret, &state, ledger_tail_map_size, ledger_tail_map.get(), &receipt);
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -131,7 +147,11 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         }
         string b_h = request->block_hash();
         if (b_h.size() != HASH_VALUE_SIZE_IN_BYTES) {
-          return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
+            return Status(StatusCode::INVALID_ARGUMENT, "block hash size is invalid");
+        }
+        string block = request->block();
+        if (block.size() > MAX_BLOCK_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "block size is over the limit");
         }
 
         endorser_status_code ret = endorser_status_code::OK;
@@ -142,7 +162,9 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         memcpy(block_hash.v, b_h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         
         receipt_t receipt;
-        result = new_ledger(enclave, &ret, &handle, &block_hash, &receipt);
+        result = new_ledger(enclave, &ret, &handle, &block_hash,
+            (uint64_t)block.size(), (uint8_t*)block.c_str(),
+            &receipt);
         if (result != OE_OK) {
             return Status(StatusCode::FAILED_PRECONDITION, "enclave error");
         }
@@ -170,10 +192,14 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         nonce_t nonce;
         memcpy(handle.v, h.c_str(), HASH_VALUE_SIZE_IN_BYTES);
         memcpy(nonce.v, n.c_str(), NONCE_SIZE_IN_BYTES);
+        std::unique_ptr<uint8_t[]> block = std::unique_ptr<uint8_t[]>(new uint8_t[MAX_BLOCK_SIZE_IN_BYTES]);
+        std::unique_ptr<uint8_t[]> nonces = std::unique_ptr<uint8_t[]>(new uint8_t[MAX_NONCES_SIZE_IN_BYTES]);
+        uint64_t block_size;
+        uint64_t nonces_size;
 
         // Response data
         receipt_t receipt;
-        result = read_latest(enclave, &ret, &handle, &nonce, &receipt);
+        result = read_latest(enclave, &ret, &handle, &nonce, &block_size, block.get(), &nonces_size, nonces.get(), &receipt);
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -182,6 +208,8 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         }
 
         reply->set_receipt(reinterpret_cast<const char*>(&receipt), sizeof(receipt_t));
+        reply->set_block(reinterpret_cast<const char*>(block.get()), block_size);
+        reply->set_nonces(reinterpret_cast<const char*>(nonces.get()), nonces_size);
         return Status::OK;
     }
 
@@ -194,6 +222,14 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             return Status(StatusCode::INVALID_ARGUMENT, "append input sizes are invalid");
         }
 
+        string block = request->block();
+        string nonces = request->nonces();
+        if (block.size() > MAX_BLOCK_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "append block size is invalid");
+        }
+        if (nonces.size() > MAX_NONCES_SIZE_IN_BYTES) {
+            return Status(StatusCode::INVALID_ARGUMENT, "append nonces size is over the limit");
+        }
         // Request data
         handle_t handle;
         digest_t block_hash;
@@ -207,7 +243,7 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
         // Response data
         receipt_t receipt;
         uint64_t current_height;
-        result = append(enclave, &ret, &handle, &block_hash, expected_height, &current_height, &receipt);
+        result = append(enclave, &ret, &handle, &block_hash, expected_height, &current_height, (uint64_t)block.size(), (uint8_t*)block.c_str(), (uint64_t)nonces.size(), (uint8_t*)nonces.c_str(), &receipt);
         if (result != OE_OK) {
             return Status(StatusCode::INTERNAL, "enclave error");
         }
@@ -271,6 +307,8 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             auto entry = reply->add_ledger_tail_map();
             entry->set_handle(reinterpret_cast<const char*>(input->handle.v), HASH_VALUE_SIZE_IN_BYTES);
             entry->set_metablock(reinterpret_cast<const char*>(&input->metablock), sizeof(metablock_t));
+            entry->set_block(reinterpret_cast<const char*>(input->block), input->block_size);
+            entry->set_nonces(reinterpret_cast<const char*>(input->nonces), input->nonces_size);
         }
 
         return Status::OK;
@@ -312,6 +350,8 @@ class EndorserCallServiceImpl final: public EndorserCall::Service {
             auto entry = reply->add_ledger_tail_map();
             entry->set_handle(reinterpret_cast<const char*>(input->handle.v), HASH_VALUE_SIZE_IN_BYTES);
             entry->set_metablock(reinterpret_cast<const char*>(&input->metablock), sizeof(metablock_t));
+            entry->set_block(reinterpret_cast<const char*>(input->block), input->block_size);
+            entry->set_nonces(reinterpret_cast<const char*>(input->nonces), input->nonces_size);
         }
 
         return Status::OK;

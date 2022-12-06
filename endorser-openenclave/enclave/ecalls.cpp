@@ -1,7 +1,7 @@
+#include <openenclave/enclave.h>
 #include "../shared.h"
 #include "endorser.h"
 #include "endorser_t.h"
-#include <openenclave/enclave.h>
 
 static ecall_dispatcher dispatcher;
 
@@ -9,20 +9,20 @@ endorser_status_code setup(endorser_id_t* endorser_id) {
   return dispatcher.setup(endorser_id);
 }
 
-endorser_status_code initialize_state(init_endorser_data_t *state, receipt_t* receipt) {
-  return dispatcher.initialize_state(state, receipt);
+endorser_status_code initialize_state(init_endorser_data_t *state, uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, receipt_t* receipt) {
+  return dispatcher.initialize_state(state, ledger_tail_map_size, ledger_tail_map, receipt);
 }
 
-endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, receipt_t* receipt) {
-  return dispatcher.new_ledger(handle, block_hash, receipt);
+endorser_status_code new_ledger(handle_t* handle, digest_t *block_hash, uint64_t block_size, uint8_t* block, receipt_t* receipt) {
+  return dispatcher.new_ledger(handle, block_hash, block_size, block, receipt);
 }
 
-endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt) {
-  return dispatcher.read_latest(handle, nonce, receipt);
+endorser_status_code read_latest(handle_t* handle, nonce_t* nonce, uint64_t* block_size, uint8_t* block, uint64_t* nonces_size, uint8_t* nonces, receipt_t* receipt) {
+  return dispatcher.read_latest(handle, nonce, block_size, block, nonces_size, nonces, receipt);
 }
 
-endorser_status_code append(handle_t* handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
-  return dispatcher.append(handle, block_hash, expected_height, current_height, receipt);
+endorser_status_code append(handle_t* handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, uint64_t block_size, uint8_t* block, uint64_t nonces_size, uint8_t* nonces, receipt_t* receipt) {
+  return dispatcher.append(handle, block_hash, expected_height, current_height, block_size, block, nonces_size, nonces, receipt);
 }
 
 endorser_status_code finalize_state(digest_t* block_hash, uint64_t expected_height, uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, receipt_t* receipt) {

@@ -114,7 +114,7 @@ exit:
   return ret;
 }
 
-endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *state, receipt_t *receipt) {
+endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *state, uint64_t ledger_tail_map_size, ledger_tail_map_entry_t* ledger_tail_map, receipt_t *receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int i = 0;
 
@@ -129,9 +129,10 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
   }
 
   // copy each element from ledger_tail_map to this->ledger_tail_map
-  for (i = 0; i < state->ledger_tail_map_size; i++) { 
-    handle_t *handle = &state->ledger_tail_map[i].handle;
+  for (i = 0; i < ledger_tail_map_size; i++) { 
+    handle_t *handle = &ledger_tail_map[i].handle;
     protected_metablock_t* protected_metablock = new protected_metablock_t;
+    memset(protected_metablock, 0, sizeof(protected_metablock_t));
 
     // check if the handle already exists
     if (this->ledger_tail_map.find(*handle) != this->ledger_tail_map.end()) {
@@ -145,8 +146,33 @@ endorser_status_code ecall_dispatcher::initialize_state(init_endorser_data_t *st
       ret = endorser_status_code::INTERNAL;
       goto exit;
     }
-    memcpy(&protected_metablock->metablock, &state->ledger_tail_map[i].metablock, sizeof(metablock_t));
+    memcpy(&protected_metablock->metablock, &ledger_tail_map[i].metablock, sizeof(metablock_t));
     calc_digest((unsigned char*)&protected_metablock->metablock, sizeof(metablock_t), &protected_metablock->hash);
+    if (ledger_tail_map[i].block_size == 0 || ledger_tail_map[i].block_size > MAX_BLOCK_SIZE_IN_BYTES) {
+      TRACE_ENCLAVE("[Enclave] initialize_state:: invalid block size %lu", ledger_tail_map[i].block_size);
+      ret = endorser_status_code::INVALID_ARGUMENT;
+      goto exit;
+    }
+    if (ledger_tail_map[i].block_size > 0) {
+      if (ledger_tail_map[i].block_size > MAX_BLOCK_SIZE_IN_BYTES) {
+        TRACE_ENCLAVE("[Enclave] initialize_state:: invalid block size %lu", ledger_tail_map[i].nonces_size);
+        ret = endorser_status_code::INVALID_ARGUMENT;
+        goto exit;
+      }
+      protected_metablock->block_size = ledger_tail_map[i].block_size;
+      memcpy(protected_metablock->block, ledger_tail_map[i].block, protected_metablock->block_size);
+    }
+    if (ledger_tail_map[i].nonces_size > 0) {
+      if (ledger_tail_map[i].nonces_size > MAX_NONCES_SIZE_IN_BYTES) {
+        TRACE_ENCLAVE("[Enclave] initialize_state:: invalid nonces size %lu", ledger_tail_map[i].nonces_size);
+        ret = endorser_status_code::INVALID_ARGUMENT;
+        goto exit;
+      }
+      protected_metablock->nonces_size = ledger_tail_map[i].nonces_size;
+      // always allocate the buffer with the max size
+      protected_metablock->nonces = new uint8_t[MAX_NONCES_SIZE_IN_BYTES];
+      memcpy(protected_metablock->nonces, ledger_tail_map[i].nonces, protected_metablock->nonces_size);
+    }
     this->ledger_tail_map.insert(make_pair(*handle, protected_metablock));
   }
 
@@ -167,7 +193,7 @@ exit:
   return ret;
 }
 
-endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *block_hash, receipt_t* receipt) {
+endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *block_hash, uint64_t block_size, uint8_t* block, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
   protected_metablock_t* protected_metablock = nullptr;
@@ -175,6 +201,11 @@ endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *bl
   // check if the state is initialized
   if (this->endorser_mode != endorser_active) {
     return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (block_size > MAX_BLOCK_SIZE_IN_BYTES) {
+    TRACE_ENCLAVE("[Enclave] new_ledger:: invalid block size %lu", block_size);
+    return endorser_status_code::INVALID_ARGUMENT;
   }
 
   if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
@@ -194,6 +225,7 @@ endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *bl
   }
 
   protected_metablock = new protected_metablock_t;
+  memset(protected_metablock, 0, sizeof(protected_metablock_t));
 
   if (pthread_rwlock_init(&protected_metablock->rwlock, nullptr) != 0) {
     ret = endorser_status_code::INTERNAL;
@@ -204,6 +236,10 @@ endorser_status_code ecall_dispatcher::new_ledger(handle_t* handle, digest_t *bl
   memcpy(protected_metablock->metablock.block_hash.v, block_hash->v, HASH_VALUE_SIZE_IN_BYTES);
   protected_metablock->metablock.height = 0;
   calc_digest((unsigned char *)&protected_metablock->metablock, sizeof(metablock_t), &protected_metablock->hash);
+  if (block_size > 0) {
+    protected_metablock->block_size = block_size;
+    memcpy(protected_metablock->block, block, block_size);
+  }
 
   res = calc_receipt(handle, &protected_metablock->metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
   if (res == 0) {
@@ -224,7 +260,7 @@ exit_view_lock:
   return ret;
 }
   
-endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, receipt_t* receipt) {
+endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* nonce, uint64_t* block_size, uint8_t* block, uint64_t* nonces_size, uint8_t* nonces, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
   protected_metablock_t* protected_metablock = nullptr;
@@ -252,6 +288,14 @@ endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* no
         ret = endorser_status_code::INTERNAL;
       } else {
         res = calc_receipt(handle, &protected_metablock->metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nonce, this->eckey, this->public_key, receipt);
+        *block_size = protected_metablock->block_size;
+        if (protected_metablock->block_size > 0) {
+          memcpy(block, protected_metablock->block, protected_metablock->block_size);
+        }
+        *nonces_size = protected_metablock->nonces_size;
+        if (protected_metablock->nonces_size > 0) {
+          memcpy(nonces, protected_metablock->nonces, protected_metablock->nonces_size);
+        }
         pthread_rwlock_unlock(&protected_metablock->rwlock);
         if (res == 0) {
           ret = endorser_status_code::INTERNAL;
@@ -267,7 +311,7 @@ endorser_status_code ecall_dispatcher::read_latest(handle_t* handle, nonce_t* no
   return ret;
 }
   
-endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, receipt_t* receipt) {
+endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_hash, uint64_t expected_height, uint64_t* current_height, uint64_t block_size, uint8_t* block, uint64_t nonces_size, uint8_t* nonces, receipt_t* receipt) {
   endorser_status_code ret = endorser_status_code::OK;
   int res = 0;
 
@@ -277,6 +321,15 @@ endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_
   // check if the state is initialized
   if (this->endorser_mode != endorser_active) {
     return endorser_status_code::UNIMPLEMENTED;
+  }
+
+  if (block_size > MAX_BLOCK_SIZE_IN_BYTES) {
+    TRACE_ENCLAVE("[Enclave] append: invalid block size %lu", block_size);
+    return endorser_status_code::INVALID_ARGUMENT;
+  }
+  if (nonces_size > MAX_NONCES_SIZE_IN_BYTES) {
+    TRACE_ENCLAVE("[Enclave] append: invalid nonces size %lu", nonces_size);
+    return endorser_status_code::INVALID_ARGUMENT;
   }
 
   if (pthread_rwlock_rdlock(&this->view_ledger_rwlock) != 0) {
@@ -318,6 +371,22 @@ endorser_status_code ecall_dispatcher::append(handle_t *handle, digest_t* block_
           metablock->height += 1;
           calc_digest((unsigned char *)metablock, sizeof(metablock_t), &protected_metablock->hash);
 
+          protected_metablock->block_size = block_size;
+          if (block_size > 0) {
+            memcpy(protected_metablock->block, block, block_size);
+          }
+          protected_metablock->nonces_size = nonces_size;
+          if (nonces_size > 0) {
+            if (protected_metablock->nonces == nullptr) {
+              protected_metablock->nonces = new uint8_t[MAX_NONCES_SIZE_IN_BYTES];
+            }
+            memcpy(protected_metablock->nonces, nonces, nonces_size);
+          } else {
+            if (protected_metablock->nonces != nullptr) {
+              delete[] protected_metablock->nonces;
+              protected_metablock->nonces = nullptr;
+            }
+          }
           res = calc_receipt(handle, metablock, &protected_metablock->hash, &this->group_identity, &this->view_ledger_tail_hash, nullptr, this->eckey, this->public_key, receipt);
           if (res == 0) {
             ret = endorser_status_code::INTERNAL;
@@ -408,6 +477,14 @@ endorser_status_code ecall_dispatcher::fill_ledger_tail_map(uint64_t ledger_tail
   for (auto it = this->ledger_tail_map.begin(); it != this->ledger_tail_map.end(); it++) {
     memcpy(&ledger_tail_map[index].handle, &it->first, sizeof(handle_t));
     memcpy(&ledger_tail_map[index].metablock, &it->second->metablock, sizeof(metablock_t));
+    ledger_tail_map[index].block_size = it->second->block_size;
+    if (it->second->block_size > 0) {
+      memcpy(ledger_tail_map[index].block, it->second->block, it->second->block_size);
+    }
+    ledger_tail_map[index].nonces_size = it->second->nonces_size;
+    if (it->second->nonces_size > 0) {
+      memcpy(&ledger_tail_map[index].nonces, it->second->nonces, it->second->nonces_size);
+    }
     index++;
   }
 

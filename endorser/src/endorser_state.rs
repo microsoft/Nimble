@@ -10,8 +10,8 @@ use endorser_proto::EndorserMode;
 use ledger::{
   produce_hash_of_state,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey},
-  Handle, IdSig, LedgerChunk, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait, Receipt,
-  Receipts,
+  Block, Handle, IdSig, LedgerChunk, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait,
+  Nonces, Receipt, Receipts,
 };
 use std::{
   collections::{hash_map, HashMap},
@@ -33,7 +33,7 @@ struct ViewLedgerState {
   group_identity: NimbleDigest,
 }
 
-type ProtectedMetaBlock = Arc<RwLock<MetaBlock>>;
+type ProtectedMetaBlock = Arc<RwLock<(MetaBlock, Block, Nonces)>>;
 
 /// Endorser's internal state
 pub struct EndorserState {
@@ -106,6 +106,7 @@ impl EndorserState {
     &self,
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
+    block: &Block,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
@@ -129,7 +130,11 @@ impl EndorserState {
       // check if the handle already exists, if so, return an error
       if let Ok(mut ledger_tail_map) = self.ledger_tail_map.write() {
         if let hash_map::Entry::Vacant(e) = ledger_tail_map.entry(*handle) {
-          e.insert(Arc::new(RwLock::new(metablock.clone())));
+          e.insert(Arc::new(RwLock::new((
+            metablock.clone(),
+            block.clone(),
+            Nonces::new(),
+          ))));
           Ok(Receipt::new(
             view,
             metablock,
@@ -146,7 +151,11 @@ impl EndorserState {
     }
   }
 
-  pub fn read_latest(&self, handle: &NimbleDigest, nonce: &[u8]) -> Result<Receipt, EndorserError> {
+  pub fn read_latest(
+    &self,
+    handle: &NimbleDigest,
+    nonce: &[u8],
+  ) -> Result<(Receipt, Block, Nonces), EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
         EndorserMode::Uninitialized | EndorserMode::Initialized => {
@@ -162,18 +171,23 @@ impl EndorserState {
         match ledger_tail_map.get(handle) {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
-            if let Ok(metablock) = protected_metablock.read() {
+            if let Ok(e) = protected_metablock.read() {
               let view = view_ledger_state.view_ledger_tail_hash;
+              let metablock = &e.0;
               let tail_hash = metablock.hash();
               let message = view_ledger_state.group_identity.digest_with(
                 &view.digest_with(&handle.digest_with(&tail_hash.digest_with_bytes(nonce))),
               );
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
-              Ok(Receipt::new(
-                view,
-                metablock.clone(),
-                IdSig::new(self.public_key.clone(), signature),
+              Ok((
+                Receipt::new(
+                  view,
+                  metablock.clone(),
+                  IdSig::new(self.public_key.clone(), signature),
+                ),
+                e.1.clone(),
+                e.2.clone(),
               ))
             } else {
               Err(EndorserError::FailedToAcquireLedgerEntryReadLock)
@@ -204,8 +218,8 @@ impl EndorserState {
         match ledger_tail_map.get(handle) {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
-            if let Ok(metablock) = protected_metablock.read() {
-              Ok(metablock.get_height())
+            if let Ok(e) = protected_metablock.read() {
+              Ok(e.0.get_height())
             } else {
               Err(EndorserError::FailedToAcquireLedgerEntryReadLock)
             }
@@ -224,6 +238,8 @@ impl EndorserState {
     handle: &NimbleDigest,
     block_hash: &NimbleDigest,
     expected_height: usize,
+    block: &Block,
+    nonces: &Nonces,
   ) -> Result<Receipt, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
@@ -240,7 +256,8 @@ impl EndorserState {
         match ledger_tail_map.get(handle) {
           None => Err(EndorserError::InvalidLedgerName),
           Some(protected_metablock) => {
-            if let Ok(mut metablock) = protected_metablock.write() {
+            if let Ok(mut e) = protected_metablock.write() {
+              let metablock = &e.0;
               // increment height and returning an error in case of overflow
               let height_plus_one = {
                 let res = metablock.get_height().checked_add(1);
@@ -267,7 +284,7 @@ impl EndorserState {
 
               let signature = self.private_key.sign(&message.to_bytes()).unwrap();
 
-              *metablock = new_metablock.clone();
+              *e = (new_metablock.clone(), block.clone(), nonces.clone());
               Ok(Receipt::new(
                 view,
                 new_metablock,
@@ -353,8 +370,8 @@ impl EndorserState {
     let mut ledger_tail_map = HashMap::new();
     if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
       for (handle, value) in ledger_tail_map_rd.iter() {
-        if let Ok(metablock) = value.read() {
-          ledger_tail_map.insert(*handle, metablock.clone());
+        if let Ok(e) = value.read() {
+          ledger_tail_map.insert(*handle, (e.0.clone(), e.1.clone(), e.2.clone()));
         } else {
           return Err(EndorserError::FailedToAcquireLedgerEntryReadLock);
         }
@@ -522,14 +539,12 @@ mod tests {
       n.unwrap()
     };
 
-    let block_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
-      let n = NimbleDigest::from_bytes(&t);
-      assert!(n.is_ok(), "This should not have occured");
-      n.unwrap()
-    };
+    let t = rand::thread_rng().gen::<[u8; 32]>();
+    let block = Block::new(&t);
 
-    let res = endorser_state.new_ledger(&handle, &block_hash);
+    let block_hash = block.hash();
+
+    let res = endorser_state.new_ledger(&handle, &block_hash, &block);
     assert!(res.is_ok());
 
     let receipt = res.unwrap();
@@ -562,11 +577,12 @@ mod tests {
 
     let ledger_tail_map = endorser_state.ledger_tail_map.read().expect("failed");
 
-    let metablock = ledger_tail_map
+    let metablock = &ledger_tail_map
       .get(&handle)
       .unwrap()
       .read()
-      .expect("failed");
+      .expect("failed")
+      .0;
     assert_eq!(metablock.get_height(), 0usize);
     assert_eq!(metablock.hash(), genesis_tail_hash);
   }
@@ -615,10 +631,10 @@ mod tests {
       .endorser_mode = endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
-    let block = rand::thread_rng().gen::<[u8; 32]>();
-    let handle = NimbleDigest::from_bytes(&block).unwrap();
-    let block_hash = handle; // this need not be the case, but it does not matter for testing
-    let res = endorser_state.new_ledger(&handle, &block_hash);
+    let block = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
+    let handle = NimbleDigest::from_bytes(&rand::thread_rng().gen::<[u8; 32]>()).unwrap();
+    let block_hash = block.hash(); // this need not be the case, but it does not matter for testing
+    let res = endorser_state.new_ledger(&handle, &block_hash, &block);
     assert!(res.is_ok());
 
     // Fetch the value currently in the tail.
@@ -630,9 +646,10 @@ mod tests {
       .unwrap()
       .read()
       .expect("failed")
+      .0
       .hash();
-    let block_hash_to_append_data = rand::thread_rng().gen::<[u8; 32]>();
-    let block_hash_to_append = NimbleDigest::from_bytes(&block_hash_to_append_data).unwrap();
+    let block_hash_to_append_data = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
+    let block_hash_to_append = block_hash_to_append_data.hash();
 
     let height_plus_one = {
       let height = endorser_state
@@ -643,6 +660,7 @@ mod tests {
         .unwrap()
         .read()
         .expect("failed")
+        .0
         .get_height();
       let res = height.checked_add(1);
       if res.is_none() {
@@ -652,7 +670,13 @@ mod tests {
     };
 
     let receipt = endorser_state
-      .append(&handle, &block_hash_to_append, height_plus_one)
+      .append(
+        &handle,
+        &block_hash_to_append,
+        height_plus_one,
+        &block_hash_to_append_data,
+        &Nonces::new(),
+      )
       .unwrap();
     let new_ledger_height = endorser_state
       .ledger_tail_map
@@ -662,6 +686,7 @@ mod tests {
       .unwrap()
       .read()
       .expect("failed")
+      .0
       .get_height();
     assert_eq!(
       *receipt.get_view(),
@@ -688,12 +713,14 @@ mod tests {
     if tail_signature_verification.is_ok() {
       println!("Verification Passed. Checking Updated Tail");
       let ledger_tail_map = endorser_state.ledger_tail_map.read().expect("failed");
-      let metablock = ledger_tail_map
+      let metablock_hash = ledger_tail_map
         .get(&handle)
         .unwrap()
         .read()
-        .expect("failed");
-      assert_eq!(endorser_tail_expectation, metablock.hash());
+        .expect("failed")
+        .0
+        .hash();
+      assert_eq!(endorser_tail_expectation, metablock_hash);
     } else {
       panic!("Signature verification failed when it should not have failed");
     }

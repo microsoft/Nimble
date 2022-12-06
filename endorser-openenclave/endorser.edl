@@ -6,10 +6,10 @@ enclave {
 
     trusted {
         public endorser_status_code setup([out] endorser_id_t* endorser_id);
-        public endorser_status_code initialize_state([in] init_endorser_data_t* state, [out] receipt_t* receipt);
-        public endorser_status_code new_ledger([in] handle_t* handle, [in] digest_t* block_hash, [out] receipt_t* receipt);
-        public endorser_status_code read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] receipt_t* receipt);
-        public endorser_status_code append([in] handle_t* handle, [in] digest_t* block_hash, uint64_t expected_height, [out] uint64_t* current_height, [out] receipt_t* receipt);
+        public endorser_status_code initialize_state([in] init_endorser_data_t* state, uint64_t ledger_tail_map_size, [in, count=ledger_tail_map_size] ledger_tail_map_entry_t* ledger_tail_map, [out] receipt_t* receipt);
+        public endorser_status_code new_ledger([in] handle_t* handle, [in] digest_t* block_hash, uint64_t block_size, [in, count=block_size] uint8_t* block, [out] receipt_t* receipt);
+        public endorser_status_code read_latest([in] handle_t* handle, [in] nonce_t* nonce, [out] uint64_t* block_size, [out] uint8_t block[MAX_BLOCK_SIZE_IN_BYTES], [out] uint64_t* nonces_size, [out] uint8_t nonces[MAX_BLOCK_SIZE_IN_BYTES], [out] receipt_t* receipt);
+        public endorser_status_code append([in] handle_t* handle, [in] digest_t* block_hash, uint64_t expected_height, [out] uint64_t* current_height, uint64_t block_size, [in, count=block_size] uint8_t* block, uint64_t nonces_size, [in, count=nonces_size] uint8_t* nonces, [out] receipt_t* receipt);
         public endorser_status_code finalize_state([in] digest_t* block_hash, uint64_t expected_height, uint64_t ledger_tail_map_size, [out, count=ledger_tail_map_size] ledger_tail_map_entry_t* ledger_tail_map, [out] receipt_t* receipt);
         public endorser_status_code get_public_key([out] endorser_id_t* endorser_id);
         public endorser_status_code get_ledger_tail_map_size([out] uint64_t* ledger_tail_map_size);

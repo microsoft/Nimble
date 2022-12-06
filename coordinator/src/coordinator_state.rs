@@ -4,7 +4,7 @@ use ledger::{
   errors::VerificationError,
   signature::{PublicKey, PublicKeyTrait},
   Block, CustomSerde, EndorserHostnames, Handle, LedgerChunk, LedgerTailMap, MetaBlock,
-  NimbleDigest, NimbleHashTrait, Nonce, Receipt, Receipts, VerifierState,
+  NimbleDigest, NimbleHashTrait, Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
 use rand::random;
 use std::{
@@ -289,6 +289,7 @@ async fn update_endorser(
             &ledger_entry.get_nonces().hash().to_bytes(),
           )
           .to_bytes(),
+          block: ledger_entry.get_block().to_bytes(),
         },
       )
       .await?
@@ -305,6 +306,8 @@ async fn update_endorser(
           )
           .to_bytes(),
           expected_height: idx as u64,
+          block: ledger_entry.get_block().to_bytes(),
+          nonces: ledger_entry.get_nonces().to_bytes(),
         },
       )
       .await?
@@ -856,10 +859,14 @@ impl CoordinatorState {
   ) -> Receipts {
     let ledger_tail_map_proto: Vec<endorser_proto::LedgerTailMapEntry> = ledger_tail_map
       .iter()
-      .map(|(handle, metablock)| endorser_proto::LedgerTailMapEntry {
-        handle: handle.to_bytes(),
-        metablock: metablock.to_bytes(),
-      })
+      .map(
+        |(handle, (metablock, block, nonces))| endorser_proto::LedgerTailMapEntry {
+          handle: handle.to_bytes(),
+          metablock: metablock.to_bytes(),
+          block: block.to_bytes(),
+          nonces: nonces.to_bytes(),
+        },
+      )
       .collect();
 
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
@@ -928,6 +935,7 @@ impl CoordinatorState {
     endorsers: &[Vec<u8>],
     ledger_handle: &Handle,
     ledger_block_hash: &NimbleDigest,
+    ledger_block: Block,
   ) -> Result<Receipts, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for pk in endorsers {
@@ -939,6 +947,7 @@ impl CoordinatorState {
       let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
       let block_hash = *ledger_block_hash;
+      let block = ledger_block.clone();
       let pk_bytes = pk.clone();
       let _job = tokio::spawn(async move {
         let res = new_ledger_with_retry(
@@ -946,6 +955,7 @@ impl CoordinatorState {
           endorser_proto::NewLedgerReq {
             handle: handle.to_bytes(),
             block_hash: block_hash.to_bytes(),
+            block: block.to_bytes(),
           },
         )
         .await;
@@ -1000,6 +1010,8 @@ impl CoordinatorState {
     ledger_handle: &Handle,
     block_hash: &NimbleDigest,
     expected_height: usize,
+    block: Block,
+    nonces: Nonces,
   ) -> Result<Receipts, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
@@ -1011,7 +1023,9 @@ impl CoordinatorState {
 
       let tx = mpsc_tx.clone();
       let handle = *ledger_handle;
-      let block = *block_hash;
+      let block_hash_copy = *block_hash;
+      let block_copy = block.clone();
+      let nonces_copy = nonces.clone();
       let pk_bytes = pk.clone();
       let ledger_store = self.ledger_store.clone();
       let _job = tokio::spawn(async move {
@@ -1020,8 +1034,10 @@ impl CoordinatorState {
             &mut endorser_client,
             endorser_proto::AppendReq {
               handle: handle.to_bytes(),
-              block_hash: block.to_bytes(),
+              block_hash: block_hash_copy.to_bytes(),
               expected_height: expected_height as u64,
+              block: block_copy.to_bytes(),
+              nonces: nonces_copy.to_bytes(),
             },
           )
           .await;
@@ -1212,7 +1228,7 @@ impl CoordinatorState {
     endorsers: &[Vec<u8>],
     ledger_handle: &Handle,
     client_nonce: &Nonce,
-  ) -> Result<(Receipts, usize), CoordinatorError> {
+  ) -> Result<LedgerEntry, CoordinatorError> {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for pk in endorsers {
@@ -1236,8 +1252,14 @@ impl CoordinatorState {
         .await;
         match res {
           Ok(resp) => {
-            let endorser_proto::ReadLatestResp { receipt } = resp.into_inner();
-            let _ = tx.send((endorser, pk_bytes, Ok(receipt))).await;
+            let endorser_proto::ReadLatestResp {
+              receipt,
+              block,
+              nonces,
+            } = resp.into_inner();
+            let _ = tx
+              .send((endorser, pk_bytes, Ok((receipt, block, nonces))))
+              .await;
           },
           Err(status) => match process_error(&endorser, Some(&handle), &status) {
             CoordinatorAction::RemoveEndorser => {
@@ -1267,16 +1289,21 @@ impl CoordinatorState {
 
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
-        Ok(receipt) => match Receipt::from_bytes(&receipt) {
+        Ok((receipt, block, nonces)) => match Receipt::from_bytes(&receipt) {
           Ok(receipt_rs) => {
-            endorser_height_map.insert(endorser, receipt_rs.get_height());
-            if max_height < receipt_rs.get_height() {
-              max_height = receipt_rs.get_height();
+            let height = receipt_rs.get_height();
+            endorser_height_map.insert(endorser, height);
+            if max_height < height {
+              max_height = height;
             }
             receipts.add(&receipt_rs);
             if let Ok(vs) = self.verifier_state.read() {
-              if let Ok(h) = receipts.check_quorum(&vs) {
-                return Ok((receipts, h));
+              if let Ok(_h) = receipts.check_quorum(&vs) {
+                if let Ok(block_rs) = Block::from_bytes(&block) {
+                  if let Ok(nonces_rs) = Nonces::from_bytes(&nonces) {
+                    return Ok(LedgerEntry::new(block_rs, receipts, Some(nonces_rs)));
+                  }
+                }
               }
             }
           },
@@ -1357,12 +1384,16 @@ impl CoordinatorState {
               continue;
             },
           };
-          let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
+          let ledger_tail_map_rs: LedgerTailMap = ledger_tail_map
             .into_iter()
             .map(|e| {
               (
                 NimbleDigest::from_bytes(&e.handle).unwrap(),
-                MetaBlock::from_bytes(&e.metablock).unwrap(),
+                (
+                  MetaBlock::from_bytes(&e.metablock).unwrap(),
+                  Block::from_bytes(&e.block).unwrap(),
+                  Nonces::from_bytes(&e.nonces).unwrap(),
+                ),
               )
             })
             .collect();
@@ -1399,10 +1430,14 @@ impl CoordinatorState {
       .map(|(_h, m)| {
         let entries = m
           .iter()
-          .map(|(handle, metablock)| endorser_proto::LedgerTailMapEntry {
-            handle: handle.to_bytes(),
-            metablock: metablock.to_bytes(),
-          })
+          .map(
+            |(handle, (metablock, block, nonces))| endorser_proto::LedgerTailMapEntry {
+              handle: handle.to_bytes(),
+              metablock: metablock.to_bytes(),
+              block: block.to_bytes(),
+              nonces: nonces.to_bytes(),
+            },
+          )
           .collect();
         endorser_proto::LedgerTailMap { entries }
       })
@@ -1703,8 +1738,10 @@ impl CoordinatorState {
   ) -> Result<Receipts, CoordinatorError> {
     let handle = NimbleDigest::digest(handle_bytes);
     let genesis_block = Block::new(block_bytes);
-    let block_hash =
-      NimbleDigest::digest(&genesis_block.hash().to_bytes()).digest_with(&NimbleDigest::default());
+
+    let hash_block = genesis_block.hash();
+    let hash_nonces = Nonces::new().hash();
+    let block_hash = compute_aggregated_block_hash(&hash_block.to_bytes(), &hash_nonces.to_bytes());
 
     let res = self
       .ledger_store
@@ -1725,7 +1762,7 @@ impl CoordinatorState {
         None => self.get_endorser_pks(),
       };
       let res = self
-        .endorser_create_ledger(&endorsers, &handle, &block_hash)
+        .endorser_create_ledger(&endorsers, &handle, &block_hash, genesis_block)
         .await;
       if res.is_err() {
         eprintln!("Failed to create ledger in endorsers ({:?})", res);
@@ -1789,7 +1826,14 @@ impl CoordinatorState {
         None => self.get_endorser_pks(),
       };
       let res = self
-        .endorser_append_ledger(&endorsers, &handle, &block_hash, actual_height)
+        .endorser_append_ledger(
+          &endorsers,
+          &handle,
+          &block_hash,
+          actual_height,
+          data_block,
+          nonces,
+        )
         .await;
       if res.is_err() {
         eprintln!("Failed to append to the ledger in endorsers {:?}", res);
@@ -1819,30 +1863,9 @@ impl CoordinatorState {
     nonce: &Nonce,
   ) -> Result<LedgerEntry, CoordinatorError> {
     let endorsers = self.get_endorser_pks();
-    let res = self
+    self
       .endorser_read_ledger_tail(&endorsers, handle, nonce)
-      .await;
-    match res {
-      Ok((receipts, height)) => {
-        let mut ledger_entry = {
-          let res = self.ledger_store.read_ledger_by_index(handle, height).await;
-          if res.is_err() {
-            eprintln!(
-              "Failed to read the ledger from the ledger store {:?}",
-              res.unwrap_err()
-            );
-            return Err(CoordinatorError::FailedToCallLedgerStore);
-          }
-          res.unwrap()
-        };
-        ledger_entry.set_receipts(receipts);
-        Ok(ledger_entry)
-      },
-      Err(error) => {
-        eprintln!("Failed to read the ledger tail {:?}", error);
-        Err(error)
-      },
-    }
+      .await
   }
 
   async fn read_ledger_by_index_internal(

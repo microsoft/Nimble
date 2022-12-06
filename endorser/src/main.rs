@@ -1,8 +1,8 @@
 use crate::{endorser_state::EndorserState, errors::EndorserError};
 use clap::{App, Arg};
 use ledger::{
-  produce_hash_of_state, signature::PublicKeyTrait, CustomSerde, LedgerChunk, LedgerTailMap,
-  MetaBlock, NimbleDigest, Receipts,
+  produce_hash_of_state, signature::PublicKeyTrait, Block, CustomSerde, LedgerChunk, LedgerTailMap,
+  MetaBlock, NimbleDigest, Nonces, Receipts,
 };
 use std::collections::HashMap;
 use tonic::{transport::Server, Code, Request, Response, Status};
@@ -91,7 +91,11 @@ impl EndorserCall for EndorserServiceState {
     &self,
     req: Request<NewLedgerReq>,
   ) -> Result<Response<NewLedgerResp>, Status> {
-    let NewLedgerReq { handle, block_hash } = req.into_inner();
+    let NewLedgerReq {
+      handle,
+      block_hash,
+      block,
+    } = req.into_inner();
     let handle = {
       let res = NimbleDigest::from_bytes(&handle);
       if res.is_err() {
@@ -108,7 +112,15 @@ impl EndorserCall for EndorserServiceState {
       res.unwrap()
     };
 
-    let res = self.state.new_ledger(&handle, &block_hash);
+    let block = {
+      let res = Block::from_bytes(&block);
+      if res.is_err() {
+        return Err(Status::invalid_argument("Block is invalid"));
+      }
+      res.unwrap()
+    };
+
+    let res = self.state.new_ledger(&handle, &block_hash, &block);
 
     match res {
       Ok(receipt) => {
@@ -133,12 +145,20 @@ impl EndorserCall for EndorserServiceState {
       handle,
       block_hash,
       expected_height,
+      block,
+      nonces,
     } = req.into_inner();
 
     let handle_instance = NimbleDigest::from_bytes(&handle);
     let block_hash_instance = NimbleDigest::from_bytes(&block_hash);
+    let block_instance = Block::from_bytes(&block);
+    let nonces_instance = Nonces::from_bytes(&nonces);
 
-    if handle_instance.is_err() || block_hash_instance.is_err() {
+    if handle_instance.is_err()
+      || block_hash_instance.is_err()
+      || block_instance.is_err()
+      || nonces_instance.is_err()
+    {
       return Err(Status::invalid_argument("Invalid input sizes"));
     }
 
@@ -148,10 +168,16 @@ impl EndorserCall for EndorserServiceState {
 
     let handle = handle_instance.unwrap();
     let block_hash = block_hash_instance.unwrap();
+    let block = block_instance.unwrap();
+    let nonces = nonces_instance.unwrap();
 
-    let res = self
-      .state
-      .append(&handle, &block_hash, expected_height as usize);
+    let res = self.state.append(
+      &handle,
+      &block_hash,
+      expected_height as usize,
+      &block,
+      &nonces,
+    );
 
     match res {
       Ok(receipt) => {
@@ -187,9 +213,11 @@ impl EndorserCall for EndorserServiceState {
     let res = self.state.read_latest(&handle, &nonce);
 
     match res {
-      Ok(receipt) => {
+      Ok((receipt, block, nonces)) => {
         let reply = ReadLatestResp {
           receipt: receipt.to_bytes().to_vec(),
+          block: block.to_bytes().to_vec(),
+          nonces: nonces.to_bytes().to_vec(),
         };
         Ok(Response::new(reply))
       },
@@ -227,9 +255,11 @@ impl EndorserCall for EndorserServiceState {
       Ok((receipt, ledger_tail_map)) => {
         let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
           .iter()
-          .map(|(handle, metablock)| LedgerTailMapEntry {
+          .map(|(handle, (metablock, block, nonces))| LedgerTailMapEntry {
             handle: handle.to_bytes(),
             metablock: metablock.to_bytes(),
+            block: block.to_bytes(),
+            nonces: nonces.to_bytes(),
           })
           .collect();
         let reply = FinalizeStateResp {
@@ -260,12 +290,16 @@ impl EndorserCall for EndorserServiceState {
       block_hash,
       expected_height,
     } = req.into_inner();
-    let ledger_tail_map_rs: HashMap<NimbleDigest, MetaBlock> = ledger_tail_map
+    let ledger_tail_map_rs: LedgerTailMap = ledger_tail_map
       .into_iter()
       .map(|e| {
         (
           NimbleDigest::from_bytes(&e.handle).unwrap(),
-          MetaBlock::from_bytes(&e.metablock).unwrap(),
+          (
+            MetaBlock::from_bytes(&e.metablock).unwrap(),
+            Block::from_bytes(&e.block).unwrap(),
+            Nonces::from_bytes(&e.nonces).unwrap(),
+          ),
         )
       })
       .collect();
@@ -308,9 +342,11 @@ impl EndorserCall for EndorserServiceState {
       Ok((receipt, endorser_mode, ledger_tail_map)) => {
         let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
           .iter()
-          .map(|(handle, metablock)| LedgerTailMapEntry {
+          .map(|(handle, (metablock, block, nonces))| LedgerTailMapEntry {
             handle: handle.to_bytes(),
             metablock: metablock.to_bytes(),
+            block: block.to_bytes(),
+            nonces: nonces.to_bytes(),
           })
           .collect();
         let reply = ReadStateResp {
@@ -348,7 +384,11 @@ impl EndorserCall for EndorserServiceState {
           .map(|e| {
             (
               NimbleDigest::from_bytes(&e.handle).unwrap(),
-              MetaBlock::from_bytes(&e.metablock).unwrap(),
+              (
+                MetaBlock::from_bytes(&e.metablock).unwrap(),
+                Block::from_bytes(&e.block).unwrap(),
+                Nonces::from_bytes(&e.nonces).unwrap(),
+              ),
             )
           })
           .collect();
