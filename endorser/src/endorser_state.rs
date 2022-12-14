@@ -1,17 +1,14 @@
 use crate::errors::EndorserError;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-pub mod endorser_proto {
-  tonic::include_proto!("endorser_proto");
-}
+use itertools::Itertools;
 
-use endorser_proto::EndorserMode;
+use ledger::endorser_proto::{EndorserMode, LedgerChunkEntry, LedgerTailMap, LedgerTailMapEntry};
 
 use ledger::{
   produce_hash_of_state,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey},
-  Block, Handle, IdSig, LedgerChunk, LedgerTailMap, MetaBlock, NimbleDigest, NimbleHashTrait,
-  Nonces, Receipt, Receipts,
+  Block, CustomSerde, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait, Nonces, Receipt,
+  Receipts,
 };
 use std::{
   collections::{hash_map, HashMap},
@@ -68,7 +65,7 @@ impl EndorserState {
   pub fn initialize_state(
     &self,
     group_identity: &NimbleDigest,
-    ledger_tail_map: &LedgerTailMap,
+    ledger_tail_map: &Vec<LedgerTailMapEntry>,
     view_ledger_tail_metablock: &MetaBlock,
     block_hash: &NimbleDigest,
     expected_height: usize,
@@ -79,8 +76,15 @@ impl EndorserState {
       }
 
       if let Ok(mut ledger_tail_map_wr) = self.ledger_tail_map.write() {
-        for (handle, metablock) in ledger_tail_map {
-          ledger_tail_map_wr.insert(*handle, Arc::new(RwLock::new(metablock.clone())));
+        for entry in ledger_tail_map {
+          ledger_tail_map_wr.insert(
+            NimbleDigest::from_bytes(&entry.handle).unwrap(),
+            Arc::new(RwLock::new((
+              MetaBlock::from_bytes(&entry.metablock).unwrap(),
+              Block::from_bytes(&entry.block).unwrap(),
+              Nonces::from_bytes(&entry.nonces).unwrap(),
+            ))),
+          );
         }
       }
 
@@ -310,7 +314,7 @@ impl EndorserState {
   fn append_view_ledger(
     &self,
     view_ledger_state: &mut ViewLedgerState,
-    ledger_tail_map: &LedgerTailMap,
+    ledger_tail_map: &Vec<LedgerTailMapEntry>,
     block_hash: &NimbleDigest,
     expected_height: usize,
   ) -> Result<Receipt, EndorserError> {
@@ -350,7 +354,7 @@ impl EndorserState {
   fn sign_view_ledger(
     &self,
     view_ledger_state: &ViewLedgerState,
-    ledger_tail_map: &LedgerTailMap,
+    ledger_tail_map: &Vec<LedgerTailMapEntry>,
   ) -> Receipt {
     // the view embedded in the view ledger is the hash of the current state of the endorser
     let view = produce_hash_of_state(ledger_tail_map);
@@ -366,12 +370,18 @@ impl EndorserState {
     )
   }
 
-  fn construct_ledger_tail_map(&self) -> Result<LedgerTailMap, EndorserError> {
-    let mut ledger_tail_map = HashMap::new();
+  fn construct_ledger_tail_map(&self) -> Result<Vec<LedgerTailMapEntry>, EndorserError> {
+    let mut ledger_tail_map = Vec::new();
     if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
-      for (handle, value) in ledger_tail_map_rd.iter() {
+      for (handle, value) in ledger_tail_map_rd.deref().iter().sorted_by_key(|x| x.0) {
         if let Ok(e) = value.read() {
-          ledger_tail_map.insert(*handle, (e.0.clone(), e.1.clone(), e.2.clone()));
+          ledger_tail_map.push(LedgerTailMapEntry {
+            handle: handle.to_bytes(),
+            height: e.0.get_height() as u64,
+            metablock: e.0.to_bytes(),
+            block: e.1.to_bytes(),
+            nonces: e.2.to_bytes(),
+          });
         } else {
           return Err(EndorserError::FailedToAcquireLedgerEntryReadLock);
         }
@@ -387,7 +397,7 @@ impl EndorserState {
     &self,
     block_hash: &NimbleDigest,
     expected_height: usize,
-  ) -> Result<(Receipt, LedgerTailMap), EndorserError> {
+  ) -> Result<(Receipt, Vec<LedgerTailMapEntry>), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
       if view_ledger_state.endorser_mode == EndorserMode::Uninitialized
         || view_ledger_state.endorser_mode == EndorserMode::Initialized
@@ -416,20 +426,14 @@ impl EndorserState {
     }
   }
 
-  pub fn read_state(&self) -> Result<(Receipt, EndorserMode, LedgerTailMap), EndorserError> {
+  pub fn read_state(
+    &self,
+  ) -> Result<(Receipt, EndorserMode, Vec<LedgerTailMapEntry>), EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       let ledger_tail_map = self.construct_ledger_tail_map()?;
 
-      let view = produce_hash_of_state(&ledger_tail_map);
-      let message = view.digest_with(&view_ledger_state.view_ledger_tail_hash);
-      let signature = self.private_key.sign(&message.to_bytes()).unwrap();
-
       Ok((
-        Receipt::new(
-          view,
-          view_ledger_state.view_ledger_tail_metablock.clone(),
-          IdSig::new(self.public_key.clone(), signature),
-        ),
+        self.sign_view_ledger(view_ledger_state.deref(), &ledger_tail_map),
         view_ledger_state.endorser_mode,
         ledger_tail_map,
       ))
@@ -442,8 +446,8 @@ impl EndorserState {
     &self,
     old_config: &[u8],
     new_config: &[u8],
-    ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
-    ledger_chunks: &Vec<LedgerChunk>,
+    ledger_tail_maps: &Vec<LedgerTailMap>,
+    ledger_chunks: &Vec<LedgerChunkEntry>,
     receipts: &Receipts,
   ) -> Result<(), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
@@ -517,7 +521,7 @@ mod tests {
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
       &view_block_hash,
-      &HashMap::new(),
+      &Vec::new(),
       &MetaBlock::default(),
       &view_block_hash,
       height_plus_one,
@@ -529,7 +533,7 @@ mod tests {
       .view_ledger_state
       .write()
       .expect("failed to acquire write lock")
-      .endorser_mode = endorser_proto::EndorserMode::Active;
+      .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let handle = {
@@ -616,7 +620,7 @@ mod tests {
     // The coordinator initializes the endorser by calling initialize_state
     let res = endorser_state.initialize_state(
       &view_block_hash,
-      &HashMap::new(),
+      &Vec::new(),
       &MetaBlock::default(),
       &view_block_hash,
       height_plus_one,
@@ -628,7 +632,7 @@ mod tests {
       .view_ledger_state
       .write()
       .expect("failed to acquire write lock")
-      .endorser_mode = endorser_proto::EndorserMode::Active;
+      .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let block = Block::new(&rand::thread_rng().gen::<[u8; 32]>());

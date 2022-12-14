@@ -1,25 +1,18 @@
 use crate::{endorser_state::EndorserState, errors::EndorserError};
 use clap::{App, Arg};
 use ledger::{
-  produce_hash_of_state, signature::PublicKeyTrait, Block, CustomSerde, LedgerChunk, LedgerTailMap,
-  MetaBlock, NimbleDigest, Nonces, Receipts,
+  signature::PublicKeyTrait, Block, CustomSerde, MetaBlock, NimbleDigest, Nonces, Receipts,
 };
-use std::collections::HashMap;
 use tonic::{transport::Server, Code, Request, Response, Status};
 
 mod endorser_state;
 mod errors;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-pub mod endorser_proto {
-  tonic::include_proto!("endorser_proto");
-}
-
-use endorser_proto::{
+use ledger::endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
-  GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, LedgerTailMapEntry,
-  NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
+  GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
 };
 
 pub struct EndorserServiceState {
@@ -253,18 +246,9 @@ impl EndorserCall for EndorserServiceState {
 
     match res {
       Ok((receipt, ledger_tail_map)) => {
-        let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
-          .iter()
-          .map(|(handle, (metablock, block, nonces))| LedgerTailMapEntry {
-            handle: handle.to_bytes(),
-            metablock: metablock.to_bytes(),
-            block: block.to_bytes(),
-            nonces: nonces.to_bytes(),
-          })
-          .collect();
         let reply = FinalizeStateResp {
           receipt: receipt.to_bytes().to_vec(),
-          ledger_tail_map: ledger_tail_map_proto,
+          ledger_tail_map,
         };
         Ok(Response::new(reply))
       },
@@ -290,25 +274,12 @@ impl EndorserCall for EndorserServiceState {
       block_hash,
       expected_height,
     } = req.into_inner();
-    let ledger_tail_map_rs: LedgerTailMap = ledger_tail_map
-      .into_iter()
-      .map(|e| {
-        (
-          NimbleDigest::from_bytes(&e.handle).unwrap(),
-          (
-            MetaBlock::from_bytes(&e.metablock).unwrap(),
-            Block::from_bytes(&e.block).unwrap(),
-            Nonces::from_bytes(&e.nonces).unwrap(),
-          ),
-        )
-      })
-      .collect();
     let group_identity_rs = NimbleDigest::from_bytes(&group_identity).unwrap();
     let view_tail_metablock_rs = MetaBlock::from_bytes(&view_tail_metablock).unwrap();
     let block_hash_rs = NimbleDigest::from_bytes(&block_hash).unwrap();
     let res = self.state.initialize_state(
       &group_identity_rs,
-      &ledger_tail_map_rs,
+      &ledger_tail_map,
       &view_tail_metablock_rs,
       &block_hash_rs,
       expected_height as usize,
@@ -340,19 +311,10 @@ impl EndorserCall for EndorserServiceState {
 
     match res {
       Ok((receipt, endorser_mode, ledger_tail_map)) => {
-        let ledger_tail_map_proto: Vec<LedgerTailMapEntry> = ledger_tail_map
-          .iter()
-          .map(|(handle, (metablock, block, nonces))| LedgerTailMapEntry {
-            handle: handle.to_bytes(),
-            metablock: metablock.to_bytes(),
-            block: block.to_bytes(),
-            nonces: nonces.to_bytes(),
-          })
-          .collect();
         let reply = ReadStateResp {
           receipt: receipt.to_bytes().to_vec(),
           mode: endorser_mode as i32,
-          ledger_tail_map: ledger_tail_map_proto,
+          ledger_tail_map,
         };
         Ok(Response::new(reply))
       },
@@ -375,49 +337,12 @@ impl EndorserCall for EndorserServiceState {
       ledger_chunks,
       receipts,
     } = req.into_inner();
-    let ledger_tail_maps_rs: HashMap<NimbleDigest, LedgerTailMap> = ledger_tail_maps
-      .into_iter()
-      .map(|m| {
-        let ledger_tail_map_rs = m
-          .entries
-          .into_iter()
-          .map(|e| {
-            (
-              NimbleDigest::from_bytes(&e.handle).unwrap(),
-              (
-                MetaBlock::from_bytes(&e.metablock).unwrap(),
-                Block::from_bytes(&e.block).unwrap(),
-                Nonces::from_bytes(&e.nonces).unwrap(),
-              ),
-            )
-          })
-          .collect();
-        (
-          produce_hash_of_state(&ledger_tail_map_rs),
-          ledger_tail_map_rs,
-        )
-      })
-      .collect();
-    let ledger_chunks_rs: Vec<LedgerChunk> = ledger_chunks
-      .into_iter()
-      .map(|e| LedgerChunk {
-        handle: NimbleDigest::from_bytes(&e.handle).unwrap(),
-        hash: NimbleDigest::from_bytes(&e.hash).unwrap(),
-        height: e.height as usize,
-        block_hashes: e
-          .block_hashes
-          .iter()
-          .map(|b| NimbleDigest::from_bytes(b).unwrap())
-          .collect(),
-      })
-      .collect();
     let receipts_rs = Receipts::from_bytes(&receipts).unwrap();
-
     let res = self.state.activate(
       &old_config,
       &new_config,
-      &ledger_tail_maps_rs,
-      &ledger_chunks_rs,
+      &ledger_tail_maps,
+      &ledger_chunks,
       &receipts_rs,
     );
 

@@ -56,9 +56,10 @@ message AppendResp {
 
 message LedgerTailMapEntry {
   bytes handle = 1;
-  bytes metablock = 2;
-  bytes block = 3;
-  bytes nonces = 4;
+  uint64 height = 2;
+  bytes metablock = 3;
+  bytes block = 4;
+  bytes nonces = 5;
 }
 
 message LedgerTailMap {

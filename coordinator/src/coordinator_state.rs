@@ -3,13 +3,14 @@ use ledger::{
   compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut,
   errors::VerificationError,
   signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorserHostnames, Handle, LedgerChunk, LedgerTailMap, MetaBlock,
-  NimbleDigest, NimbleHashTrait, Nonce, Nonces, Receipt, Receipts, VerifierState,
+  Block, CustomSerde, EndorserHostnames, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
+  Nonces, Receipt, Receipts, VerifierState,
 };
 use rand::random;
 use std::{
-  collections::HashMap,
+  collections::{HashMap, HashSet},
   convert::TryInto,
+  ops::Deref,
   sync::{Arc, RwLock},
 };
 use store::ledger::{
@@ -23,17 +24,12 @@ use tonic::{
   Code, Status,
 };
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-pub mod endorser_proto {
-  tonic::include_proto!("endorser_proto");
-}
-
-use endorser_proto::endorser_call_client::EndorserCallClient;
+use ledger::endorser_proto;
 
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
 struct EndorserClients {
-  clients: Vec<EndorserCallClient<Channel>>,
+  clients: Vec<endorser_proto::endorser_call_client::EndorserCallClient<Channel>>,
   uri: String,
 }
 
@@ -55,7 +51,7 @@ const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to end
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
 async fn get_public_key_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::GetPublicKeyReq,
 ) -> Result<tonic::Response<endorser_proto::GetPublicKeyResp>, Status> {
   loop {
@@ -81,7 +77,7 @@ async fn get_public_key_with_retry(
 }
 
 async fn new_ledger_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::NewLedgerReq,
 ) -> Result<tonic::Response<endorser_proto::NewLedgerResp>, Status> {
   loop {
@@ -107,7 +103,7 @@ async fn new_ledger_with_retry(
 }
 
 async fn append_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::AppendReq,
 ) -> Result<tonic::Response<endorser_proto::AppendResp>, Status> {
   loop {
@@ -133,7 +129,7 @@ async fn append_with_retry(
 }
 
 async fn read_latest_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::ReadLatestReq,
 ) -> Result<tonic::Response<endorser_proto::ReadLatestResp>, Status> {
   loop {
@@ -159,12 +155,22 @@ async fn read_latest_with_retry(
 }
 
 async fn initialize_state_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
-  request: endorser_proto::InitializeStateReq,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+  group_identity: Vec<u8>,
+  ledger_tail_map: Arc<Vec<endorser_proto::LedgerTailMapEntry>>,
+  view_tail_metablock: Vec<u8>,
+  block_hash: Vec<u8>,
+  expected_height: usize,
 ) -> Result<tonic::Response<endorser_proto::InitializeStateResp>, Status> {
   loop {
     let res = endorser_client
-      .initialize_state(tonic::Request::new(request.clone()))
+      .initialize_state(tonic::Request::new(endorser_proto::InitializeStateReq {
+        group_identity: group_identity.clone(),
+        ledger_tail_map: ledger_tail_map.deref().clone(),
+        view_tail_metablock: view_tail_metablock.clone(),
+        block_hash: block_hash.clone(),
+        expected_height: expected_height as u64,
+      }))
       .await;
     match res {
       Ok(resp) => {
@@ -185,7 +191,7 @@ async fn initialize_state_with_retry(
 }
 
 async fn finalize_state_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::FinalizeStateReq,
 ) -> Result<tonic::Response<endorser_proto::FinalizeStateResp>, Status> {
   loop {
@@ -211,7 +217,7 @@ async fn finalize_state_with_retry(
 }
 
 async fn read_state_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::ReadStateReq,
 ) -> Result<tonic::Response<endorser_proto::ReadStateResp>, Status> {
   loop {
@@ -237,12 +243,22 @@ async fn read_state_with_retry(
 }
 
 async fn activate_with_retry(
-  endorser_client: &mut EndorserCallClient<Channel>,
-  request: endorser_proto::ActivateReq,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+  old_config: Vec<u8>,
+  new_config: Vec<u8>,
+  ledger_tail_maps: Arc<Vec<endorser_proto::LedgerTailMap>>,
+  ledger_chunks: Vec<endorser_proto::LedgerChunkEntry>,
+  receipts: Vec<u8>,
 ) -> Result<tonic::Response<endorser_proto::ActivateResp>, Status> {
   loop {
     let res = endorser_client
-      .activate(tonic::Request::new(request.clone()))
+      .activate(tonic::Request::new(endorser_proto::ActivateReq {
+        old_config: old_config.clone(),
+        new_config: new_config.clone(),
+        ledger_tail_maps: ledger_tail_maps.deref().clone(),
+        ledger_chunks: ledger_chunks.clone(),
+        receipts: receipts.clone(),
+      }))
       .await;
     match res {
       Ok(resp) => {
@@ -264,7 +280,7 @@ async fn activate_with_retry(
 
 async fn update_endorser(
   ledger_store: LedgerStoreRef,
-  endorser_client: &mut EndorserCallClient<Channel>,
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   handle: NimbleDigest,
   start: usize,
   end: usize,
@@ -623,7 +639,13 @@ impl CoordinatorState {
     Ok(endorsers)
   }
 
-  fn get_endorser_client(&self, pk: &[u8]) -> Option<(EndorserCallClient<Channel>, String)> {
+  fn get_endorser_client(
+    &self,
+    pk: &[u8],
+  ) -> Option<(
+    endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+    String,
+  )> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       let e = conn_map_rd.get(pk);
       match e {
@@ -705,7 +727,8 @@ impl CoordinatorState {
               endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
-              let mut client = EndorserCallClient::new(channel);
+              let mut client =
+                endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
 
               let res =
                 get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
@@ -852,24 +875,13 @@ impl CoordinatorState {
     &self,
     group_identity: &NimbleDigest,
     endorsers: &EndorserHostnames,
-    ledger_tail_map: &LedgerTailMap,
+    ledger_tail_map: Vec<endorser_proto::LedgerTailMapEntry>,
     view_tail_metablock: &MetaBlock,
     block_hash: &NimbleDigest,
     expected_height: usize,
   ) -> Receipts {
-    let ledger_tail_map_proto: Vec<endorser_proto::LedgerTailMapEntry> = ledger_tail_map
-      .iter()
-      .map(
-        |(handle, (metablock, block, nonces))| endorser_proto::LedgerTailMapEntry {
-          handle: handle.to_bytes(),
-          metablock: metablock.to_bytes(),
-          block: block.to_bytes(),
-          nonces: nonces.to_bytes(),
-        },
-      )
-      .collect();
-
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+    let ledger_tail_map_arc = Arc::new(ledger_tail_map);
     for (pk, _uri) in endorsers {
       let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
         Some((client, endorser)) => (client, endorser),
@@ -877,7 +889,7 @@ impl CoordinatorState {
       };
 
       let tx = mpsc_tx.clone();
-      let ledger_tail_map_copy = ledger_tail_map_proto.clone();
+      let ledger_tail_map_arc_copy = ledger_tail_map_arc.clone();
       let view_tail_metablock_bytes = view_tail_metablock.to_bytes().to_vec();
       let block_hash_copy = block_hash.to_bytes();
       let pk_bytes = pk.clone();
@@ -885,13 +897,11 @@ impl CoordinatorState {
       let _job = tokio::spawn(async move {
         let res = initialize_state_with_retry(
           &mut endorser_client,
-          endorser_proto::InitializeStateReq {
-            group_identity: group_identity_copy,
-            ledger_tail_map: ledger_tail_map_copy,
-            view_tail_metablock: view_tail_metablock_bytes,
-            block_hash: block_hash_copy,
-            expected_height: expected_height as u64,
-          },
+          group_identity_copy,
+          ledger_tail_map_arc_copy,
+          view_tail_metablock_bytes,
+          block_hash_copy,
+          expected_height,
         )
         .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
@@ -1336,7 +1346,7 @@ impl CoordinatorState {
     endorsers: &EndorserHostnames,
     block_hash: &NimbleDigest,
     expected_height: usize,
-  ) -> (Receipts, HashMap<NimbleDigest, LedgerTailMap>) {
+  ) -> (Receipts, Vec<endorser_proto::LedgerTailMap>) {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for (pk, _uri) in endorsers {
@@ -1364,7 +1374,8 @@ impl CoordinatorState {
     drop(mpsc_tx);
 
     let mut receipts = Receipts::new();
-    let mut ledger_tail_maps = HashMap::new();
+    let mut ledger_tail_maps = Vec::new();
+    let mut state_hashes = HashSet::new();
 
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
@@ -1384,21 +1395,11 @@ impl CoordinatorState {
               continue;
             },
           };
-          let ledger_tail_map_rs: LedgerTailMap = ledger_tail_map
-            .into_iter()
-            .map(|e| {
-              (
-                NimbleDigest::from_bytes(&e.handle).unwrap(),
-                (
-                  MetaBlock::from_bytes(&e.metablock).unwrap(),
-                  Block::from_bytes(&e.block).unwrap(),
-                  Nonces::from_bytes(&e.nonces).unwrap(),
-                ),
-              )
-            })
-            .collect();
-          if !ledger_tail_maps.contains_key(receipt_rs.get_view()) {
-            ledger_tail_maps.insert(*receipt_rs.get_view(), ledger_tail_map_rs);
+          if !state_hashes.contains(receipt_rs.get_view()) {
+            ledger_tail_maps.push(endorser_proto::LedgerTailMap {
+              entries: ledger_tail_map,
+            });
+            state_hashes.insert(*receipt_rs.get_view());
           }
         },
         Err(status) => {
@@ -1421,38 +1422,12 @@ impl CoordinatorState {
     endorsers: &EndorserHostnames,
     old_config: Block,
     new_config: Block,
-    ledger_tail_maps: &HashMap<NimbleDigest, LedgerTailMap>,
-    ledger_chunks: &[LedgerChunk],
+    ledger_tail_maps: Vec<endorser_proto::LedgerTailMap>,
+    ledger_chunks: Vec<endorser_proto::LedgerChunkEntry>,
     receipts: &Receipts,
   ) -> usize {
-    let ledger_tail_maps_proto: Vec<endorser_proto::LedgerTailMap> = ledger_tail_maps
-      .iter()
-      .map(|(_h, m)| {
-        let entries = m
-          .iter()
-          .map(
-            |(handle, (metablock, block, nonces))| endorser_proto::LedgerTailMapEntry {
-              handle: handle.to_bytes(),
-              metablock: metablock.to_bytes(),
-              block: block.to_bytes(),
-              nonces: nonces.to_bytes(),
-            },
-          )
-          .collect();
-        endorser_proto::LedgerTailMap { entries }
-      })
-      .collect();
-    let ledger_chunks_proto: Vec<endorser_proto::LedgerChunkEntry> = ledger_chunks
-      .iter()
-      .map(|c| endorser_proto::LedgerChunkEntry {
-        handle: c.handle.to_bytes(),
-        hash: c.hash.to_bytes(),
-        height: c.height as u64,
-        block_hashes: c.block_hashes.iter().map(|b| b.to_bytes()).collect(),
-      })
-      .collect();
-
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+    let ledger_tail_maps_arc = Arc::new(ledger_tail_maps);
 
     for (pk, _uri) in endorsers {
       let (mut endorser_client, endorser) = match self.get_endorser_client(pk) {
@@ -1464,19 +1439,17 @@ impl CoordinatorState {
       let pk_bytes = pk.clone();
       let old_config_copy = old_config.clone();
       let new_config_copy = new_config.clone();
-      let ledger_tail_maps_copy = ledger_tail_maps_proto.clone();
-      let ledger_chunks_copy = ledger_chunks_proto.clone();
+      let ledger_tail_maps_arc_copy = ledger_tail_maps_arc.clone();
+      let ledger_chunks_copy = ledger_chunks.clone();
       let receipts_copy = receipts.to_bytes();
       let _job = tokio::spawn(async move {
         let res = activate_with_retry(
           &mut endorser_client,
-          endorser_proto::ActivateReq {
-            old_config: old_config_copy.to_bytes(),
-            new_config: new_config_copy.to_bytes(),
-            ledger_tail_maps: ledger_tail_maps_copy,
-            ledger_chunks: ledger_chunks_copy,
-            receipts: receipts_copy.to_vec(),
-          },
+          old_config_copy.to_bytes(),
+          new_config_copy.to_bytes(),
+          ledger_tail_maps_arc_copy,
+          ledger_chunks_copy,
+          receipts_copy,
         )
         .await;
         let _ = tx.send((endorser, pk_bytes, res)).await;
@@ -1600,7 +1573,7 @@ impl CoordinatorState {
     let (finalize_receipts, ledger_tail_maps) = if existing_endorsers.is_empty() {
       assert!(view_ledger_height == 1);
 
-      (Receipts::new(), HashMap::new())
+      (Receipts::new(), Vec::new())
     } else {
       self
         .endorser_finalize_state(
@@ -1634,7 +1607,7 @@ impl CoordinatorState {
       .endorser_initialize_state(
         &group_identity,
         new_endorsers,
-        &max_cut,
+        max_cut,
         &view_tail_metablock,
         &view_ledger_genesis_block.hash(),
         view_ledger_height,
@@ -1658,17 +1631,20 @@ impl CoordinatorState {
     }
 
     // Retrieve blocks that need for verifying the view change
-    let res = compute_cut_diffs(&ledger_tail_maps);
-    if let Err(e) = res {
-      eprintln!("the ledger tail maps are inconsistent {:?}", e);
-      return Err(CoordinatorError::FailedToActivate);
-    }
-    let cut_diffs = res.unwrap();
-    let mut ledger_chunks: Vec<LedgerChunk> = Vec::new();
-    for (handle, (hash, low, high)) in &cut_diffs {
-      let mut block_hashes: Vec<NimbleDigest> = Vec::new();
-      for index in (*low + 1)..=*high {
-        let res = self.ledger_store.read_ledger_by_index(handle, index).await;
+    let cut_diffs = compute_cut_diffs(&ledger_tail_maps);
+    let mut ledger_chunks: Vec<endorser_proto::LedgerChunkEntry> = Vec::new();
+    for cut_diff in &cut_diffs {
+      if cut_diff.low == cut_diff.high {
+        continue;
+      }
+      let mut block_hashes: Vec<Vec<u8>> =
+        Vec::with_capacity((cut_diff.high - cut_diff.low) as usize);
+      let h = NimbleDigest::from_bytes(&cut_diff.handle).unwrap();
+      for index in (cut_diff.low + 1)..=cut_diff.high {
+        let res = self
+          .ledger_store
+          .read_ledger_by_index(&h, index as usize)
+          .await;
         if let Err(e) = res {
           eprintln!("Failed to read the ledger store {:?}", e);
           return Err(CoordinatorError::FailedToCallLedgerStore);
@@ -1678,12 +1654,12 @@ impl CoordinatorState {
           &ledger_entry.get_block().hash().to_bytes(),
           &ledger_entry.get_nonces().hash().to_bytes(),
         );
-        block_hashes.push(block_hash);
+        block_hashes.push(block_hash.to_bytes());
       }
-      ledger_chunks.push(LedgerChunk {
-        handle: *handle,
-        hash: *hash,
-        height: *low,
+      ledger_chunks.push(endorser_proto::LedgerChunkEntry {
+        handle: cut_diff.handle.clone(),
+        hash: cut_diff.hash.to_bytes(),
+        height: cut_diff.low as u64,
         block_hashes,
       });
     }
@@ -1693,8 +1669,8 @@ impl CoordinatorState {
         new_endorsers,
         view_ledger_entry.get_block().clone(),
         view_ledger_genesis_block.clone(),
-        &ledger_tail_maps,
-        &ledger_chunks,
+        ledger_tail_maps,
+        ledger_chunks,
         &receipts,
       )
       .await;
