@@ -82,4 +82,4 @@ The results include: (1) reconfiguration time; (2) bandwidth. You should see bot
 ## Reproducing the results of Figures 5 and 6
 
 Figures 5 and 6 require running our modified version of the Hadoop Distributed File System (HDFS) on top of Nimble.
-For instructions on how to setup Nimble-HDFS, please see this repository: [https://github.com/mitthu/hadoop-nimble](https://github.com/mitthu/nimble-hadoop).
+For instructions on how to setup Nimble-HDFS, please see this repository: [https://github.com/mitthu/hadoop-nimble](https://github.com/mitthu/hadoop-nimble).
