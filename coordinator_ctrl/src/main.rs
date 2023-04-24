@@ -1,6 +1,7 @@
 use clap::{App, Arg};
 
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct EndorserOpResponse {
@@ -48,7 +49,11 @@ async fn main() {
     let uri = base64_url::encode(&x);
     let endorser_url =
       reqwest::Url::parse(&format!("{}/endorsers/{}", coordinator_addr, uri)).unwrap();
+
+    let now = Instant::now();
     let res = client.put(endorser_url).send().await;
+    println!("Reconfiguration time: {} ms", now.elapsed().as_millis());
+
     match res {
       Ok(resp) => {
         assert!(resp.status() == reqwest::StatusCode::OK);

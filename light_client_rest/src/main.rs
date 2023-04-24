@@ -68,7 +68,7 @@ async fn main() {
   let config = App::new("client")
     .arg(
       Arg::with_name("endpoint")
-        .long("endorser")
+        .long("endpoint")
         .short("e")
         .help("The hostname of the endpoint")
         .default_value("http://[::1]:8082"),

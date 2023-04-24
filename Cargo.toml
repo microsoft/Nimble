@@ -1,17 +1,12 @@
 [workspace]
 members = [
-    "client",
     "coordinator",
     "endorser",
     "ledger",
     "store",
-    "bench",
     "endpoint",
-    "endpoint_grpc",
     "endpoint_rest",
-    "light_client_grpc",
     "light_client_rest",
-    "helper",
     "coordinator_ctrl",
 ]
 

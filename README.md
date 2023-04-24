@@ -1,4 +1,15 @@
-# NimbleLedger: An append-only ledger with minimal TCB
+# Nimble: A fault-tolerant rollback resistant service for confidential computing with minimal TCB
+
+Nimble is a service that helps applications running in trusted execution environments (TEEs) detect 
+rollback attacks (i.e., detect whether a data item retrieved from persistent storage is the latest version).
+
+Nimble can also be used as a generic tamper-proof fault-tolerant append-only ledger.
+
+Nimble will appear at [OSDI 2023](https://www.usenix.org/conference/osdi23).
+
+
+To reproduce the results in our paper, please follow the instructions below
+to build Nimble and then see [experiments/](experiments/).
 
 # Dependencies
 
@@ -15,7 +26,7 @@ Install [`rustup`](https://rustup.rs/)
 Clone the repository:
 
 ```text
-git clone https://github.com/MSRSSP/NimbleLedger
+git clone https://github.com/MSRSSP/Nimble
 ```
 
 To run tests:
@@ -30,62 +41,71 @@ To build:
 cargo build --release
 ```
 
-## Docker Deployment
+Optional: to build the Nimble endorser that runs in Intel SGX with open enclave, please folow the instructions [here](endorser-openenclave/).
 
-> Note: The project requires a minimum docker-compose version v1.29.2. Please follow instructions [here](https://docs.docker.com/compose/install/#install-compose) to install/update `docker` and `docker-compose`.
-> 
-> :warning: The default installation of `docker` (`docker-ce`) needs `sudo` permissions to execute the commands. To avoid
-> using elevated permissions, please follow the post-install steps to manage docker as a non-root user [here](https://docs.docker.com/engine/install/linux-postinstall/).
-> This allows the `docker` commands listed in this file to be executed without `sudo`. Please use `sudo` otherwise with the commands.
 
-The `Nimble` project contains three components:
+Running a toy local setup with 2 endorsers, coordinator, REST endpoint, and sample REST client.
+Run each on a different terminal.
 
-1. Nimble `endorser`
-2. Nimble `coordinator`
-3. Nimble `client`
 
-The image containing the three binaries above can be constructed by running the following command:
+  ```bash
+    ./target/release/endorser -p 9090
+    ./target/release/endorser -p 9091 
+    ./target/release/coordinator -e "http://localhost:9090,http://localhost:9091" 
+    ./target/release/endpoint_rest
+    ./target/release/light_client_rest
+  ```
 
-```shell
-$ docker build . -t nimble:dev_latest
+
+## Details of Nimble's Rust binaries
+
+Below are the different Nimble binaries, and some of the basic
+options. Each binary has many other options. You can see them by
+running the binary and with the `--help` flag.
+
+
+# Endorser
+
+```
+  ./target/release/endorser
+    -t HOSTNAME
+    -p PORT 
 ```
 
-We use `docker-compose` to set up a network containing 5 endorsers, a client, and a coordinator.
+# Coordinator
 
-Running the command below will use docker to create a network called `basic`
-with `five` endorsers with hostnames `endorser-{1|2|3|4|5}` which run the endorser service and expose the
-ports `9090-9094`. A `coordinator` service starts on `8080` and connects to the five endorsers, obtaining necessary
-keys. The services from the containers are bound to the host machine on the same ports, essentially creating a
-development environment with a 5 node endorser cluster.
-
-It also starts the `client` which is an interactive docker shell provided to the user for running Nimble client. This can be done
-by `cargo run --bin client` after starting a shell
-into the `client` docker instance.
-
-```shell
-$ docker-compose up
+```
+  ./target/release/coordinator
+    -h HOSTNAME
+    -p PORT
+    -e "http://HOST_ENDORSER_1:PORT,http://HOST_ENDORSER_2:PORT,http://HOST_ENDORSER_3:PORT" 
+    -s "memory" # use "table" to use Azure table instead and provide the following
+    -a AZURE_STORAGE_ACCOUNT_NAME
+    -k AZURE_STORAGE_MASTER_KEY
 ```
 
-The `docker-compose up` command will automatically `build` and create the necessary docker images and run the services.
-The services will spin up in sequence with the `endorsers-{1-5}`. Once the endorsers are `ready`, the
-`coordinator` service starts followed by the creation of the client.
+Below is a helper tool to interact with the coordinator. After you
+kill some endorsers, you can add new ones (reconfiguration) by running.
 
-The services can be selectively spun up by passing the service name to the
-`docker-compose up/run` command. eg.
-
-```shell
-$ docker-compose run client
+```
+  ./target/release/coordinator_ctrl 
+    -c "http://HOST_COORDINATOR:PORT" 
+    -a "http://HOST_NEW_ENDORSER_1:PORT;http://HOST_NEW_ENDORSER_2:PORT"
 ```
 
-The above command enables an interactive shell with the client on the same network as the endorsers and coordinator.
+# REST Endpoint
 
-To execute the client, and run the standard test suite execute the following in the container's interactive shell:
-
-```shell
-# ./client http://coordinator:8080
+```
+  ./target/release/endpoint_rest
+    -t HOST
+    -p PORT
+    -c "http://HOST_COORDINATOR:PORT"
 ```
 
-Note:
-> The coordinator takes arguments for endorser services `-e` delimited by `,`.
-> The default connection for the 5 node endorser network needed for the coordinator
-> is passed as an argument in the service configuration of the docker-compose file.
+
+# REST Client 
+
+```
+  ./target/release/endpoint_rest
+    -e "http://HOST_ENDPOINT:PORT"
+```

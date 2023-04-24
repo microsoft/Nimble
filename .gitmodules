@@ -1,3 +1,0 @@
-[submodule "endorser-lowtcb/crypto"]
-	path = endorser-lowtcb/crypto
-	url = git@github.com:MSRSSP/NimbleEverCrypt.git
