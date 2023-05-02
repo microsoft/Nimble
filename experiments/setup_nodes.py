@@ -38,17 +38,17 @@ def setup_backup_endorsers():
 def setup_sgx_endorsers():
     endorser1 = "screen -d -m " + NIMBLE_PATH + "/endorser-openenclave/host/endorser_host "
     endorser1 += NIMBLE_PATH + "/endorser-openenclave/enclave/enclave-sgx2.signed "
-    endorser1 += "-t " + LISTEN_SGX_IP_ENDORSER_1 + " -p " + PORT_SGX_ENDORSER_1
+    endorser1 += "-p " + PORT_SGX_ENDORSER_1
     endorser1 = ssh_cmd(SSH_IP_SGX_ENDORSER_1, endorser1)
 
     endorser2 = "screen -d -m " + NIMBLE_PATH + "/endorser-openenclave/host/endorser_host "
     endorser2 += NIMBLE_PATH + "/endorser-openenclave/enclave/enclave-sgx2.signed "
-    endorser2 += "-t " + LISTEN_SGX_IP_ENDORSER_2 + " -p " + PORT_SGX_ENDORSER_2
+    endorser2 += "-p " + PORT_SGX_ENDORSER_2
     endorser2 = ssh_cmd(SSH_IP_SGX_ENDORSER_2, endorser2)
 
     endorser3 = "screen -d -m " + NIMBLE_PATH + "/endorser-openenclave/host/endorser_host "
     endorser3 += NIMBLE_PATH + "/endorser-openenclave/enclave/enclave-sgx2.signed "
-    endorser3 += "-t " + LISTEN_SGX_IP_ENDORSER_3 + " -p " + PORT_SGX_ENDORSER_3
+    endorser3 += "-p " + PORT_SGX_ENDORSER_3
     endorser3 = ssh_cmd(SSH_IP_SGX_ENDORSER_3, endorser3)
 
     print(endorser1)
@@ -58,7 +58,7 @@ def setup_sgx_endorsers():
     print(endorser3)
     os.system(endorser3)
 
-    time.sleep(5)
+    time.sleep(30) # they take much longer to boot
 
 
 def setup_coordinator(store):
@@ -74,6 +74,22 @@ def setup_coordinator(store):
     print(coordinator)
     os.system(coordinator)
     time.sleep(5)
+
+def setup_coordinator_sgx(store):
+    coordinator = CMD + "/coordinator -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
+    coordinator += " -e \"http://" + LISTEN_IP_SGX_ENDORSER_1 + ":" + PORT_SGX_ENDORSER_1
+    coordinator += ",http://" + LISTEN_IP_SGX_ENDORSER_2 + ":" + PORT_SGX_ENDORSER_2
+    coordinator += ",http://" + LISTEN_IP_SGX_ENDORSER_3 + ":" + PORT_SGX_ENDORSER_3
+    coordinator += "\" -l 60"
+    coordinator += store
+
+    coordinator = ssh_cmd(SSH_IP_COORDINATOR, coordinator)
+
+    print(coordinator)
+    os.system(coordinator)
+    time.sleep(5)
+
+
 
 def setup_endpoints():
     endpoint1 = CMD + "/endpoint_rest -t " + LISTEN_IP_ENDPOINT_1 + " -p " + PORT_ENDPOINT_1
@@ -97,6 +113,18 @@ def kill_endorsers():
     endorser1 = ssh_cmd(SSH_IP_ENDORSER_1, "pkill endorser")
     endorser2 = ssh_cmd(SSH_IP_ENDORSER_2, "pkill endorser")
     endorser3 = ssh_cmd(SSH_IP_ENDORSER_3, "pkill endorser")
+
+    print(endorser1)
+    os.system(endorser1)
+    print(endorser2)
+    os.system(endorser2)
+    print(endorser3)
+    os.system(endorser3)
+
+def kill_sgx_endorsers():
+    endorser1 = ssh_cmd(SSH_IP_SGX_ENDORSER_1, "pkill endorser_host")
+    endorser2 = ssh_cmd(SSH_IP_SGX_ENDORSER_2, "pkill endorser_host")
+    endorser3 = ssh_cmd(SSH_IP_SGX_ENDORSER_3, "pkill endorser_host")
 
     print(endorser1)
     os.system(endorser1)
@@ -138,15 +166,20 @@ def kill_endpoints():
 def setup(store, sgx):
     if sgx:
         setup_sgx_endorsers()
+        setup_coordinator_sgx(store)
     else:
         setup_main_endorsers()
-    setup_coordinator(store)
+        setup_coordinator(store)
+
     setup_endpoints()
 
-def teardown():
+def teardown(sgx):
     kill_endpoints()
     kill_coordinator()
-    kill_endorsers()
+    if sgx:
+        kill_sgx_endorsers()
+    else:
+        kill_endorsers()
 
 def ssh_cmd(ip, cmd):
     if LOCAL_RUN:

@@ -8,5 +8,5 @@ if os.environ.get('STORAGE_MASTER_KEY', '') == "" or os.environ.get('STORAGE_ACC
 store = " -s table -n nimble" + str(random.randint(1,100000000)) + " -a \"" + os.environ['STORAGE_ACCOUNT_NAME'] + "\""
 store += " -k \"" + os.environ['STORAGE_MASTER_KEY'] + "\""
 
-teardown()
+teardown(False)
 setup(store, False)

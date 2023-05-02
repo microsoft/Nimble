@@ -9,7 +9,7 @@ timestamp = time.time()
 dt_object = datetime.fromtimestamp(timestamp)
 dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
-EXP_NAME = "fig_3c" + dt_string
+EXP_NAME = "fig-3c-" + dt_string
 NUM_ITERATIONS = 1
 LOAD = [20000] # [5000, 10000, 15000, 20000, 25000] # requests/sec
 
@@ -30,7 +30,7 @@ out_folder = OUTPUT_FOLDER + "/" + EXP_NAME + "/"
 setup_output_folder(SSH_IP_CLIENT, out_folder)
 
 for i in range(NUM_ITERATIONS):
-    teardown()
+    teardown(True)
     setup("", True)
 
     # Creates the ledgers so that we can append to them
@@ -48,5 +48,5 @@ for i in range(NUM_ITERATIONS):
     duration = "30s"
     run_3c(duration, operation, out_folder)
 
-teardown()
+teardown(True)
 collect_results(SSH_IP_CLIENT)

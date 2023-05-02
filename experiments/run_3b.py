@@ -9,7 +9,7 @@ timestamp = time.time()
 dt_object = datetime.fromtimestamp(timestamp)
 dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
-EXP_NAME = "fig_3b-" + dt_string
+EXP_NAME = "fig-3b-" + dt_string
 NUM_ITERATIONS = 1
 
 # Our table implementation can support much higher throughput for reads than create or append
@@ -46,7 +46,7 @@ store = " -s table -n nimble" + str(random.randint(1,100000000)) + " -a \"" + os
 store += " -k \"" + os.environ['STORAGE_MASTER_KEY'] + "\""
 
 for i in range(NUM_ITERATIONS):
-    teardown()
+    teardown(False)
     setup(store, False)
 
     # Creates the ledgers so that we can append to them
@@ -64,5 +64,5 @@ for i in range(NUM_ITERATIONS):
     duration = "30s"
     run_3b(duration, operation, out_folder)
 
-teardown()
+teardown(False)
 collect_results(SSH_IP_CLIENT)

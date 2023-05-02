@@ -1,5 +1,5 @@
 from config import *
 from setup_nodes import *
 
-teardown()
+teardown(False)
 setup("", False)

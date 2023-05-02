@@ -9,7 +9,7 @@ timestamp = time.time()
 dt_object = datetime.fromtimestamp(timestamp)
 dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
-EXP_NAME = "fig_4-" + dt_string
+EXP_NAME = "fig-4-" + dt_string
 NUM_ITERATIONS = 1
 NUM_LEDGERS = [100000] #, 200000, 500000, 1000000]
 
@@ -103,7 +103,7 @@ setup_output_folder(SSH_IP_COORDINATOR, tcpdump_folder)
 
 for num in NUM_LEDGERS:
     print("Starting experiment for " + str(num) + " ledgers")
-    teardown()
+    teardown(False)
     kill_backup_endorsers()
 
     setup("", False)
@@ -112,7 +112,7 @@ for num in NUM_LEDGERS:
     create_ledgers(num)
     reconfigure(out_folder, tcpdump_folder, num)
 
-teardown()
+teardown(False)
 kill_backup_endorsers()
 collect_results(SSH_IP_CLIENT)
 collect_results(SSH_IP_COORDINATOR)
