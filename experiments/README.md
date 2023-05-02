@@ -82,4 +82,24 @@ The results include: (1) reconfiguration time; (2) bandwidth. You should see bot
 ## Reproducing the results of Figures 5 and 6
 
 Figures 5 and 6 require running our modified version of the Hadoop Distributed File System (HDFS) on top of Nimble.
-For instructions on how to setup Nimble-HDFS, please see this repository: [https://github.com/mitthu/hadoop-nimble](https://github.com/mitthu/hadoop-nimble).
+The steps are as follows. First, launch Nimble with in-memory store or tables. We provide two scripts to do this:
+
+```
+  python3 start_nimble_memory.py
+```
+
+or
+
+```
+  python3 start_nimble_table.py
+```
+
+Once Nimble is running, you can then follow the instructions on how to setup Nimble-HDFS in this repository: [https://github.com/mitthu/hadoop-nimble](https://github.com/mitthu/hadoop-nimble).
+
+
+To restart Nimble, you can just run the above scripts again (they typically shut things down and then restart). 
+To shutdown Nimble without restarting, you can run:
+
+```
+  python3 shutdown_nimble.py
+```
