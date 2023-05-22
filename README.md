@@ -11,7 +11,7 @@ Nimble will appear at [OSDI 2023](https://www.usenix.org/conference/osdi23).
 To reproduce the results in our paper, please follow the instructions below
 to build Nimble and then see [experiments/](experiments/).
 
-# Dependencies
+## Dependencies
 
 Install make, gcc, protobuf-copiler, perl, libssl-dev, pkg-config. In Ubuntu, you can type:
 
@@ -64,7 +64,7 @@ options. Each binary has many other options. You can see them by
 running the binary and with the `--help` flag.
 
 
-# Endorser
+### Endorser
 
 ```
   ./target/release/endorser
@@ -72,7 +72,7 @@ running the binary and with the `--help` flag.
     -p PORT 
 ```
 
-# Coordinator
+### Coordinator
 
 ```
   ./target/release/coordinator
@@ -93,7 +93,7 @@ kill some endorsers, you can add new ones (reconfiguration) by running.
     -a "http://HOST_NEW_ENDORSER_1:PORT;http://HOST_NEW_ENDORSER_2:PORT"
 ```
 
-# REST Endpoint
+### REST Endpoint
 
 ```
   ./target/release/endpoint_rest
@@ -103,7 +103,7 @@ kill some endorsers, you can add new ones (reconfiguration) by running.
 ```
 
 
-# REST Client 
+### REST Client 
 
 ```
   ./target/release/endpoint_rest
