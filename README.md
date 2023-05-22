@@ -1,4 +1,4 @@
-# Nimble: A fault-tolerant rollback resistant service for confidential computing with minimal TCB
+# Nimble: Rollback Protection for Confidential Cloud Services 
 
 Nimble is a service that helps applications running in trusted execution environments (TEEs) detect 
 rollback attacks (i.e., detect whether a data item retrieved from persistent storage is the latest version).
