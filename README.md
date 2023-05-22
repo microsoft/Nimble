@@ -26,7 +26,7 @@ Install [`rustup`](https://rustup.rs/)
 Clone the repository:
 
 ```text
-git clone https://github.com/MSRSSP/Nimble
+git clone https://github.com/Microsoft/Nimble
 ```
 
 To run tests:
@@ -45,7 +45,7 @@ Optional: to build the Nimble endorser that runs in Intel SGX with open enclave,
 
 
 Running a toy local setup with 2 endorsers, coordinator, REST endpoint, and sample REST client.
-Run each on a different terminal.
+Run each on a different terminal (or in the background, or with detached screen).
 
 
   ```bash
