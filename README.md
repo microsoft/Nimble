@@ -13,7 +13,7 @@ to build Nimble and then see [experiments/](experiments/).
 
 ## Dependencies
 
-Install make, gcc, protobuf-copiler, perl, libssl-dev, pkg-config. In Ubuntu, you can type:
+Install `make`, `gcc`, `protobuf-compiler`, `perl`, `libssl-dev`, and `pkg-config`. In Ubuntu, you can type:
 
 ```text
 sudo apt install make gcc libssl-dev pkg-config perl protobuf-compiler
@@ -41,7 +41,7 @@ To build:
 cargo build --release
 ```
 
-Optional: to build the Nimble endorser that runs in Intel SGX with open enclave, please folow the instructions [here](endorser-openenclave/).
+Optional: to build the Nimble endorser that runs in Intel SGX with open enclave, please follow the instructions [here](endorser-openenclave/).
 
 
 Running a toy local setup with 2 endorsers, coordinator, REST endpoint, and sample REST client.
