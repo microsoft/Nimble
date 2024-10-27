@@ -7,5 +7,6 @@ mkShell {
     gnumake
     pkg-config
     openssl
+    screen
   ];
 }
