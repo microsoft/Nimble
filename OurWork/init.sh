@@ -3,4 +3,4 @@ SSH_AUTH_SOCK= ssh -v -F /dev/null -i <path/to/privkey> -oProxyCommand="ssh tunn
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-nix-shell
+nix-shell -p protobuf gnumake pkg-config openssl
