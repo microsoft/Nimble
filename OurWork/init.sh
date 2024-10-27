@@ -6,5 +6,5 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 #if .nix file does not work
 #nix-shell -p protobuf gnumake pkg-config openssl
 
-#if .nix file works
+#if .nix file works. jackson needs sudo to run this command
 nix-shell
