@@ -16,7 +16,7 @@ LOAD = [50000]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
 def run_3a(time, op, out_folder):
     # Run client (wrk2)
     for i in LOAD:
-        cmd = "\'" + WRK2_PATH + "/wrk -t120 -c120 -d" + time + " -R" + str(i)
+        cmd = "\'" + WRK2_PATH + "/wrk2 -t120 -c120 -d" + time + " -R" + str(i)
         cmd += " --latency http://" + LISTEN_IP_LOAD_BALANCER + ":" + PORT_LOAD_BALANCER
         cmd += " -s " + NIMBLE_PATH + "/experiments/" + op + ".lua"
         cmd += " -- " + str(i) + "req"

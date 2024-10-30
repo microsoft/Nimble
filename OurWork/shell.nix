@@ -3,6 +3,7 @@ with import <nixpkgs> {};
 
 mkShell {
   buildInputs = [
+    gcc
     protobuf
     gnumake
     pkg-config
