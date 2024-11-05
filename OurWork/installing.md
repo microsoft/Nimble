@@ -8,7 +8,7 @@ gcc-wrapper: ?
 lua: nix-env -iA nixos.lua51Packages.lua
 luarocks: nix-env -iA nixos.lua51Packages.luarocks
 lua-bitop: nix-env -iA nixos.lua51Packages.lua-bitop
-wrk2: nix-enc -iA nixos.wrk2
+wrk2: nix-env -iA nixos.wrk2
 
 lua-json: luarocks install --local lua-json
 luasocket: luarocks install --local luasocket
