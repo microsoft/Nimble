@@ -22,7 +22,7 @@ uuid: luarocks install --local uuid
 Open experiments/config.py:
 LOCAL_RUN = True
 NIMBLE_PATH = Path to your Nimble install, for me /home/$user/Nimble
-WRK2_PATH = /home/$user/.nix-profile/bin
+WRK2_PATH = /home/$user/.nix-profile/bin  #use which wrk2, do not include /wrk2
 
 
 You only ned this one time
