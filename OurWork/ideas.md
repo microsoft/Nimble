@@ -1,4 +1,4 @@
-# Proeject Ideas
+# Project Ideas
 
 * Finalize C++ endorser
 * Integrate into something else than Hadoop (SQL, Filesystem, ???, maybe something faster?)
