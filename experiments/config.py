@@ -25,7 +25,7 @@ PORT_ENDORSER_3 = "9093"
 SSH_IP_COORDINATOR = "127.0.0.1"
 LISTEN_IP_COORDINATOR = "127.0.0.1"
 PORT_COORDINATOR = "8080"
-PORT_COORDINATOR_CTRL = "8090" # control plane
+PORT_COORDINATOR_CTRL = "8090" # control pane
 
 SSH_IP_ENDPOINT_1 = "127.0.0.1"
 LISTEN_IP_ENDPOINT_1 = "127.0.0.1"
@@ -76,15 +76,15 @@ PORT_SGX_ENDORSER_3 = "9093"
 # wrk2 executable, and the directory where the logs and results should be stored.
 # We assume all of the machines have the same path.
 
-NIMBLE_PATH = "/home/janha/Nimble"
+NIMBLE_PATH = "/home/janhe/Nimble/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
 #WRK2_PATH = NIMBLE_PATH + "/experiments/wrk2"
-WRK2_PATH = "/home/janha/.nix-profile/bin"
+WRK2_PATH = "/home/janhe/.nix-profile/bin"
 OUTPUT_FOLDER = NIMBLE_PATH + "/experiments/results"
 
 # Set the SSH user for the machines that we will be connecting to.
-SSH_USER = "user"                       # this is the username in the machine we'll connect to (e.g., user@IP)
-SSH_KEY_PATH = "/home/user/.ssh/id_rsa" # this is the path to private key in the current machine where you'll run this script
+SSH_USER = "janhe"                       # this is the username in the machine we'll connect to (e.g., user@IP)
+SSH_KEY_PATH = "/home/janhe/.ssh/id_ed25500" # this is the path to private key in the current machine where you'll run this script
 
 # To use Azure storage, you need to set the STORAGE_ACCOUNT_NAME and STORAGE_MASTER_KEY environment variables
-# with the corresponding values that you get from Azure.
+# with the corresponding values that nix-shell -p vscodeou get from Azure.
