@@ -10,5 +10,8 @@ mkShell {
     openssl
     screen
     cmake
+    lua51Packages.lua
+    lua51Packages.luabitop
+    lua51Packages.luarocks
   ];
 }
