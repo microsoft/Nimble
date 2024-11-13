@@ -9,5 +9,6 @@ mkShell {
     pkg-config
     openssl
     screen
+    cmake
   ];
 }
