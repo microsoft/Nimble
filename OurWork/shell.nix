@@ -15,5 +15,6 @@ mkShell {
     lua51Packages.luarocks
     rustc
     cargo
+    wrk2
   ];
 }
