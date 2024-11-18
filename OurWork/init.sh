@@ -1,5 +1,5 @@
 #! /bin/bash
-SSH_AUTH_SOCK= ssh -v -F /dev/null -i <path/to/privkey> -oProxyCommand="ssh tunnel@login.dos.cit.tum.de -i <path/to/privkey> -W %h:%p" <yourusername>@vislor.dos.cit.tum.de
+SSH_AUTH_SOCK= ssh -v -F /dev/null -i /Users/matheis/.ssh/id_ed25519 -oProxyCommand="ssh tunnel@login.dos.cit.tum.de -i /Users/matheis/.ssh/id_ed25519 -W %h:%p" kilian@vislor.dos.cit.tum.de
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
