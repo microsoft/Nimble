@@ -23,8 +23,11 @@ mkShell {
 
   # shellHook ensures we install LuaSocket and set the correct paths
   shellHook = ''
-    # Install LuaSocket via luarocks if not already installed
-    luarocks install luasocket
+    # Configure luarocks to install packages locally by default
+    luarocks config local_by_default true
+
+    # Install LuaSocket via luarocks in the local user directory
+    luarocks install luasocket --local
 
     # Set LUA_PATH and LUA_CPATH to ensure Lua can find modules installed by luarocks
     export LUA_PATH="$HOME/.luarocks/share/lua/5.1/?.lua;$LUA_PATH"
