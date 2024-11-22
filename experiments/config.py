@@ -1,14 +1,24 @@
-LOCAL_RUN = True # set to True if you want to run all nodes and experiments locally. Else set to False.
+LOCAL_RUN = True  # set to True if you want to run all nodes and experiments locally. Else set to False.
                   # If set to True, you can ignore all the IP addresses and SSH stuff below. They won't be used.
                   # You cannot run any of the Azure table experiments locally.
 
+# Azure Storage Emulator Settings for Azurite
+# Azurite default settings for local Azure emulator.
+AZURITE_STORAGE_ACCOUNT_NAME = "devstoreaccount1"   # Default Azurite storage account name
+AZURITE_STORAGE_MASTER_KEY = "Eby8vdM02xNOz0n8sFAK9yF7JpvUwFtx+Yw/aF5AnkdeQn7k+2HfFd9qkhGVWZXdt4UtvO2qD7KM="  # Default Azurite master key
 
-# Set the IPs below and make sure that the machine running this script can ssh into those IPs
+# Azurite Emulator Endpoints (by default Azurite runs locally on port 10000, 10001, and 10002 for blob, queue, and table)
+AZURITE_BLOB_HOST = "127.0.0.1"  # Localhost for blob service
+AZURITE_BLOB_PORT = "10000"  # Azurite default port for blob storage
 
-# The SSH_IPs are IP addresses that our script can use to SSH to the machines and set things up
-# The LISTEN_IPs are IP addresses on which the machine can listen on a port. 
-#   For example, these could be private IP addresses in a VNET. In many cases, LISTEN_IPs can just the SSH_IPs.
-#   Azure won't let you listen on a public IP though. You need to listen on private IPs.
+AZURITE_QUEUE_HOST = "127.0.0.1"  # Localhost for queue service
+AZURITE_QUEUE_PORT = "10001"  # Azurite default port for queue storage
+
+AZURITE_TABLE_HOST = "127.0.0.1"  # Localhost for table service
+AZURITE_TABLE_PORT = "10002"  # Azurite default port for table storage
+
+# Azurite Emulator does not require an actual storage account or secret, so you can use these defaults
+# These variables will be used if you're running tests or simulations that interact with Azure storage locally
 
 SSH_IP_ENDORSER_1 = "127.0.0.1"
 LISTEN_IP_ENDORSER_1 = "127.0.0.1"
@@ -35,16 +45,15 @@ SSH_IP_ENDPOINT_2 = "127.0.0.1"
 LISTEN_IP_ENDPOINT_2 = "127.0.0.1"
 PORT_ENDPOINT_2 = "8082"
 
-LISTEN_IP_LOAD_BALANCER = "127.0.0.1" # if no load balancer is available just use one endpoint (ENDPOINT_1)
+LISTEN_IP_LOAD_BALANCER = "127.0.0.1"  # if no load balancer is available just use one endpoint (ENDPOINT_1)
                                         # and set the LISTEN IP of that endpoint here
 
-PORT_LOAD_BALANCER = "8082"             #if no load balancer is available just use one endpoint (ENDPOINT_1)
-                                        # and set the PORT of that endpoint here
+PORT_LOAD_BALANCER = "8082"  # if no load balancer is available just use one endpoint (ENDPOINT_1)
+                             # and set the PORT of that endpoint here
 
-SSH_IP_CLIENT = "127.0.0.1" # IP of the machine that will be running our workload generator.
+SSH_IP_CLIENT = "127.0.0.1"  # IP of the machine that will be running our workload generator.
 
-
-# If you are going to be running the reconfiguration experiment, set the backup endorsers
+# Backup Endorsers for reconfiguration experiment
 SSH_IP_ENDORSER_4 = "127.0.0.1"
 LISTEN_IP_ENDORSER_4 = "127.0.0.1"
 PORT_ENDORSER_4 = "9094"
@@ -57,8 +66,7 @@ SSH_IP_ENDORSER_6 = "127.0.0.1"
 LISTEN_IP_ENDORSER_6 = "127.0.0.1"
 PORT_ENDORSER_6 = "9096"
 
-
-# If you are going to be running the SGX experiment on SGX machines, set the SGX endorsers
+# SGX experiment on SGX machines
 SSH_IP_SGX_ENDORSER_1 = "127.0.0.1"
 LISTEN_IP_SGX_ENDORSER_1 = "127.0.0.1"
 PORT_SGX_ENDORSER_1 = "9091"
@@ -71,20 +79,16 @@ SSH_IP_SGX_ENDORSER_3 = "127.0.0.1"
 LISTEN_IP_SGX_ENDORSER_3 = "127.0.0.1"
 PORT_SGX_ENDORSER_3 = "9093"
 
-
-# Set the PATHs below to the folder containing the nimble executables (e.g. "/home/user/nimble/target/release")
-# wrk2 executable, and the directory where the logs and results should be stored.
-# We assume all of the machines have the same path.
-
+# Paths to Nimble executables and wrk2 for workload generation
 NIMBLE_PATH = "/home/janhe/Nimble/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
-#WRK2_PATH = NIMBLE_PATH + "/experiments/wrk2"
 WRK2_PATH = "/nix/store/sn7vaa513ldb98h3c5p08si6911vkbki-wrk2-4.0.0-e0109df/bin/"
 OUTPUT_FOLDER = NIMBLE_PATH + "/experiments/results"
 
-# Set the SSH user for the machines that we will be connecting to.
-SSH_USER = "janhe"                       # this is the username in the machine we'll connect to (e.g., user@IP)
-SSH_KEY_PATH = "/home/janhe/.ssh/id_ed25500" # this is the path to private key in the current machine where you'll run this script
+# SSH User and Key Path for connecting to remote machines
+SSH_USER = "janhe"
+SSH_KEY_PATH = "/home/janhe/.ssh/id_ed25500"
 
-# To use Azure storage, you need to set the STORAGE_ACCOUNT_NAME and STORAGE_MASTER_KEY environment variables
-# with the corresponding values that nix-shell -p vscodeou get from Azure.
+# Azurite doesn't need actual Azure credentials, so you can use the following default:
+STORAGE_ACCOUNT_NAME = AZURITE_STORAGE_ACCOUNT_NAME  # Use Azurite storage account name
+STORAGE_MASTER_KEY = AZURITE_STORAGE_MASTER_KEY  # Use Azurite storage master key
