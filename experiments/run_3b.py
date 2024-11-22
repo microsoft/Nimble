@@ -61,7 +61,7 @@ def run_3b(time, op, out_folder):
     log_dir = os.path.dirname("./logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    if op == "read":
+    if op == "read_azurite":
         load = READ_LOAD
 
     # Run client (wrk2)
@@ -107,17 +107,17 @@ for i in range(NUM_ITERATIONS):
     setup(store, False)
 
     # Creates the ledgers so that we can append to them
-    operation = "create"
+    operation = "create_azurite"
     duration = "90s"
     run_3b(duration, operation, out_folder)
 
     # Append to the ledgers
-    operation = "append"
+    operation = "append_azurite"
     duration = "30s"
     run_3b(duration, operation, out_folder)
 
     # Read from the ledgers
-    operation = "read"
+    operation = "read_azurite"
     duration = "30s"
     run_3b(duration, operation, out_folder)
 
