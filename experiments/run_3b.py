@@ -66,7 +66,7 @@ def run_3b(time, op, out_folder):
 
     # Run client (wrk2)
     for i in load:
-        cmd = "\'" + WRK2_PATH + "/wrk -t120 -c120 -d" + time + " -R" + str(i)
+        cmd = "\'" + WRK2_PATH + "/wrk2 -t120 -c120 -d" + time + " -R" + str(i)
         cmd += " --latency http://" + LISTEN_IP_LOAD_BALANCER + ":" + PORT_LOAD_BALANCER
         cmd += " -s " + NIMBLE_PATH + "/experiments/" + op + ".lua"
         cmd += " -- " + str(i) + "req"
