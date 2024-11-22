@@ -28,6 +28,7 @@ mkShell {
 
     # Install LuaSocket via luarocks in the local user directory
     luarocks install luasocket --local
+    luarocks install uuid --local
 
     # Set LUA_PATH and LUA_CPATH to ensure Lua can find modules installed by luarocks
     export LUA_PATH="$HOME/.luarocks/share/lua/5.1/?.lua;$LUA_PATH"
