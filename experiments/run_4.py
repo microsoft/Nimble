@@ -11,7 +11,7 @@ dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
 EXP_NAME = "fig-4-" + dt_string
 NUM_ITERATIONS = 1
-NUM_LEDGERS = [5000000] #, 200000, 500000, 1000000]
+NUM_LEDGERS = [2000000] #, 200000, 500000, 1000000]
 
 def reconfigure(out_folder, tcpdump_folder, num):
 
