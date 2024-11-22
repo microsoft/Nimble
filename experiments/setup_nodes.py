@@ -9,7 +9,6 @@ from config import *
 # 3. start Azurite in the background: azurite --silent --location ./azurite_data --debug ./azurite_debug.log --tableHost 127.0.0.1 --tablePort 10002 &
 # 4. Verify it is running: ps aux | grep azurite
 #
-
 # Default Azurite Configuration
 AZURITE_ACCOUNT_NAME = "devstoreaccount1"
 AZURITE_ACCOUNT_KEY = "Eby8vdM02xWkA3az9W5ZPcuwwd2E9aMJW6DhDeUpgw=fGzv3nwKONNlGRd29aZJof7PRwIgORJFjBRzq=C41vHcP9mlX1Ag=="
