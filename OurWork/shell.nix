@@ -16,8 +16,18 @@ mkShell {
     rustc
     cargo
     wrk2
-    nodejs gcc
+    nodejs
     python3
     azurite
   ];
+
+  # shellHook ensures we install LuaSocket and set the correct paths
+  shellHook = ''
+    # Install LuaSocket via luarocks if not already installed
+    luarocks install luasocket
+
+    # Set LUA_PATH and LUA_CPATH to ensure Lua can find modules installed by luarocks
+    export LUA_PATH="$HOME/.luarocks/share/lua/5.1/?.lua;$LUA_PATH"
+    export LUA_CPATH="$HOME/.luarocks/lib/lua/5.1/?.so;$LUA_CPATH"
+  '';
 }
