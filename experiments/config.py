@@ -79,6 +79,7 @@ SSH_IP_SGX_ENDORSER_3 = "127.0.0.1"
 LISTEN_IP_SGX_ENDORSER_3 = "127.0.0.1"
 PORT_SGX_ENDORSER_3 = "9093"
 
+
 # Paths to Nimble executables and wrk2 for workload generation
 NIMBLE_PATH = "/home/janhe/Nimble/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
