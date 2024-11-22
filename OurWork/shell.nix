@@ -16,5 +16,7 @@ mkShell {
     rustc
     cargo
     wrk2
+    nodejs gcc
+    python3
   ];
 }
