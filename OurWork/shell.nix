@@ -18,5 +18,6 @@ mkShell {
     wrk2
     nodejs gcc
     python3
+    azurite
   ];
 }
