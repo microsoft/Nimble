@@ -1,0 +1,15 @@
+2024-11-18 09:56:43,490 - INFO - Executing command: '/home/janhe/.nix-profile/bin/wrk2 -t120 -c120 -d90s -R20000 --latency http://127.0.0.1:8082 -s /home/janhe/Nimble/Nimble/experiments/create.lua -- 20000req > /home/janhe/Nimble/Nimble/experiments/results/fig-3c-date-2024-11-18-time-09-56-03/create-20000.log'
+2024-11-18 09:56:43,495 - ERROR - Command failed with return code: 127
+2024-11-18 09:56:43,495 - ERROR - Standard Output: 
+2024-11-18 09:56:43,495 - ERROR - Standard Error: /nix/store/516kai7nl5dxr792c0nzq0jp8m4zvxpi-bash-5.2p32/bin/sh: line 1: /home/janhe/.nix-profile/bin/wrk2: No such file or directory
+
+2024-11-18 09:56:43,496 - INFO - Executing command: '/home/janhe/.nix-profile/bin/wrk2 -t120 -c120 -d30s -R20000 --latency http://127.0.0.1:8082 -s /home/janhe/Nimble/Nimble/experiments/append.lua -- 20000req > /home/janhe/Nimble/Nimble/experiments/results/fig-3c-date-2024-11-18-time-09-56-03/append-20000.log'
+2024-11-18 09:56:43,500 - ERROR - Command failed with return code: 127
+2024-11-18 09:56:43,500 - ERROR - Standard Output: 
+2024-11-18 09:56:43,501 - ERROR - Standard Error: /nix/store/516kai7nl5dxr792c0nzq0jp8m4zvxpi-bash-5.2p32/bin/sh: line 1: /home/janhe/.nix-profile/bin/wrk2: No such file or directory
+
+2024-11-18 09:56:43,501 - INFO - Executing command: '/home/janhe/.nix-profile/bin/wrk2 -t120 -c120 -d30s -R20000 --latency http://127.0.0.1:8082 -s /home/janhe/Nimble/Nimble/experiments/read.lua -- 20000req > /home/janhe/Nimble/Nimble/experiments/results/fig-3c-date-2024-11-18-time-09-56-03/read-20000.log'
+2024-11-18 09:56:43,506 - ERROR - Command failed with return code: 127
+2024-11-18 09:56:43,506 - ERROR - Standard Output: 
+2024-11-18 09:56:43,506 - ERROR - Standard Error: /nix/store/516kai7nl5dxr792c0nzq0jp8m4zvxpi-bash-5.2p32/bin/sh: line 1: /home/janhe/.nix-profile/bin/wrk2: No such file or directory
+
