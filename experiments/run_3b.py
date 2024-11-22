@@ -119,7 +119,7 @@ for i in range(NUM_ITERATIONS):
     # Read from the ledgers
     operation = "read"
     duration = "30s"
-    run_3b(duration, out_folder)
+    run_3b(duration, operation, out_folder)
 
 teardown(False)
 collect_results(SSH_IP_CLIENT)
