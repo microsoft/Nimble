@@ -103,3 +103,21 @@ hdfs --daemon start namenode
 
 ## Start Datanode
 hdfs --daemon start datanode
+
+# Getting the normal Hadoop
+
+## in your /home/USER folder
+curl -o hadoop-upstream.tar.gz https://archive.apache.org/dist/hadoop/common/hadoop-3.3.3/hadoop-3.3.3.tar.gz
+
+nix-shell -p jdk8
+
+sudo tar -xvf hadoop-upstream.tar.gz -C /home/USER/opt
+
+sudo mv opt/hadoop-3.3.3 opt/hadoop-upstream
+
+sudo chown -R `whoami` opt/hadoop-upstream
+
+
+
+
+
