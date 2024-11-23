@@ -118,6 +118,16 @@ sudo mv opt/hadoop-3.3.3 opt/hadoop-upstream
 sudo chown -R `whoami` opt/hadoop-upstream
 
 
+# Hadoop NNThroughputBenchmarking
 
+nix-shell -p jdk8
+
+## start up nimble and hadoop like above 
+
+## run the benchmark script
+
+sh runNNTBenchmark.sh
+
+## Results are in the bash.terminal / no log files are created
 
 
