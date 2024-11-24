@@ -18,7 +18,7 @@ mkShell {
     wrk2
     nodejs
     python3
-    azurite
+#    azurite
     util-linux  #a working version of uuid   called: uuidgen
   ];
 

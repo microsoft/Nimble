@@ -81,14 +81,14 @@ PORT_SGX_ENDORSER_3 = "9093"
 
 
 # Paths to Nimble executables and wrk2 for workload generation
-NIMBLE_PATH = "/home/janhe/Nimble/Nimble"
+NIMBLE_PATH = "/root/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
-WRK2_PATH = "/nix/store/sn7vaa513ldb98h3c5p08si6911vkbki-wrk2-4.0.0-e0109df/bin/"
+WRK2_PATH = "/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin"
 OUTPUT_FOLDER = NIMBLE_PATH + "/experiments/results"
 
 # SSH User and Key Path for connecting to remote machines
-SSH_USER = "janhe"
-SSH_KEY_PATH = "/home/janhe/.ssh/id_ed25500"
+SSH_USER = "hviva"
+SSH_KEY_PATH = "/home/hviva/.ssh/id_ed25500"
 
 # Azurite doesn't need actual Azure credentials, so you can use the following default:
 STORAGE_ACCOUNT_NAME = AZURITE_STORAGE_ACCOUNT_NAME  # Use Azurite storage account name
