@@ -17,10 +17,14 @@ from datetime import datetime
 # evtl set new credentials: export AZURITE_ACCOUNTS="user:1234"
 #
 
+
 # Azurite default configuration
 AZURITE_ACCOUNT_NAME = "user"
 AZURITE_ACCOUNT_KEY = "1234"
 AZURITE_ENDPOINT = "http://127.0.0.1:10002/devstoreaccount1"
+RED = "\033[31;1m"  # Red and Bold for failure
+GREEN = "\033[32;1m"  # Green and Bold for success
+RESET = "\033[0m"  # Reset to default
 
 # Environment check for Azurit
 os.environ['STORAGE_MASTER_KEY'] = AZURITE_ACCOUNT_KEY
@@ -35,7 +39,7 @@ EXP_NAME = "fig-3b-" + dt_string
 NUM_ITERATIONS = 1
 
 # Our table implementation can support much higher throughput for reads than create or append
-CREATE_APPEND_LOAD = [2000]  # [500, 1000, 1500, 2000, 2500] requests/second
+CREATE_APPEND_LOAD = [50000]  # [500, 1000, 1500, 2000, 2500] requests/second
 READ_LOAD = [50000]  # CREATE_APPEND_LOAD + [10000, 15000, 25000, 50000, 55000]
 
 
@@ -79,13 +83,13 @@ def run_3b(time, op, out_folder):
         result = subprocess.run(cmd, shell=True, capture_output=True)
 
         if result.returncode != 0:
-            logging.error(f"Command failed with return code: {result.returncode}")
-            logging.error(f"Standard Output: {result.stdout.decode()}")
-            logging.error(f"Standard Error: {result.stderr.decode()}")
-            print(f"An error happened with : {cmd} \n Error output: {result.stderr.decode()}\n\n")
+            logging.error(f"{RED}Command failed with return code: {result.returncode}{RESET}")
+            logging.error(f"{RED}Standard Output: {result.stdout.decode()}{RESET}")
+            logging.error(f"{RED}Standard Error: {result.stderr.decode()}{RESET}")
+            print(f"{RED}An error happened with: {cmd} \nError output: {result.stderr.decode()}\n\n{RESET}")
         else:
-            logging.info(f"Command executed successfully. Output captured in: {out_folder}{op}-{i}.log")
-            print(f"Command executed successfully. Output captured in: {out_folder}{op}-{i}.log")
+            logging.info(f"{GREEN}Command executed successfully. Output captured in: {out_folder}{op}-{i}.log{RESET}")
+            print(f"{GREEN}Command executed successfully. Output captured in: {out_folder}{op}-{i}.log{RESET}")
 
 
 # Ensure environment variables are set for Azurite
