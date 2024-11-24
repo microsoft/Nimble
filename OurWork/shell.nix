@@ -19,6 +19,7 @@ mkShell {
     nodejs
     python3
     azurite
+    util-linux  #a working version of uuid   called: uuidgen
   ];
 
   # shellHook ensures we install LuaSocket and set the correct paths
