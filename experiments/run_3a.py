@@ -87,5 +87,6 @@ for i in range(NUM_ITERATIONS):
     run_3a(duration, operation, out_folder)
 
 teardown(False)
+print(f"{SSH_IP_CLIENT=}")
 collect_results(SSH_IP_CLIENT)
 
