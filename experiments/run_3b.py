@@ -17,7 +17,6 @@ from datetime import datetime
 # evtl set new credentials: export AZURITE_ACCOUNTS="user:1234"
 #
 
-
 # Azurite default configuration
 AZURITE_ACCOUNT_NAME = "user"
 AZURITE_ACCOUNT_KEY = "1234"
