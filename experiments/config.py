@@ -4,8 +4,8 @@ LOCAL_RUN = True  # set to True if you want to run all nodes and experiments loc
 
 # Azure Storage Emulator Settings for Azurite
 # Azurite default settings for local Azure emulator.
-AZURITE_STORAGE_ACCOUNT_NAME = "devstoreaccount1"   # Default Azurite storage account name
-AZURITE_STORAGE_MASTER_KEY = "Eby8vdM02xNOz0n8sFAK9yF7JpvUwFtx+Yw/aF5AnkdeQn7k+2HfFd9qkhGVWZXdt4UtvO2qD7KM="  # Default Azurite master key
+AZURITE_STORAGE_ACCOUNT_NAME = "user"   # Default Azurite storage account name
+AZURITE_STORAGE_MASTER_KEY = "1234"  # Default Azurite master key
 
 # Azurite Emulator Endpoints (by default Azurite runs locally on port 10000, 10001, and 10002 for blob, queue, and table)
 AZURITE_BLOB_HOST = "127.0.0.1"  # Localhost for blob service

@@ -14,19 +14,18 @@ from datetime import datetime
 # 2. npm install -g azurite
 # 3. start Azurite in the background: azurite --silent --location ./azurite_data --debug ./azurite_debug.log --tableHost 127.0.0.1 --tablePort 10002 &
 # 4. Verify it is running: ps aux | grep azurite
+# evtl set new credentials: export AZURITE_ACCOUNTS="user:1234"
 #
 
 # Azurite default configuration
-AZURITE_ACCOUNT_NAME = "devstoreaccount1"
-AZURITE_ACCOUNT_KEY = "Eby8vdM02xWkA3az9W5ZPcuwwd2E9aMJW6DhDeUpgw=fGzv3nwKONNlGRd29aZJof7PRwIgORJFjBRzq=C41vHcP9mlX1Ag=="
+AZURITE_ACCOUNT_NAME = "user"
+AZURITE_ACCOUNT_KEY = "1234"
 AZURITE_ENDPOINT = "http://127.0.0.1:10002/devstoreaccount1"
 
-# Environment check for Azurite
-if not os.environ.get('STORAGE_MASTER_KEY', ''):
-    os.environ['STORAGE_MASTER_KEY'] = AZURITE_ACCOUNT_KEY
+# Environment check for Azurit
+os.environ['STORAGE_MASTER_KEY'] = AZURITE_ACCOUNT_KEY
 
-if not os.environ.get('STORAGE_ACCOUNT_NAME', ''):
-    os.environ['STORAGE_ACCOUNT_NAME'] = AZURITE_ACCOUNT_NAME
+os.environ['STORAGE_ACCOUNT_NAME'] = AZURITE_ACCOUNT_NAME
 
 timestamp = time.time()
 dt_object = datetime.fromtimestamp(timestamp)
