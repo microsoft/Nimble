@@ -21,4 +21,5 @@ WRK2_PATH = "/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin"
 
 
 run cargo test
+run cargo build --release
 python3 run_<version>.py
