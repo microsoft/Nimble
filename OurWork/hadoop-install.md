@@ -179,8 +179,6 @@ yarn --daemon start resourcemanager
 yarn --daemon start nodemanager
 
 ## create new runHiBench.sh with following text
-#!/bin/bash
-
 size=large
 sed -ie "s/hibench.scale.profile .*/hibench.scale.profile $size/g" conf/hibench.conf
 
@@ -197,8 +195,13 @@ bench micro     terasort
 bench micro     dfsioe
 bench websearch pagerank
 
+### To run this script you have to go through all the .sh scripts in HiBench/bin and remove the bin/bash shebang at the start. Havent found a better solution but bin/bash doesnt exit unfortunatley
 ### Run that script in the HiBench folder, output in report/hibench.report
+bash runHiBench.sh
+### Make sure you are in this nix-shell again, and make sure All Hadoop nodes are up and running
+export NIXPKGS_ALLOW_INSECURE=1 
 
+nix-shell -p maven python2 jdk8 --impure
 
 # Switch between hadoop-nimble and hadoop-upstream
 
