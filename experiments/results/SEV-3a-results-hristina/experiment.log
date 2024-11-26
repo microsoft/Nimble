@@ -1,0 +1,9 @@
+2024-11-25 21:32:56,065 - INFO - Executing command: '/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin/wrk2 -t120 -c120 -d90s -R50000 --latency http://127.0.0.1:8082 -s /root/Nimble/experiments/create.lua -- 50000req > /root/Nimble/experiments/results/fig-3a-date-2024-11-25-time-21-32-40/create-50000.log'
+2024-11-25 21:32:56,085 - ERROR - Command failed with return code: 1
+2024-11-25 21:32:56,085 - ERROR - Standard Output: 
+2024-11-25 21:32:56,085 - ERROR - Standard Error: PANIC: unprotected error in call to Lua API (/root/.luarocks/share/lua/5.1/uuid.lua:29: Not implemented, please set a function to generate random bytes by calling `uuid.set_rng(func)`)
+
+2024-11-25 21:32:56,085 - INFO - Executing command: '/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin/wrk2 -t120 -c120 -d30s -R50000 --latency http://127.0.0.1:8082 -s /root/Nimble/experiments/append.lua -- 50000req > /root/Nimble/experiments/results/fig-3a-date-2024-11-25-time-21-32-40/append-50000.log'
+2024-11-25 21:33:26,185 - INFO - Command executed successfully. Output captured in: /root/Nimble/experiments/results/fig-3a-date-2024-11-25-time-21-32-40/append-50000.log
+2024-11-25 21:33:26,185 - INFO - Executing command: '/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin/wrk2 -t120 -c120 -d30s -R50000 --latency http://127.0.0.1:8082 -s /root/Nimble/experiments/read.lua -- 50000req > /root/Nimble/experiments/results/fig-3a-date-2024-11-25-time-21-32-40/read-50000.log'
+2024-11-25 21:33:56,215 - INFO - Command executed successfully. Output captured in: /root/Nimble/experiments/results/fig-3a-date-2024-11-25-time-21-32-40/read-50000.log
