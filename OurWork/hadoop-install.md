@@ -132,8 +132,8 @@ sh runNNTBenchmark.sh
 
 
 # Installing HiBench
-
-export NIXPKGS_ALLOW_INSECURE=1
+## The first two you need to ALWAYS do when going into this nix
+export NIXPKGS_ALLOW_INSECURE=1 
 
 nix-shell -p maven python2 --impure
 
