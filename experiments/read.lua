@@ -4,7 +4,7 @@ package.path = current_folder .. "/?.lua;" .. package.path
 local base64url = require("base64url")
 local socket = require("socket")
 local json = require("json")
-local uuid = require("uuid")
+local uuid = require("uuidgen")
 local sha = require("sha2")
 time = math.floor(socket.gettime() * 1000)
 math.randomseed(time)
