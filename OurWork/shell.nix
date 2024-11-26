@@ -16,6 +16,9 @@ mkShell {
     rustc
     cargo
     wrk2
+#    llvm_13
+#    llvmPackages_13.libcxxClang
+#    clang13Stdenv
     nodejs
     python3
 #    azurite

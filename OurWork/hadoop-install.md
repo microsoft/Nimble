@@ -131,3 +131,157 @@ sh runNNTBenchmark.sh
 ## Results are in the bash.terminal / no log files are created
 
 
+# Installing HiBench
+## The first two you need to ALWAYS do when going into this nix
+export NIXPKGS_ALLOW_INSECURE=1 
+
+nix-shell -p maven python2 --impure
+
+cd ~ // to your highest folder
+
+git clone https://github.com/Intel-bigdata/HiBench.git
+
+cd HiBench
+
+git checkout 00aa105
+
+mvn -Phadoopbench -Dhadoop=3.2 -DskipTests package (TWICE if it fails first try)
+
+
+ ## replace user and ip with the ip
+echo -n '# Configure
+hibench.hadoop.home           /home/kilian/opt/hadoop-nimble
+hibench.hadoop.executable     ${hibench.hadoop.home}/bin/hadoop
+hibench.hadoop.configure.dir  ${hibench.hadoop.home}/etc/hadoop
+hibench.hdfs.master           hdfs://127.0.0.1:9000
+hibench.hadoop.release        apache
+' >conf/hadoop.conf
+
+## this with replace ip 127.0.0.1 for localhost
+echo "\
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<?xml-stylesheet type=\"text/xsl\" href=\"configuration.xsl\"?>
+<configuration>
+	<property>
+		<name>yarn.resourcemanager.hostname</name>
+		<value><namenodeip></value>
+	</property>
+</configuration>
+" | sudo tee /home/kilian/opt/hadoop-nimble/etc/hadoop/yarn-site.xml
+
+## cd into Nimble experiments folder
+python3 start_nimble_memory.py
+
+## cd back to HiBench folder
+### start these two
+yarn --daemon start resourcemanager
+
+yarn --daemon start nodemanager
+
+## create new runHiBench.sh with following text
+size=large
+sed -ie "s/hibench.scale.profile .*/hibench.scale.profile $size/g" conf/hibench.conf
+
+function bench {
+        kind=$1
+        name=$2
+        bin/workloads/$kind/$name/prepare/prepare.sh
+        bin/workloads/$kind/$name/hadoop/run.sh
+}
+
+bench micro     wordcount
+bench micro     sort
+bench micro     terasort
+bench micro     dfsioe
+bench websearch pagerank
+
+### To run this script you have to go through all the .sh scripts in HiBench/bin and remove the bin/bash shebang at the start. Havent found a better solution but bin/bash doesnt exit unfortunatley
+### Run that script in the HiBench folder, output in report/hibench.report
+bash runHiBench.sh
+### Make sure you are in this nix-shell again, and make sure All Hadoop nodes are up and running
+export NIXPKGS_ALLOW_INSECURE=1 
+
+nix-shell -p maven python2 jdk8 --impure
+
+# Switch between hadoop-nimble and hadoop-upstream
+
+## create two new scripts in your home folder, add the text and replace USER with your name
+touch nnreset.sh 
+touch dnreset.sh 
+
+both take the argument [ nimble / upstream ]
+
+nnreset is following:
+	#!/bin/bash
+	# name: nnreset.sh
+	# usage: ./nnreset.sh [ nimble / upstream ]
+
+	UPSTREAM=/home/USER/opt/hadoop-upstream
+	NIMBLE=/home/USER/opt/hadoop-nimble
+	STORAGE=/home/USER/mnt/store
+
+	# Switch to?
+	if   [ "$1" = "nimble"   ]; then
+			BASE=$NIMBLE
+	elif [ "$1" = "upstream" ]; then
+			BASE=$UPSTREAM
+	else
+			echo "usage: $0 [ nimble / upstream ]"
+			exit 1
+	fi
+
+	echo "Switching to $BASE"
+
+	# Stop existing services
+	$UPSTREAM/bin/hdfs --daemon stop namenode
+	$UPSTREAM/bin/yarn --daemon stop resourcemanager
+	$NIMBLE/bin/hdfs   --daemon stop namenode
+	$NIMBLE/bin/yarn   --daemon stop resourcemanager
+
+	# Remove storage
+	rm -rf $STORAGE/*
+
+	# Initialize
+	mkdir -p $STORAGE
+	$BASE/bin/hdfs namenode -format
+	$BASE/bin/hdfs --daemon start namenode
+	$BASE/bin/yarn --daemon start resourcemanager
+
+dnreset is following:
+	#!/bin/bash
+	# name: dnreset.sh
+	# usage: ./dnreset.sh [ nimble / upstream ]
+
+	UPSTREAM=/home/USER/opt/hadoop-upstream
+	NIMBLE=/home/USER/opt/hadoop-nimble
+	STORAGE=/home/USER/mnt/store
+
+	# Switch to?
+	if   [ "$1" = "nimble"   ]; then
+			BASE=$NIMBLE
+	elif [ "$1" = "upstream" ]; then
+			BASE=$UPSTREAM
+	else
+			echo "usage: $0 [ nimble / upstream ]"
+			exit 1
+	fi
+
+	echo "Switching to $BASE"
+
+	# Stop existing services
+	$UPSTREAM/bin/hdfs --daemon stop datanode
+	$UPSTREAM/bin/yarn --daemon stop nodemanager
+	$NIMBLE/bin/hdfs   --daemon stop datanode
+	$NIMBLE/bin/yarn   --daemon stop nodemanager
+
+	# Remove storage
+	rm -rf $STORAGE/*
+
+	# Initialize
+	mkdir -p $STORAGE
+	$BASE/bin/hdfs namenode -format
+	$BASE/bin/hdfs --daemon start datanode
+	$BASE/bin/yarn --daemon start nodemanager
+
+# If anything doesnt work --> https://github.com/mitthu/hadoop-nimble?tab=readme-ov-file#deploy 
+# I followed those steps, adjusted everything and got rid of any errors by them, but maybe i missed sth
