@@ -23,16 +23,13 @@ mkShell {
     python3
 #    azurite
     util-linux  #a working version of uuid   called: uuidgen
-    pkgs.python311Packages.pip
-    pkgs.python311Packages.setuptools
+    hadoop
   ];
 
   # shellHook ensures we install LuaSocket and set the correct paths
   shellHook = ''
     # Configure luarocks to install packages locally by default
     luarocks config local_by_default true
-    pip install pydoop
-
     # Install LuaSocket via luarocks in the local user directory
     luarocks install luasocket --local
     luarocks install uuid --local
