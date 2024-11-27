@@ -23,6 +23,9 @@ mkShell {
     python3
 #    azurite
     util-linux  #a working version of uuid   called: uuidgen
+    pkgs.python311Packages.pip
+    pkgs.python311Packages.setuptools
+    pkgs.python311Packages.pydoop
   ];
 
   # shellHook ensures we install LuaSocket and set the correct paths
