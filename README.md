@@ -76,7 +76,7 @@ running the binary and with the `--help` flag.
 
 ```
   ./target/release/coordinator
-    -h HOSTNAME
+    -t HOSTNAME
     -p PORT
     -e "http://HOST_ENDORSER_1:PORT,http://HOST_ENDORSER_2:PORT,http://HOST_ENDORSER_3:PORT" 
     -s "memory" # use "table" to use Azure table instead and provide the following
