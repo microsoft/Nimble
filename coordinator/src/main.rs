@@ -330,7 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .short("n")
         .long("nimbledb")
         .help("The database name")
-        .default_value("nimble_cosmosdb"),
+        .default_value("nimbledb"),
     )
     .arg(
       Arg::with_name("cosmosurl")
