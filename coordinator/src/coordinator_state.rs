@@ -25,7 +25,9 @@ use tonic::{
 };
 
 use ledger::endorser_proto;
+use clokwerk::TimeUnits;
 
+const ENDORSER_REFRESH_PERIOD: u32 = 60; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
 struct EndorserClients {
@@ -37,6 +39,8 @@ type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
 
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
 
+
+#[derive(Clone)]
 pub struct CoordinatorState {
   pub(crate) ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
@@ -609,6 +613,12 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
+    let coordinator_clone = coordinator.clone();
+    let mut scheduler = clokwerk::AsyncScheduler::new ();
+    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
+      let value = coordinator_clone.clone();
+      async move {value.ping_all_endorsers().await}
+    });
 
     Ok(coordinator)
   }
@@ -1963,5 +1973,65 @@ impl CoordinatorState {
 
     let (ledger_entry, height) = res.unwrap();
     Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
+  }
+
+  pub async fn ping_all_endorsers(&self) {
+    let hostnames = self.get_endorser_uris();
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+    for hostname in hostnames {
+      //for _idx in 0..self.num_grpc_channels {
+        //let channel = self.num_grpc_channels - 1;
+        let tx = mpsc_tx.clone();
+        let endorser = hostname.clone();
+
+        let _job = tokio::spawn(async move {
+          let res = Endpoint::from_shared(endorser.to_string());
+          if let Ok(endorser_endpoint) = res {
+            let endorser_endpoint = endorser_endpoint
+              .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
+            let endorser_endpoint =
+              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+            let res = endorser_endpoint.connect().await;
+            if let Ok(channel) = res {
+              let mut client =
+                endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
+
+              let res =
+                get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
+              if let Ok(resp) = res {
+                let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
+                let _ = tx.send((endorser, Ok((client, pk)))).await;
+              } else {
+                eprintln!("Failed to retrieve the public key: {:?}", res);
+                let _ = tx
+                  .send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey)))
+                  .await;
+              }
+            } else {
+              eprintln!("Failed to connect to the endorser {}: {:?}", endorser, res);
+              let _ = tx
+                .send((endorser, Err(CoordinatorError::FailedToConnectToEndorser)))
+                .await;
+            }
+          } else {
+            eprintln!("Failed to resolve the endorser host name: {:?}", res);
+            let _ = tx
+              .send((endorser, Err(CoordinatorError::CannotResolveHostName)))
+              .await;
+          }
+        });
+      //}
+    }
+
+    drop(mpsc_tx);
+
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      if let Ok((_client, _pk)) = res {
+        
+      } else {
+        // TODO call endorser refresh for "client"
+        eprintln!("Endorser {} to be refreshed", endorser);
+      }
+    }
   }
 }
