@@ -34,4 +34,6 @@ pub enum EndorserError {
   NotActive,
   /// returned if the endorser is already activated
   AlreadyActivated,
+
+  SigningFailed,
 }

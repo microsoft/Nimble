@@ -27,6 +27,9 @@ use tonic::{
 use ledger::endorser_proto;
 use clokwerk::TimeUnits;
 
+use std::time::Duration;
+use uuid::Uuid;
+
 const ENDORSER_REFRESH_PERIOD: u32 = 60; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
@@ -62,6 +65,32 @@ async fn get_public_key_with_retry(
     let res = endorser_client
       .get_public_key(tonic::Request::new(request.clone()))
       .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn get_ping_with_retry(
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+  request: endorser_proto::GetPing,
+) -> Result<tonic::Response<endorser_proto::GetPing>,  Status> {
+  loop {
+    let res = endorser_client
+        .get_ping(tonic::Request::new(request.clone()))
+        .await;
     match res {
       Ok(resp) => {
         return Ok(resp);
@@ -1975,63 +2004,97 @@ impl CoordinatorState {
     Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
   }
 
+
+
+
   pub async fn ping_all_endorsers(&self) {
     let hostnames = self.get_endorser_uris();
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+
     for hostname in hostnames {
-      //for _idx in 0..self.num_grpc_channels {
-        //let channel = self.num_grpc_channels - 1;
-        let tx = mpsc_tx.clone();
-        let endorser = hostname.clone();
+      let tx = mpsc_tx.clone();
+      let endorser = hostname.clone();
 
-        let _job = tokio::spawn(async move {
-          let res = Endpoint::from_shared(endorser.to_string());
-          if let Ok(endorser_endpoint) = res {
-            let endorser_endpoint = endorser_endpoint
-              .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
-            let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
-            let res = endorser_endpoint.connect().await;
-            if let Ok(channel) = res {
-              let mut client =
-                endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
+      let _job = tokio::spawn(async move {
 
-              let res =
-                get_public_key_with_retry(&mut client, endorser_proto::GetPublicKeyReq {}).await;
-              if let Ok(resp) = res {
-                let endorser_proto::GetPublicKeyResp { pk } = resp.into_inner();
-                let _ = tx.send((endorser, Ok((client, pk)))).await;
-              } else {
-                eprintln!("Failed to retrieve the public key: {:?}", res);
-                let _ = tx
-                  .send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey)))
-                  .await;
+        let nonce = Uuid::new_v4().to_string(); // Nonce is a UUID string
+        // Create a connection endpoint
+        let endpoint = Endpoint::from_shared(endorser.to_string());
+        match endpoint {
+          Ok(endpoint) => {
+            let endpoint = endpoint
+                .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
+                .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+
+            match endpoint.connect().await {
+              Ok(channel) => {
+                let mut client = endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
+
+                // Include the nonce in the request
+                let ping_req = endorser_proto::GetPing {
+                  nonce: nonce.clone(), // Send the nonce in the request
+                  ..Default::default()
+                };
+
+                // Call the method with retry logic
+                let res = get_public_key_with_retry(&mut client, ping_req).await;
+                match res {
+                  Ok(resp) => {
+                    let endorser_proto::GetPing { nonce: resp_nonce, signature } = resp.into_inner();
+                    if resp_nonce == nonce {
+                      // Process the response
+                      let _pk = signature; // Use the signature or public key if needed
+                      if let Err(_) = tx.send((endorser, Ok((client, _pk)))).await {
+                        eprintln!("Failed to send result for endorser: {}", endorser);
+                      }
+                    } else {
+                      eprintln!("Nonce mismatch for endorser: {}. Expected: {}, Received: {}", endorser, nonce, resp_nonce);
+                      if let Err(_) = tx.send((endorser, Err(CoordinatorError::NonceMismatch))).await {
+                        eprintln!("Failed to send nonce mismatch error for endorser: {}", endorser);
+                      }
+                    }
+                  },
+                  Err(status) => {
+                    eprintln!("Failed to retrieve ping");
+                    if let Err(_) = tx.send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey))).await {
+                      eprintln!("Failed to send failure result for endorser: {}", endorser);
+                    }
+                  }
+                }
+              },
+              Err(err) => {
+                eprintln!("Failed to connect to the endorser {}: {:?}", endorser, err);
+                if let Err(_) = tx.send((endorser, Err(CoordinatorError::FailedToConnectToEndorser))).await {
+                  eprintln!("Failed to send failure result for endorser: {}", endorser);
+                }
               }
-            } else {
-              eprintln!("Failed to connect to the endorser {}: {:?}", endorser, res);
-              let _ = tx
-                .send((endorser, Err(CoordinatorError::FailedToConnectToEndorser)))
-                .await;
             }
-          } else {
-            eprintln!("Failed to resolve the endorser host name: {:?}", res);
-            let _ = tx
-              .send((endorser, Err(CoordinatorError::CannotResolveHostName)))
-              .await;
+          },
+          Err(err) => {
+            eprintln!("Failed to resolve the endorser host name {}: {:?}", endorser, err);
+            if let Err(_) = tx.send((endorser, Err(CoordinatorError::CannotResolveHostName))).await {
+              eprintln!("Failed to send failure result for endorser: {}", endorser);
+            }
           }
-        });
-      //}
+        }
+      });
     }
 
     drop(mpsc_tx);
 
+    // Receive results from the channel and process them
     while let Some((endorser, res)) = mpsc_rx.recv().await {
-      if let Ok((_client, _pk)) = res {
-        
-      } else {
-        // TODO call endorser refresh for "client"
-        eprintln!("Endorser {} to be refreshed", endorser);
+      match res {
+        Ok((_client, _pk)) => {
+          // Process the client and public key
+        },
+        Err(_) => {
+          // TODO: Call endorser refresh for "client"
+          eprintln!("Endorser {} needs to be refreshed", endorser);
+        }
       }
     }
   }
+
+
 }

@@ -206,6 +206,21 @@ impl EndorserState {
     }
   }
 
+  pub fn get_ping(&self) -> Result<String, EndorserError> {
+    // Check the state of the system (e.g., whether it's initialized or active)
+    match self.view_ledger_state.read() {
+      Ok(view_ledger_state) => {
+        match view_ledger_state.endorser_mode {
+          EndorserMode::Uninitialized => Err(EndorserError::NotInitialized),
+          EndorserMode::Initialized => Ok("System is initialized.".to_string()),
+          EndorserMode::Active => Ok("System is active.".to_string()),
+          EndorserMode::Finalized => Err(EndorserError::AlreadyFinalized),
+        }
+      }
+      Err(_) => Err(EndorserError::FailedToAcquireViewLedgerReadLock),
+    }
+  }
+
   pub fn get_height(&self, handle: &NimbleDigest) -> Result<usize, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
@@ -309,6 +324,13 @@ impl EndorserState {
 
   pub fn get_public_key(&self) -> PublicKey {
     self.public_key.clone()
+  }
+
+  pub fn sign_with_private_key(&self, message: &[u8]) -> Result<Signature, EndorserError> {
+    // Attempt to sign the message using the private key
+    self.private_key
+        .sign(message)
+        .map_err(|_| EndorserError::SigningFailed) // If signing fails, return an error
   }
 
   fn append_view_ledger(

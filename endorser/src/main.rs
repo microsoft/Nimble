@@ -12,7 +12,7 @@ use ledger::endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
   GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
+  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp, GetPing,
 };
 
 pub struct EndorserServiceState {
@@ -54,6 +54,7 @@ impl EndorserServiceState {
       },
       EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
       EndorserError::AlreadyFinalized => Status::unavailable("Endorser is already finalized"),
+      EndorserError::SigningFailed => Status::internal("Failed to sign the nonce"),
       _ => Status::internal(default_msg),
     }
   }
@@ -75,6 +76,33 @@ impl EndorserCall for EndorserServiceState {
 
     let reply = GetPublicKeyResp {
       pk: pk.to_bytes().to_vec(),
+    };
+
+    Ok(Response::new(reply))
+  }
+
+//This function should sent a ping request and return the keyed ping
+  async fn get_ping(
+    &self,
+    req: Request<GetPing>,
+  ) -> Result<Response<GetPing>, Status> {
+
+    let ping_req = req.into_inner();
+    let received_nonce = ping_req.nonce;
+
+    if received_nonce.is_empty() {
+      return Err(Status::internal("Received nonce is empty"));
+    }
+
+  let signature = self
+      .state
+      .sign_with_private_key(&received_nonce)
+      .map_err(|_| EndorserError::SigningFailed) ?;
+
+
+    let reply = GetPing {
+      nonce: received_nonce, // Echo back the nonce
+      signature, // Sign the nonce
     };
 
     Ok(Response::new(reply))

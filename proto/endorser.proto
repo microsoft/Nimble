@@ -12,9 +12,15 @@ service EndorserCall {
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
   rpc Activate(ActivateReq) returns (ActivateResp);
+  rpc GetPing(GetPing) returns (GetPing);
 }
 
 message GetPublicKeyReq {
+}
+
+message GetPing {
+  string nonce = 1;
+  string signature = 2;
 }
 
 message GetPublicKeyResp {
