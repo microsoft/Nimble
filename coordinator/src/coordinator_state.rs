@@ -46,6 +46,7 @@ pub struct CoordinatorState {
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
   num_grpc_channels: usize,
+  timeout_map: Arc<RwLock<HashMap<String, u64>>>, // Store the timeout count for each endorser
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
@@ -488,24 +489,28 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
       },
     };
 
@@ -2011,16 +2016,19 @@ impl CoordinatorState {
     for hostname in hostnames {
       let tx = mpsc_tx.clone();
       let endorser = hostname.clone();
+      let timeout_map = self.timeout_map.clone(); // Clone to use in async task
 
       let _job = tokio::spawn(async move {
 
         let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
         //TODO Save the nonce for replay protection
         // Create a connection endpoint
+
         let endpoint = Endpoint::from_shared(endorser.to_string());
         match endpoint {
           Ok(endpoint) => {
-            //TODO consequences for timeouts
+
+
             let endpoint = endpoint
                 .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
                 .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
@@ -2046,22 +2054,47 @@ impl CoordinatorState {
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
                           println!("Nonce match for endorser: {}", endorser);   //HERE If the nonce matched
+
+                          let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
+                          let counter = map.entry(endorser.clone()).or_insert(0);
+                          *counter = 0; // Reset counter
+
+
                         } else {
-                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>", endorser, nonce);  //HERE if the nonce didnt match
+                          let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
+                          let counter = map.entry(endorser.clone()).or_insert(0);
+                          *counter += 1; // Increment timeout count
+
+                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>. This is error number {}", endorser, nonce, counter);  //HERE if the nonce didnt match
                         }
                       },
                       Err(_) => {
-                        eprintln!("Failed to decode IdSig for endorser: {}", endorser);
+                        let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
+                          let counter = map.entry(endorser.clone()).or_insert(0);
+                          *counter += 1; // Increment timeout count
+
+                          eprintln!("Failed to decode IdSig. This is error number {}", counter);  //HERE if the nonce didnt match
+                        
                       }
-                    }
+                    } 
                   },
                   Err(status) => {
-                    eprintln!("Failed to retrieve ping from endorser {}: {:?}", endorser, status);
+                    let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
+                    let counter = map.entry(endorser.clone()).or_insert(0);
+                    *counter += 1; // Increment timeout count
+
+                    eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, err, counter);
                   }
                 }
               },
               Err(err) => {
-                eprintln!("Failed to connect to the endorser {}: {:?}", endorser, err);
+                
+                // Update the timeout count for the endorser
+                let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
+                let counter = map.entry(endorser.clone()).or_insert(0);
+                *counter += 1; // Increment timeout count
+
+                eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, err, counter);
               }
             }
           },
