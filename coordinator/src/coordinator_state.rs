@@ -2014,11 +2014,13 @@ impl CoordinatorState {
 
       let _job = tokio::spawn(async move {
 
-        let nonce = generate_secure_nonce_bytes(16); // Nonce is a UUID string
+        let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
+        //TODO Save the nonce for replay protection
         // Create a connection endpoint
         let endpoint = Endpoint::from_shared(endorser.to_string());
         match endpoint {
           Ok(endpoint) => {
+            //TODO consequences for timeouts
             let endpoint = endpoint
                 .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
                 .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
@@ -2027,7 +2029,7 @@ impl CoordinatorState {
               Ok(channel) => {
                 let mut client = endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
 
-
+                
                 // Include the nonce in the request
                 let ping_req = endorser_proto::PingReq {
                   nonce: nonce.clone(), // Send the nonce in the request
@@ -2038,14 +2040,14 @@ impl CoordinatorState {
                 let res = get_ping_with_retry(&mut client, ping_req).await;
                 match res {
                   Ok(resp) => {
-                    let endorser_proto::PingResp { signa } = resp.into_inner();
-                    match IdSig::from_bytes(&signa) {
-                      Ok(id_sig) => {
+                    let endorser_proto::PingResp { id_sig } = resp.into_inner();
+                    match IdSig::from_bytes(&id_sig) {
+                      Ok(id_signature) => {
                         // Verify the signature with the original nonce
-                        if id_sig.verify(&nonce).is_ok() {
-                          println!("Nonce match for endorser: {}", endorser);
+                        if id_signature.verify(&nonce).is_ok() {
+                          println!("Nonce match for endorser: {}", endorser);   //HERE If the nonce matched
                         } else {
-                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>", endorser, nonce);
+                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>", endorser, nonce);  //HERE if the nonce didnt match
                         }
                       },
                       Err(_) => {
