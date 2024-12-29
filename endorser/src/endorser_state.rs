@@ -311,14 +311,6 @@ impl EndorserState {
     self.public_key.clone()
   }
 
-  pub fn sign_with_private_key(&self, message: &[u8]) -> Result<Signature, EndorserError> {
-    // Attempt to sign the message using the private key
-    self
-      .private_key
-      .sign(message)
-      .map_err(|_| EndorserError::SigningFailed) // If signing fails, return an error
-  }
-
   fn append_view_ledger(
     &self,
     view_ledger_state: &mut ViewLedgerState,

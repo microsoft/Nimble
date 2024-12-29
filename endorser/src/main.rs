@@ -54,7 +54,6 @@ impl EndorserServiceState {
       },
       EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
       EndorserError::AlreadyFinalized => Status::unavailable("Endorser is already finalized"),
-      EndorserError::SigningFailed => Status::internal("Failed to sign the nonce"),
       _ => Status::internal(default_msg),
     }
   }
