@@ -507,6 +507,23 @@ impl EndorserState {
       Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
     }
   }
+
+  pub fn ping(&self, nonce: &[u8]) -> Result<IdSig, EndorserError> {
+    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Finalized => {
+          // If finalized then there is no key for signing
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
+      }
+      let signature = self.private_key.sign(&nonce).unwrap();
+      let id_sig = IdSig::new(self.public_key.clone(), signature);
+      Ok(id_sig)
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
+    }
+  }
 }
 
 #[cfg(test)]
@@ -515,7 +532,7 @@ mod tests {
   use rand::Rng;
 
   #[test]
-  pub fn check_endorser_new_ledger_and_get_tail() {
+  pub fn check_endorser_new_ledger_and_greceiptet_tail() {
     let endorser_state = EndorserState::new();
 
     // The coordinator sends the hashed contents of the configuration to the endorsers

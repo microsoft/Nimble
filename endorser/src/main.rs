@@ -12,7 +12,7 @@ use ledger::endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
   GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp, GetPing,
+  NewLedgerResp, PingReq, PingResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
 };
 
 pub struct EndorserServiceState {
@@ -50,7 +50,7 @@ impl EndorserServiceState {
       EndorserError::LedgerHeightOverflow => Status::out_of_range("Ledger height overflow"),
       EndorserError::InvalidTailHeight => Status::invalid_argument("Invalid ledger height"),
       EndorserError::AlreadyInitialized => {
-        Status::already_exists("Enodrser is already initialized")
+        Status::already_exists("Endorser is already initialized")
       },
       EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
       EndorserError::AlreadyFinalized => Status::unavailable("Endorser is already finalized"),
@@ -384,6 +384,28 @@ impl EndorserCall for EndorserServiceState {
           error,
           None,
           "Failed to verify the view change due to an internal error",
+        );
+        Err(status)
+      },
+    }
+  }
+
+  async fn ping(&self, req: Request<PingReq>) -> Result<Response<PingResp>, Status> {
+    let PingReq { nonce } = req.into_inner();
+    let res = self.state.ping(&nonce);
+
+    match res {
+      Ok(id_sig) => {
+        let reply = PingResp {
+          id_sig: id_sig.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(e) => {
+        let status = self.process_error(
+          e,
+          None,
+          "Failed to compute signature due to an internal error",
         );
         Err(status)
       },
