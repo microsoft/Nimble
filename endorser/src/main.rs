@@ -81,33 +81,6 @@ impl EndorserCall for EndorserServiceState {
     Ok(Response::new(reply))
   }
 
-//This function should sent a ping request and return the keyed ping
-  async fn get_ping(
-    &self,
-    req: Request<GetPing>,
-  ) -> Result<Response<GetPing>, Status> {
-
-    let ping_req = req.into_inner();
-    let received_nonce = ping_req.nonce;
-
-    if received_nonce.is_empty() {
-      return Err(Status::internal("Received nonce is empty"));
-    }
-
-  let signature = self
-      .state
-      .sign_with_private_key(&received_nonce)
-      .map_err(|_| EndorserError::SigningFailed) ?;
-
-
-    let reply = GetPing {
-      nonce: received_nonce, // Echo back the nonce
-      signature, // Sign the nonce
-    };
-
-    Ok(Response::new(reply))
-  }
-
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
