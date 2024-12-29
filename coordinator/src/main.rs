@@ -57,9 +57,9 @@ impl Call for CoordinatorServiceState {
     } = req.into_inner();
 
     let res = self
-      .state
-      .create_ledger(None, &handle_bytes, &block_bytes)
-      .await;
+        .state
+        .create_ledger(None, &handle_bytes, &block_bytes)
+        .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to create a new ledger"));
     }
@@ -79,9 +79,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     let res = self
-      .state
-      .append_ledger(None, &handle_bytes, &block_bytes, expected_height as usize)
-      .await;
+        .state
+        .append_ledger(None, &handle_bytes, &block_bytes, expected_height as usize)
+        .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to append to a ledger"));
     }
@@ -105,9 +105,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     let res = self
-      .state
-      .read_ledger_tail(&handle_bytes, &nonce_bytes)
-      .await;
+        .state
+        .read_ledger_tail(&handle_bytes, &nonce_bytes)
+        .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to read a ledger tail"));
     }
@@ -132,9 +132,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     match self
-      .state
-      .read_ledger_by_index(&handle_bytes, index as usize)
-      .await
+        .state
+        .read_ledger_by_index(&handle_bytes, index as usize)
+        .await
     {
       Ok(ledger_entry) => {
         let reply = ReadByIndexResp {
@@ -186,6 +186,12 @@ impl Call for CoordinatorServiceState {
     };
 
     Ok(Response::new(reply))
+  }
+
+
+  //pinging the endorser
+  async fn ping_all_endorsers(&self, request: Request<PingReq>) -> Result<Response<PingResp>, Status> {
+    self.state.ping_all_endorsers().await;
   }
 }
 
@@ -1191,3 +1197,5 @@ mod tests {
     println!("endorser6 process ID is {}", endorser6.child.id());
   }
 }
+
+fn main() {}

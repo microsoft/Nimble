@@ -1,11 +1,5 @@
 use crate::errors::CoordinatorError;
-use ledger::{
-  compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut,
-  errors::VerificationError,
-  signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorserHostnames, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
-  Nonces, Receipt, Receipts, VerifierState,
-};
+use ledger::{compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut, errors::VerificationError, signature::{PublicKey, PublicKeyTrait}, Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce, Nonces, Receipt, Receipts, VerifierState};
 use rand::random;
 use std::{
   collections::{HashMap, HashSet},
@@ -29,6 +23,9 @@ use clokwerk::TimeUnits;
 
 use std::time::Duration;
 use uuid::Uuid;
+
+use rand::Rng;
+
 
 const ENDORSER_REFRESH_PERIOD: u32 = 60; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
@@ -85,11 +82,11 @@ async fn get_public_key_with_retry(
 
 async fn get_ping_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
-  request: endorser_proto::GetPing,
-) -> Result<tonic::Response<endorser_proto::GetPing>,  Status> {
+  request: endorser_proto::PingReq,
+) -> Result<tonic::Response<endorser_proto::PingReq>,  Status> {
   loop {
     let res = endorser_client
-        .get_ping(tonic::Request::new(request.clone()))
+        .ping(tonic::Request::new(request.clone()))
         .await;
     match res {
       Ok(resp) => {
@@ -2017,7 +2014,7 @@ impl CoordinatorState {
 
       let _job = tokio::spawn(async move {
 
-        let nonce = Uuid::new_v4().to_string(); // Nonce is a UUID string
+        let nonce = generate_secure_nonce_bytes(16); // Nonce is a UUID string
         // Create a connection endpoint
         let endpoint = Endpoint::from_shared(endorser.to_string());
         match endpoint {
@@ -2030,43 +2027,39 @@ impl CoordinatorState {
               Ok(channel) => {
                 let mut client = endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
 
+
                 // Include the nonce in the request
-                let ping_req = endorser_proto::GetPing {
+                let ping_req = endorser_proto::PingReq {
                   nonce: nonce.clone(), // Send the nonce in the request
-                  ..Default::default()
+                  ..Default::default() // Set other fields to their default values (in this case, none)
                 };
 
                 // Call the method with retry logic
-                let res = get_public_key_with_retry(&mut client, ping_req).await;
+                let res = get_ping_with_retry(&mut client, ping_req).await;
                 match res {
                   Ok(resp) => {
-                    let endorser_proto::GetPing { nonce: resp_nonce, signature } = resp.into_inner();
-                    if resp_nonce == nonce {
-                      // Process the response
-                      let _pk = signature; // Use the signature or public key if needed
-                      if let Err(_) = tx.send((endorser, Ok((client, _pk)))).await {
-                        eprintln!("Failed to send result for endorser: {}", endorser);
-                      }
-                    } else {
-                      eprintln!("Nonce mismatch for endorser: {}. Expected: {}, Received: {}", endorser, nonce, resp_nonce);
-                      if let Err(_) = tx.send((endorser, Err(CoordinatorError::NonceMismatch))).await {
-                        eprintln!("Failed to send nonce mismatch error for endorser: {}", endorser);
+                    let endorser_proto::PingResp { signa } = resp.into_inner();
+                    match IdSig::from_bytes(&signa) {
+                      Ok(id_sig) => {
+                        // Verify the signature with the original nonce
+                        if id_sig.verify(&nonce).is_ok() {
+                          println!("Nonce match for endorser: {}", endorser);
+                        } else {
+                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>", endorser, nonce);
+                        }
+                      },
+                      Err(_) => {
+                        eprintln!("Failed to decode IdSig for endorser: {}", endorser);
                       }
                     }
                   },
                   Err(status) => {
-                    eprintln!("Failed to retrieve ping");
-                    if let Err(_) = tx.send((endorser, Err(CoordinatorError::UnableToRetrievePublicKey))).await {
-                      eprintln!("Failed to send failure result for endorser: {}", endorser);
-                    }
+                    eprintln!("Failed to retrieve ping from endorser {}: {:?}", endorser, status);
                   }
                 }
               },
               Err(err) => {
                 eprintln!("Failed to connect to the endorser {}: {:?}", endorser, err);
-                if let Err(_) = tx.send((endorser, Err(CoordinatorError::FailedToConnectToEndorser))).await {
-                  eprintln!("Failed to send failure result for endorser: {}", endorser);
-                }
               }
             }
           },
@@ -2097,4 +2090,10 @@ impl CoordinatorState {
   }
 
 
+}
+
+fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
+  let mut rng = rand::thread_rng();
+  let nonce: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+  nonce
 }
