@@ -9,6 +9,8 @@ service Call {
   rpc ReadByIndex(ReadByIndexReq) returns (ReadByIndexResp);
   rpc ReadViewByIndex(ReadViewByIndexReq) returns (ReadViewByIndexResp);
   rpc ReadViewTail(ReadViewTailReq) returns (ReadViewTailResp);
+  rpc PingAllEndorsers(PingReq) returns (PingResp);
+
 }
 
 message NewLedgerReq {
@@ -71,3 +73,7 @@ message ReadViewTailResp {
   uint64 height = 3;
   bytes attestations = 4; // TODO: place holder for attestation reports
 }
+
+message PingReq { bytes nonce = 1; }
+
+message PingResp { bytes id_sig = 1; }

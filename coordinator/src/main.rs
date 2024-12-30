@@ -5,7 +5,8 @@ use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
 use tonic::{transport::Server, Request, Response, Status};
-
+use coordinator_proto::PingResp;
+use ledger::{IdSig, signature::{PublicKey, PublicKeyTrait, Signature}};
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
@@ -189,9 +190,24 @@ impl Call for CoordinatorServiceState {
   }
 
 
-  //pinging the endorser
-  async fn ping_all_endorsers(&self, request: Request<PingReq>) -> Result<Response<PingResp>, Status> {
+
+  async fn ping_all_endorsers(
+    &self,
+    request: Request<coordinator_proto::PingReq>,  // Accept the gRPC request
+) -> Result<Response<coordinator_proto::PingResp>, Status> {
+    // Call the state method to perform the ping task (no return value)
     self.state.ping_all_endorsers().await;
+
+    // Here, create the PingResp with a dummy id_sig (or generate it if necessary)
+    let id_sig = IdSig::new(PublicKey::from_bytes(&[1u8; 32]).unwrap(), Signature::from_der(&[2u8; 64]).unwrap()); // Replace with actual logic to generate IdSig if needed
+
+    // Construct and return the PingResp with the id_sig
+    let reply = PingResp {
+        id_sig: id_sig.to_bytes(),  // Make sure id_sig is serialized to bytes
+    };
+
+    // Return the response
+    Ok(Response::new(reply))
   }
 }
 
@@ -1197,5 +1213,3 @@ mod tests {
     println!("endorser6 process ID is {}", endorser6.child.id());
   }
 }
-
-fn main() {}

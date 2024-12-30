@@ -22,7 +22,6 @@ use ledger::endorser_proto;
 use clokwerk::TimeUnits;
 
 use std::time::Duration;
-use uuid::Uuid;
 
 use rand::Rng;
 
@@ -84,7 +83,7 @@ async fn get_public_key_with_retry(
 async fn get_ping_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::PingReq,
-) -> Result<tonic::Response<endorser_proto::PingReq>,  Status> {
+) -> Result<tonic::Response<endorser_proto::PingResp>,  Status> {
   loop {
     let res = endorser_client
         .ping(tonic::Request::new(request.clone()))
@@ -2083,7 +2082,7 @@ impl CoordinatorState {
                     let counter = map.entry(endorser.clone()).or_insert(0);
                     *counter += 1; // Increment timeout count
 
-                    eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, err, counter);
+                    eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, status, counter);
                   }
                 }
               },
@@ -2100,7 +2099,7 @@ impl CoordinatorState {
           },
           Err(err) => {
             eprintln!("Failed to resolve the endorser host name {}: {:?}", endorser, err);
-            if let Err(_) = tx.send((endorser, Err(CoordinatorError::CannotResolveHostName))).await {
+            if let Err(_) = tx.send((endorser.clone(), Err::<(endorser_proto::endorser_call_client::EndorserCallClient<Channel>, Vec<u8>), CoordinatorError>(CoordinatorError::CannotResolveHostName))).await {
               eprintln!("Failed to send failure result for endorser: {}", endorser);
             }
           }
