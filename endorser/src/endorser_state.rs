@@ -746,4 +746,9 @@ mod tests {
       panic!("Signature verification failed when it should not have failed");
     }
   }
+
+  #[test]
+  pub fn check_ping() {
+    
+  }
 }
