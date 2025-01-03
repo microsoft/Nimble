@@ -193,7 +193,7 @@ impl Call for CoordinatorServiceState {
 
   async fn ping_all_endorsers(
     &self,
-    request: Request<coordinator_proto::PingReq>,  // Accept the gRPC request
+    _request: Request<coordinator_proto::PingReq>,  // Accept the gRPC request
 ) -> Result<Response<coordinator_proto::PingResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     self.state.ping_all_endorsers().await;
