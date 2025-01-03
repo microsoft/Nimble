@@ -749,6 +749,51 @@ mod tests {
 
   #[test]
   pub fn check_ping() {
-    
+    let endorser_state = EndorserState::new();
+
+    // The coordinator sends the hashed contents of the configuration to the endorsers
+    // We will pick a dummy view value for testing purposes
+    let view_block_hash = {
+      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let n = NimbleDigest::from_bytes(&t);
+      assert!(n.is_ok(), "This should not have occured");
+      n.unwrap()
+    };
+
+    // perform a checked addition of height with 1
+    let height_plus_one = {
+      let res = endorser_state
+        .view_ledger_state
+        .read()
+        .expect("failed")
+        .view_ledger_tail_metablock
+        .get_height()
+        .checked_add(1);
+      assert!(res.is_some());
+      res.unwrap()
+    };
+
+    // The coordinator initializes the endorser by calling initialize_state
+    let res = endorser_state.initialize_state(
+      &view_block_hash,
+      &Vec::new(),
+      &MetaBlock::default(),
+      &view_block_hash,
+      height_plus_one,
+    );
+    assert!(res.is_ok());
+
+    // Set the endorser mode directly
+    endorser_state
+      .view_ledger_state
+      .write()
+      .expect("failed to acquire write lock")
+      .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
+
+    let nonce = rand::thread_rng().gen::<[u8; 32]>();
+    let id_sig = endorser_state.ping(&nonce).unwrap();
+    assert!(result.is_ok(), "Ping should be successful when endorser_state is active");
+    let id_sig = result.unwrap();
+    assert!(id_sig.verify(&nonce), "Signature verification failed");
   }
 }
