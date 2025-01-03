@@ -791,7 +791,7 @@ mod tests {
       .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
 
     let nonce = rand::thread_rng().gen::<[u8; 32]>();
-    let id_sig = endorser_state.ping(&nonce).unwrap();
+    let result = endorser_state.ping(&nonce);
     assert!(result.is_ok(), "Ping should be successful when endorser_state is active");
     let id_sig = result.unwrap();
     assert!(id_sig.verify(&nonce), "Signature verification failed");
