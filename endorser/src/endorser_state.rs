@@ -794,6 +794,6 @@ mod tests {
     let result = endorser_state.ping(&nonce);
     assert!(result.is_ok(), "Ping should be successful when endorser_state is active");
     let id_sig = result.unwrap();
-    assert!(id_sig.verify(&nonce), "Signature verification failed");
+    assert!(id_sig.verify(&nonce).is_ok(), "Signature verification failed");
   }
 }
