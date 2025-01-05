@@ -1314,10 +1314,11 @@ mod tests {
     // Print the whole timeout_map from the coordinator state
     let timeout_map = server.get_state().get_timeout_map();
     println!("Timeout Map: {:?}", timeout_map);
-    // Wait for a few seconds
-    tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // Print the whole timeout_map from the coordinator state again
+    let req = tonic::Request::new(coordinator_proto::PingReq {});
+    let res = server.ping_all_endorsers(req).await;
+    assert!(res.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
     println!("Timeout Map after waiting: {:?}", timeout_map);
 
