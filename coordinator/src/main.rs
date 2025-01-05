@@ -5,7 +5,6 @@ use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
 use tonic::{transport::Server, Request, Response, Status};
-use coordinator_proto::PingResp;
 use ledger::{IdSig, signature::{PublicKey, PublicKeyTrait, Signature}};
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
@@ -1316,7 +1315,7 @@ mod tests {
     println!("Timeout Map: {:?}", timeout_map);
 
     // Print the whole timeout_map from the coordinator state again
-    let req = tonic::Request::new(coordinator_proto::PingReq::default());
+    let req = tonic::Request::new(PingReq {});
     let res = server.ping_all_endorsers(req).await;
     assert!(res.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
