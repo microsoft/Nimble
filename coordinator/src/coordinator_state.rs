@@ -1528,7 +1528,7 @@ impl CoordinatorState {
     if new_endorsers.is_empty() {
       return Err(CoordinatorError::NoNewEndorsers);
     }
-
+    println!("connected to new endorsers");
     // Package the list of endorsers into a genesis block of the view ledger
     let view_ledger_genesis_block = {
       let res = bincode::serialize(&new_endorsers);
@@ -1539,7 +1539,7 @@ impl CoordinatorState {
       let block_vec = res.unwrap();
       Block::new(&block_vec)
     };
-
+    println!("created view ledger genesis block");
     // Read the current ledger tail
     let res = self.ledger_store.read_view_ledger_tail().await;
 
@@ -1550,7 +1550,7 @@ impl CoordinatorState {
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
-
+    println!("read view ledger tail");
     let (tail, height) = res.unwrap();
 
     // Store the genesis block of the view ledger in the ledger store
@@ -1565,7 +1565,7 @@ impl CoordinatorState {
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
-
+    println!("appended view ledger genesis block");
     let view_ledger_height = res.unwrap();
 
     self
@@ -1576,7 +1576,9 @@ impl CoordinatorState {
         &view_ledger_genesis_block,
         view_ledger_height,
       )
-      .await
+      .await;
+    println!("applied view change");
+    self
   }
 
   async fn apply_view_change(
