@@ -1316,7 +1316,7 @@ mod tests {
 
     // Print the whole timeout_map from the coordinator state again
     let req = tonic::Request::new(PingReq {
-      nonce: 3_u64,
+      nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
     });
     let res = server.ping_all_endorsers(req).await;
     assert!(res.is_ok());
