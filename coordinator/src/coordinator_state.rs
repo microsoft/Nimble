@@ -1576,9 +1576,7 @@ impl CoordinatorState {
         &view_ledger_genesis_block,
         view_ledger_height,
       )
-      .await;
-    println!("applied view change");
-    self
+      .await
   }
 
   async fn apply_view_change(
