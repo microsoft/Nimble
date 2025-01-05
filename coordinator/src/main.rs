@@ -633,19 +633,19 @@ mod tests {
 
     // Launch the endorser
     let endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
-
+    println!("Endorser started");
     // Create the coordinator
     let coordinator = Arc::new(
       CoordinatorState::new(&store, &ledger_store_args, None)
         .await
         .unwrap(),
     );
-
+    println!("Coordinator started");
     let res = coordinator
       .replace_endorsers(&["http://[::1]:9090".to_string()])
       .await;
     assert!(res.is_ok());
-
+    println!("Endorser replaced");
     let server = CoordinatorServiceState::new(coordinator);
 
     // Initialization: Fetch view ledger to build VerifierState
@@ -795,6 +795,8 @@ mod tests {
     let endorser2 = launch_endorser(&endorser_cmd, endorser_args2);
     let endorser_args3 = endorser_args.clone() + " -p 9093";
     let endorser3 = launch_endorser(&endorser_cmd, endorser_args3);
+
+    println!("2 more Endorsers started");
 
     let res = server
       .get_state()
