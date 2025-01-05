@@ -198,11 +198,11 @@ impl Call for CoordinatorServiceState {
     self.state.ping_all_endorsers().await;
 
     // Here, create the PingResp with a dummy id_sig (or generate it if necessary)
-    let id_sig = IdSig::new(PublicKey::from_bytes(&[1u8; 32]).unwrap(), Signature::from_der(&[2u8; 64]).unwrap()); // Replace with actual logic to generate IdSig if needed
+    // let id_sig =   // Replace with actual logic to generate IdSig if needed
 
     // Construct and return the PingResp with the id_sig
     let reply = PingResp {
-        id_sig: id_sig.to_bytes(),  // Make sure id_sig is serialized to bytes
+        id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(),  // Make sure id_sig is serialized to bytes
     };
 
     // Return the response
