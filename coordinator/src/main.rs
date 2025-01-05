@@ -1313,7 +1313,6 @@ mod tests {
 
     // Print the whole timeout_map from the coordinator state
     let timeout_map = server.get_state().get_timeout_map();
-    let timeout_map = timeout_map.read().unwrap();
     println!("Timeout Map: {:?}", *timeout_map);
 
   }
