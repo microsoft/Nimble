@@ -478,6 +478,8 @@ impl CoordinatorState {
     args: &HashMap<String, String>,
     num_grpc_channels_opt: Option<usize>,
   ) -> Result<CoordinatorState, CoordinatorError> {
+    let mut dummy_timeout_map = HashMap::new();
+    dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
     let num_grpc_channels = match num_grpc_channels_opt {
       Some(n) => n,
       None => DEFAULT_NUM_GRPC_CHANNELS,
@@ -495,21 +497,21 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
       },
     };
 
@@ -649,9 +651,7 @@ impl CoordinatorState {
     //   let value = coordinator_clone.clone();
     //   async move {value.ping_all_endorsers().await}
     // });
-    let mut dummy_timeout_map = HashMap::new();
-    dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
-    coordinator.timeout_map = Arc::new(RwLock::new(dummy_timeout_map.clone()));
+  
     Ok(coordinator)
   }
 
