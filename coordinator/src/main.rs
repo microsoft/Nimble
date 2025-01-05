@@ -988,6 +988,8 @@ mod tests {
     let endorser_args6 = endorser_args.clone() + " -p 9096";
     let endorser6 = launch_endorser(&endorser_cmd, endorser_args6);
 
+    println!("3 more Endorsers started");
+
     let res = server
       .get_state()
       .replace_endorsers(&[
