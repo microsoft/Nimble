@@ -479,7 +479,7 @@ impl CoordinatorState {
     num_grpc_channels_opt: Option<usize>,
   ) -> Result<CoordinatorState, CoordinatorError> {
     let mut dummy_timeout_map = HashMap::new();
-    dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
+    // dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
     let num_grpc_channels = match num_grpc_channels_opt {
       Some(n) => n,
       None => DEFAULT_NUM_GRPC_CHANNELS,
@@ -645,12 +645,12 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
-    // let coordinator_clone = coordinator.clone();
-    // let mut scheduler = clokwerk::AsyncScheduler::new ();
-    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
-    //   let value = coordinator_clone.clone();
-    //   async move {value.ping_all_endorsers().await}
-    // });
+    let coordinator_clone = coordinator.clone();
+    let mut scheduler = clokwerk::AsyncScheduler::new ();
+    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
+      let value = coordinator_clone.clone();
+      async move {value.ping_all_endorsers().await}
+    });
   
     Ok(coordinator)
   }
