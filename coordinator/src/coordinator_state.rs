@@ -643,13 +643,15 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
-    let coordinator_clone = coordinator.clone();
-    let mut scheduler = clokwerk::AsyncScheduler::new ();
-    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
-      let value = coordinator_clone.clone();
-      async move {value.ping_all_endorsers().await}
-    });
-
+    // let coordinator_clone = coordinator.clone();
+    // let mut scheduler = clokwerk::AsyncScheduler::new ();
+    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
+    //   let value = coordinator_clone.clone();
+    //   async move {value.ping_all_endorsers().await}
+    // });
+    let mut dummy_timeout_map = HashMap::new();
+    dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
+    coordinator.timeout_map = Arc::new(RwLock::new(dummy_timeout_map.clone()));
     Ok(coordinator)
   }
 
