@@ -1325,5 +1325,12 @@ mod tests {
     let timeout_map = server.get_state().get_timeout_map();
     println!("Timeout Map after waiting: {:?}", timeout_map);
 
+    let _ = Command::new("pkill").arg("-f").arg("endorser").status().expect("failed to execute process");
+
+    let res = server.ping_all_endorsers(req).await;
+    assert!(res.is_ok());
+    let timeout_map = server.get_state().get_timeout_map();
+    println!("Timeout Map after waiting and killing process: {:?}", timeout_map);
+
   }
 }
