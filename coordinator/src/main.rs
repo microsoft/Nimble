@@ -1327,8 +1327,12 @@ mod tests {
 
     let _ = Command::new("pkill").arg("-f").arg("endorser").status().expect("failed to execute process");
 
-    let res = server.ping_all_endorsers(req).await;
-    assert!(res.is_ok());
+
+    let req1 = tonic::Request::new(PingReq {
+      nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
+    });
+    let res1 = server.ping_all_endorsers(req1).await;
+    assert!(res1.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
     println!("Timeout Map after waiting and killing process: {:?}", timeout_map);
 
