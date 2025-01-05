@@ -17,7 +17,7 @@ use coordinator_proto::{
   call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
-  ReadViewTailResp,
+  ReadViewTailResp, PingReq, PingResp,
 };
 
 use axum::{
@@ -506,7 +506,7 @@ mod tests {
   use crate::{
     coordinator_proto::{
       call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp,
+      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingReq, PingResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };
@@ -1316,7 +1316,7 @@ mod tests {
     println!("Timeout Map: {:?}", timeout_map);
 
     // Print the whole timeout_map from the coordinator state again
-    let req = tonic::Request::new(coordinator_proto::PingReq {});
+    let req = tonic::Request::new(coordinator_proto::PingReq::default());
     let res = server.ping_all_endorsers(req).await;
     assert!(res.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
