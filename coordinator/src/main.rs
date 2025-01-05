@@ -30,6 +30,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower::ServiceBuilder;
 
+use rand::Rng;
+
 pub struct CoordinatorServiceState {
   state: Arc<CoordinatorState>,
 }
