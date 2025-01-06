@@ -2,9 +2,9 @@ import subprocess
 
 # Define the commands to run in parallel
 commands = [
-    "/home/kilian/target/release/endorser -p 9090",
-    "/home/kilian/target/release/endorser -p 9091",
-    '/home/kilian/target/release/coordinator -e "http://localhost:9090,http://localhost:9091"'
+    "/home/kilian/Nimble/target/release/endorser -p 9090",
+    "/home/kilian/Nimble/target/release/endorser -p 9091",
+    '/home/kilian/Nimble/target/release/coordinator -e "http://localhost:9090,http://localhost:9091"'
 ]
 
 # Start the processes
