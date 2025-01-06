@@ -651,6 +651,7 @@ impl CoordinatorState {
       let value = coordinator_clone.clone();
       async move {value.ping_all_endorsers().await}
     });
+    println!("Started the scheduler");
   
     Ok(coordinator)
   }
@@ -2011,6 +2012,7 @@ impl CoordinatorState {
 
 
   pub async fn ping_all_endorsers(&self) {
+    println!("Pinging all endorsers");
     let hostnames = self.get_endorser_uris();
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
