@@ -466,8 +466,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
-  let coordinator_ref = Arc::new(coordinator);
+  coordinator.start_auto_scheduler().await;
 
+  let coordinator_ref = Arc::new(coordinator);
+  
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
 
   // Start the REST server for management
@@ -498,7 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   job2.await?;
-  coordinator.start_auto_scheduler().await;
+  
   Ok(())
 }
 
