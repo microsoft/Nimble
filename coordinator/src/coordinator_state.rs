@@ -645,15 +645,25 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
-    let coordinator_clone = coordinator.clone();
-    let mut scheduler = clokwerk::AsyncScheduler::new ();
-    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
-      let value = coordinator_clone.clone();
-      async move {value.ping_all_endorsers().await}
-    });
-    println!("Started the scheduler");
+    // let coordinator_clone = coordinator.clone();
+    // let mut scheduler = clokwerk::AsyncScheduler::new ();
+    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
+    //   let value = coordinator_clone.clone();
+    //   async move {value.ping_all_endorsers().await}
+    // });
+    // println!("Started the scheduler");
   
     Ok(coordinator)
+  }
+
+  pub async fn start_auto_scheduler(&self) {
+    let coordinator_clone = self.clone();
+    let mut scheduler = clokwerk::AsyncScheduler::new();
+    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run(move || {
+      let value = coordinator_clone.clone();
+      async move { value.ping_all_endorsers().await }
+    });
+    println!("Started the scheduler");
   }
 
   async fn connect_to_existing_endorsers(
@@ -681,7 +691,7 @@ impl CoordinatorState {
 
     Ok(endorsers)
   }
-
+  
   fn get_endorser_client(
     &self,
     pk: &[u8],

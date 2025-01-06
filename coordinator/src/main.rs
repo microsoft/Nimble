@@ -498,7 +498,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   job2.await?;
-
+  coordinator.start_auto_scheduler().await;
   Ok(())
 }
 
