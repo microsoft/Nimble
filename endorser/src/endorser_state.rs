@@ -487,6 +487,7 @@ impl EndorserState {
   }
 
   pub fn ping(&self, nonce: &[u8]) -> Result<IdSig, EndorserError> {
+    println!("Pinged Endorser");
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
         EndorserMode::Finalized => {
