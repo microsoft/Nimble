@@ -4,7 +4,7 @@ import subprocess
 commands = [
     "/home/kilian/Nimble/target/release/endorser -p 9090",
     "/home/kilian/Nimble/target/release/endorser -p 9091",
-    '/home/kilian/Nimble/target/release/coordinator -e "http://localhost:9090,http://localhost:9091"'
+    "/home/kilian/Nimble/target/release/coordinator -e \"http://localhost:9090,http://localhost:9091\""
 ]
 
 # Start the processes
