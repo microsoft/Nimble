@@ -18,7 +18,7 @@ time.sleep(2)
 
 # Start another process in the background and forward its output
 print("Starting coordinator")
-coordinator = subprocess.Popen(coordinator_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+coordinator = subprocess.Popen(coordinator_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 # Give some time for the process to run
 time.sleep(30)
