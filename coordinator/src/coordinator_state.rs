@@ -2022,7 +2022,7 @@ impl CoordinatorState {
 
 
   pub async fn ping_all_endorsers(&self) {
-    println!("Pinging all endorsers");
+    println!("Pinging all endorsers from coordinator_state");
     let hostnames = self.get_endorser_uris();
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 

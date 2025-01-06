@@ -197,6 +197,7 @@ impl Call for CoordinatorServiceState {
     _request: Request<coordinator_proto::PingReq>,  // Accept the gRPC request
 ) -> Result<Response<coordinator_proto::PingResp>, Status> {
     // Call the state method to perform the ping task (no return value)
+    println!("Pining all endorsers now from main.rs");
     self.state.ping_all_endorsers().await;
 
     // Here, create the PingResp with a dummy id_sig (or generate it if necessary)
@@ -467,7 +468,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
   coordinator.start_auto_scheduler().await;
-
+  println!("Pinging all Endorsers method called from main.rs");
+  coordinator.ping_all_endorsers().await;
   let coordinator_ref = Arc::new(coordinator);
   
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
