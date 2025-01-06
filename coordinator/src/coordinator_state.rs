@@ -645,6 +645,8 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
+
+
     // let coordinator_clone = coordinator.clone();
     // let mut scheduler = clokwerk::AsyncScheduler::new ();
     // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
@@ -657,11 +659,19 @@ impl CoordinatorState {
   }
 
   pub async fn start_auto_scheduler(&self) {
+    
     let coordinator_clone = self.clone();
     let mut scheduler = clokwerk::AsyncScheduler::new();
     scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run(move || {
       let value = coordinator_clone.clone();
       async move { value.ping_all_endorsers().await }
+    });
+
+    tokio::spawn(async move {
+      loop {
+        scheduler.run_pending().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+      }
     });
     println!("Started the scheduler");
   }
