@@ -26,7 +26,7 @@ use std::time::Duration;
 use rand::Rng;
 
 
-const ENDORSER_REFRESH_PERIOD: u32 = 60; //seconds: the pinging period to endorsers
+const ENDORSER_REFRESH_PERIOD: u32 = 10; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
 struct EndorserClients {
