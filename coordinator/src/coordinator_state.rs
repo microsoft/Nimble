@@ -2145,7 +2145,9 @@ impl CoordinatorState {
         }
       }
     }
+    println!("Timeout map: {:?}", self.get_timeout_map());
   }
+  
   pub fn get_timeout_map(&self) -> HashMap<String, u64> {
     if let Ok(timeout_map_rd) = self.timeout_map.read() {
       timeout_map_rd.clone()
