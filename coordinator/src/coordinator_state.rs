@@ -22,7 +22,8 @@ use ledger::endorser_proto;
 use clokwerk::TimeUnits;
 
 use std::time::Duration;
-
+use tracing::{error, info};
+use tracing_subscriber;
 use rand::Rng;
 
 
@@ -46,6 +47,7 @@ pub struct CoordinatorState {
   verifier_state: Arc<RwLock<VerifierState>>,
   num_grpc_channels: usize,
   timeout_map: Arc<RwLock<HashMap<String, u64>>>, // Store the timeout count for each endorser
+  used_nonces: Arc<RwLock<HashSet<Vec<u8>>>>,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
@@ -53,6 +55,10 @@ const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to end
 const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
+
+const LOG_FILE_LOCATION: &std = "log.txt";
+const MAX_FAILURES: u32 = 3; // Set the maximum number of allowed failures
+const DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -491,27 +497,31 @@ impl CoordinatorState {
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
         timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(dummy_timeout_map.clone())),
+        timeout_map: Arc::new(RwLock::new(HashMap::new())),
+        used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
     };
 
@@ -2039,7 +2049,7 @@ impl CoordinatorState {
     for hostname in hostnames {
       let tx = mpsc_tx.clone();
       let endorser = hostname.clone();
-      let timeout_map = self.timeout_map.clone(); // Clone to use in async task
+      let timeout_map = Arc::clone(&self.timeout_map); // Clone to use in async task
 
       let _job = tokio::spawn(async move {
 
@@ -2080,44 +2090,30 @@ impl CoordinatorState {
 
                           let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
                           let counter = map.entry(endorser.clone()).or_insert(0);
+                          if(*counter >= MAX_FAILURES) {
+                            info!(message = "Endorser back online", %endorser);
+                            DEAD_ENDORSERS.fetch_sub(1, Ordering::SeqCst);
+                          }
                           *counter = 0; // Reset counter
 
 
                         } else {
-                          let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
-                          let counter = map.entry(endorser.clone()).or_insert(0);
-                          *counter += 1; // Increment timeout count
-
-                          eprintln!("Nonce mismatch for endorser: {}. Expected: {:?}, Received: <Signature Mismatch>. This is error number {}", endorser, nonce, counter);  //HERE if the nonce didnt match
-                        }
+                            endorser_ping_failed(endorser.clone(), ("Nonce did not match. Expected {:?}, got {:?}", nonce, id_signature), &timeout_map);
+                          }
                       },
                       Err(_) => {
-                        let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
-                          let counter = map.entry(endorser.clone()).or_insert(0);
-                          *counter += 1; // Increment timeout count
-
-                          eprintln!("Failed to decode IdSig. This is error number {}", counter);  //HERE if the nonce didnt match
-                        
+                        endorser_ping_failed(endorser.clone(), ("Failed to decode IdSig."), &timeout_map);                        
                       }
                     } 
                   },
                   Err(status) => {
-                    let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
-                    let counter = map.entry(endorser.clone()).or_insert(0);
-                    *counter += 1; // Increment timeout count
-
-                    eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, status, counter);
+                    endorser_ping_failed(endorser.clone(), ("Failed to connect to the endorser {}: {:?}.", endorser, status), &timeout_map);  
                   }
                 }
               },
               Err(err) => {
                 
-                // Update the timeout count for the endorser
-                let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
-                let counter = map.entry(endorser.clone()).or_insert(0);
-                *counter += 1; // Increment timeout count
-
-                eprintln!("Failed to connect to the endorser {}: {:?}. This was the {} time", endorser, err, counter);
+                endorser_ping_failed(endorser.clone(), ("Failed to connect to the endorser {}: {:?}.", endorser, err), &timeout_map); 
               }
             }
           },
@@ -2145,7 +2141,6 @@ impl CoordinatorState {
         }
       }
     }
-    println!("Timeout map: {:?}", self.get_timeout_map());
   }
   
   pub fn get_timeout_map(&self) -> HashMap<String, u64> {
@@ -2162,4 +2157,23 @@ fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
   let mut rng = rand::thread_rng();
   let nonce: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
   nonce
+}
+
+fn endorser_ping_failed(endorser: Endpoint, error: &str, timeout_map: &Arc<RwLock<HashMap<String, u64>>>) {
+  let mut map = timeout_map.write().unwrap();
+    let counter = map.entry(endorser.to_string()).or_insert(0);
+    *counter += 1;
+
+    error!(message = "Ping failed for endorser", %endorser, %error, try = *counter);
+
+    if *counter > MAX_FAILURES {
+        DEAD_ENDORSERS.fetch_add(1, Ordering::SeqCst);
+        let error_message = format!(
+            "Endorser {} failed more than {} times! Now {} endorsers are dead.",
+            endorser,
+            MAX_FAILURES,
+            DEAD_ENDORSERS.load(Ordering::SeqCst)
+        );
+        error!(%error_message);
+    }
 }
