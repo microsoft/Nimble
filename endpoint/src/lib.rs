@@ -21,9 +21,9 @@ use ledger::{
   Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
 use rand::random;
+use core::time;
 use std::{
-  convert::TryFrom,
-  sync::{Arc, RwLock},
+  collections::HashMap, convert::TryFrom, sync::{Arc, RwLock}
 };
 
 #[allow(dead_code)]
@@ -166,6 +166,24 @@ impl Connection {
       .map_err(|_e| EndpointError::FailedToReadViewLedger)?
       .into_inner();
     Ok((block, receipts, height as usize, attestations))
+  }
+
+  pub async fn get_timeout_map(
+    &self,
+    nonce: &[u8],
+  ) -> Result<(Vec<u8>, HashMap<String, u64>), EndpointError> {
+    let GetTimeoutMapResp {
+      block,
+      timeout_map,
+    } = self.clients[random::<usize>() % self.num_grpc_channels]
+      .clone()
+      .get_timeout_map(GetTimeoutMapReq {
+        nonce: nonce.to_vec(),
+      })
+      .await
+      .map_err(|_e| EndpointError::FailedToGetTimeoutMap)?
+      .into_inner();
+    Ok((block, timeout_map))
   }
 }
 
@@ -590,7 +608,29 @@ impl EndpointState {
     Ok((tag.to_vec(), counter as u64, signature))
   }
 
-  pub async fn get_timeout_map(&self) -> Result<(Vec<u8>, <HashMap<String, u64>>), EndpointError> {
+  pub async fn get_timeout_map(
+    &self,
+    nonce: &[u8],
+    sigformat: SignatureFormat,
+  ) -> Result<(Vec<u8>, HashMap<String, u64>), EndpointError> {
     
+
+    let (block, timeout_map) = {
+      let res = self.conn.get_timeout_map(nonce).await;
+
+      if res.is_err() {
+        return Err(EndpointError::FailedToGetTimeoutMap);
+      }
+      res.unwrap()
+    };
+
+    let sig = self.sk.sign(nonce).unwrap();
+    let signature = match sigformat {
+      SignatureFormat::DER => sig.to_der(),
+      _ => sig.to_bytes(),
+    };
+
+    // respond to the light client
+    Ok((signature, timeout_map))
   }
 }

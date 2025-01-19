@@ -211,6 +211,31 @@ impl Call for CoordinatorServiceState {
     // Return the response
     Ok(Response::new(reply))
   }
+
+  async fn get_timeout_map(
+    &self,
+    request: Request<GetTimeoutMapReq>,
+  ) -> Result<Response<GetTimeoutMapResp>, Status> {
+    let GetTimeoutMapReq {
+      nonce: nonce_bytes,
+    } = request.into_inner();
+
+    let res = self
+        .state
+        .get_timeout_map()
+        .await;
+    if res.is_err() {
+      return Err(Status::aborted("Failed to get Timeout Map"));
+    }
+
+    let timeout_map = res.unwrap();
+    let reply = GetTimeoutMapResp {
+      signature: nonce,
+      timeout_map,
+    };
+
+    Ok(Response::new(reply))
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
