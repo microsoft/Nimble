@@ -589,4 +589,8 @@ impl EndpointState {
     // respond to the light client
     Ok((tag.to_vec(), counter as u64, signature))
   }
+
+  pub async fn get_timeout_map(&self) -> Result<(Vec<u8>, <HashMap<String, u64>>), EndpointError> {
+    
+  }
 }
