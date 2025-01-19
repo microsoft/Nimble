@@ -7,6 +7,8 @@ service Call {
   rpc NewCounter(NewCounterReq) returns (NewCounterResp);
   rpc IncrementCounter(IncrementCounterReq) returns (IncrementCounterResp);
   rpc ReadCounter(ReadCounterReq) returns (ReadCounterResp);
+  rpc PingAllEndorsers(PingAllReq) returns (PingAllResp);
+  rpc GetTimeoutMap(GetTimeoutMapReq) returns (GetTimeoutMapResp);
 }
 
 message GetIdentityReq {
@@ -46,3 +48,21 @@ message ReadCounterResp {
   uint64 counter = 2;
   bytes signature = 3;
 }
+
+message PingAllReq { 
+  bytes nonce = 1; 
+}
+
+message PingAllResp { 
+  bytes id_sig = 1; 
+}
+
+message GetTimeoutMapReq {
+  bytes nonce = 1;
+}
+
+message GetTimeoutMapResp {
+  bytes signature = 1;
+  map<string, uint64> timeout_map = 2;
+}
+
