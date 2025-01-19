@@ -217,16 +217,12 @@ impl Call for CoordinatorServiceState {
     request: Request<GetTimeoutMapReq>,
   ) -> Result<Response<GetTimeoutMapResp>, Status> {
     let GetTimeoutMapReq {
-      nonce: nonce_bytes,
+      nonce,
     } = request.into_inner();
 
     let res = self
         .state
-        .get_timeout_map()
-        .await;
-    if res.is_err() {
-      return Err(Status::aborted("Failed to get Timeout Map"));
-    }
+        .get_timeout_map();
 
     let timeout_map = res.unwrap();
     let reply = GetTimeoutMapResp {

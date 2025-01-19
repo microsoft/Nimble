@@ -173,7 +173,7 @@ impl Connection {
     nonce: &[u8],
   ) -> Result<(Vec<u8>, HashMap<String, u64>), EndpointError> {
     let GetTimeoutMapResp {
-      block,
+      signature,
       timeout_map,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
@@ -183,15 +183,15 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToGetTimeoutMap)?
       .into_inner();
-    Ok((block, timeout_map))
+    Ok((signature, timeout_map))
   }
 
   pub async fn ping_all_endorsers(
     &self,
     nonce: &[u8],
   ) -> Result<(Vec<u8>), EndpointError> {
-    let GetTimeoutMapResp {
-      block,
+    let PingAllResp {
+      signature,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .ping_all_endorsers(PingAllReq {
@@ -200,7 +200,7 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToPingAllEndorsers)?
       .into_inner();
-    Ok((block))
+    Ok((signature))
   }
 }
 
