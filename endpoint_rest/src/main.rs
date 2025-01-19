@@ -98,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let app = Router::new()
       .route("/serviceid", get(get_identity))
       .route("/timeoutmap", get(get_timeout_map))
+      .route("/pingallendorsers", get(ping_all_endorsers))
       .route("/counters/:handle", get(read_counter).put(new_counter).post(increment_counter))
       // Add middleware to all routes
       .layer(
