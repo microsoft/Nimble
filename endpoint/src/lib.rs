@@ -13,7 +13,7 @@ pub mod coordinator_proto {
 use crate::errors::EndpointError;
 use coordinator_proto::{
   call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
+  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp, GetTimeoutMapReq, GetTimeoutMapResp, PingAllReq, PingAllResp
 };
 use ledger::{
   errors::VerificationError,
@@ -667,10 +667,7 @@ impl EndpointState {
     };
 
     let sig = self.sk.sign(nonce).unwrap();
-    let signature = match sigformat {
-      SignatureFormat::DER => sig.to_der(),
-      _ => sig.to_bytes(),
-    };
+    let signature = sig.to_bytes();
 
     // respond to the light client
     Ok((signature))
