@@ -200,7 +200,7 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToPingAllEndorsers)?
       .into_inner();
-    Ok((signature))
+    Ok((id_sig))
   }
 }
 
