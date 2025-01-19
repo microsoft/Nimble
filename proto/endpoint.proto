@@ -9,6 +9,7 @@ service Call {
   rpc ReadCounter(ReadCounterReq) returns (ReadCounterResp);
   rpc PingAllEndorsers(PingAllReq) returns (PingAllResp);
   rpc GetTimeoutMap(GetTimeoutMapReq) returns (GetTimeoutMapResp);
+  rpc AddEndorsers(AddEndorsersReq) returns (AddEndorsersResp);
 }
 
 message GetIdentityReq {
@@ -66,3 +67,11 @@ message GetTimeoutMapResp {
   map<string, uint64> timeout_map = 2;
 }
 
+message AddEndorsersReq {
+  bytes nonce = 1;
+  repeated string endorsers = 2;
+}
+
+message AddEndorsersResp {
+  bytes signature = 1;
+}

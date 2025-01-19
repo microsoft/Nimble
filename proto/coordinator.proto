@@ -11,6 +11,7 @@ service Call {
   rpc ReadViewTail(ReadViewTailReq) returns (ReadViewTailResp);
   rpc PingAllEndorsers(PingAllReq) returns (PingAllResp);
   rpc GetTimeoutMap(GetTimeoutMapReq) returns (GetTimeoutMapResp);
+  rpc AddEndorsers(AddEndorsersReq) returns (AddEndorsersResp);
 }
 
 message NewLedgerReq {
@@ -89,4 +90,13 @@ message GetTimeoutMapReq {
 message GetTimeoutMapResp {
   bytes signature = 1;
   map<string, uint64> timeout_map = 2;
+}
+
+message AddEndorsersReq {
+  bytes nonce = 1;
+  repeated string endorsers = 2;
+}
+
+message AddEndorsersResp {
+  bytes signature = 1;
 }
