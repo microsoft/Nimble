@@ -16,7 +16,7 @@ use coordinator_proto::{
   call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
-  ReadViewTailResp, PingAllReq, PingAllResp,
+  ReadViewTailResp, PingAllReq, PingAllResp, GetTimeoutMapReq, GetTimeoutMapResp,
 };
 
 use axum::{
