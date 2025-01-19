@@ -419,7 +419,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("channels")
         .takes_value(true)
         .help("The number of grpc channels"),
-    );
+    )
+    .arg(
+      Arg::with_name("max_failures")
+        .short("m")
+        .long("max-failures")
+        .value_name("COUNT")
+        .help("Sets the maximum number of allowed ping failures before an endorser is declared dead")
+        .takes_value(true),
+    )
+    .arg(
+      Arg::with_name("request_timeout")
+          .short("to")
+          .long("request-timeout")
+          .value_name("SECONDS")
+          .help("Sets the request timeout in seconds before a ping is considered failed")
+          .takes_value(true),
+  )
+  .arg(
+    Arg::with_name("run_percentage")
+        .short("pr")
+        .long("percentage")
+        .value_name("PERCENTAGE")
+        .help("Sets the percentage of endorsers that should be running before new once are initialized. (0-100; 66 = 66%)")
+        .takes_value(true),
+)
+    ;
 
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();
@@ -428,11 +453,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+  let max_failures = matches
+    .value_of("max_failures")
+    .unwrap_or("3")
+    .parse::<u32>()
+    .unwrap_or(3)
+    .max(1);  //ensure max_failures is at least 1
+  let request_timeout = matches
+    .value_of("request_timeout")
+    .unwrap_or("10")
+    .parse::<u64>()
+    .unwrap_or(10)
+    .max(1);   // Ensure request_timeout is at least 1
+  let run_percentage = matches
+    .value_of("run_percentage")
+    .unwrap_or("66")
+    .parse::<u32>()
+    .unwrap_or(66)
+    .clamp(1, 100);   // Ensure run_percentage is between 1 and 100
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
     .map(|e| e.to_string())
     .collect::<Vec<String>>();
+
+
+  state.overwrite_variables(max_failures, request_timeout, run_percentage);
+
 
   let mut ledger_store_args = HashMap::<String, String>::new();
   if let Some(x) = cli_matches.value_of("cosmosurl") {

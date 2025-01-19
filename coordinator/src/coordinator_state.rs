@@ -52,13 +52,14 @@ pub struct CoordinatorState {
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
 const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
-const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
+static ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
-const LOG_FILE_LOCATION: &std = "log.txt";
-const MAX_FAILURES: u32 = 3; // Set the maximum number of allowed failures
-const DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
+static LOG_FILE_LOCATION: &std = "log.txt";
+static MAX_FAILURES: u32 = 3; // Set the maximum number of allowed failures
+static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
+static ENDORSER_DEAD_ALLOWENCE: u32 = 66; // Set the percentage of endorsers that should always be running
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -2174,6 +2175,17 @@ fn endorser_ping_failed(endorser: Endpoint, error: &str, timeout_map: &Arc<RwLoc
             MAX_FAILURES,
             DEAD_ENDORSERS.load(Ordering::SeqCst)
         );
+        if((DEAD_ENDORSERS.load(Ordering::SeqCst)/map.len()) >= ENDORSER_DEAD_ALLOWENCE) {
+          error!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(Ordering::SeqCst));
+          //TODO: Initialize new endorsers. THis is @JanHa's part
+        }
         error!(%error_message);
     }
 }
+
+fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
+  MAX_FAILURES = max_failures;
+  ENDORSER_REQUEST_TIMEOUT = request_timeout;
+  ENDORSER_DEAD_ALLOWENCE = run_percentage;
+}
+
