@@ -185,6 +185,23 @@ impl Connection {
       .into_inner();
     Ok((block, timeout_map))
   }
+
+  pub async fn ping_all_endorsers(
+    &self,
+    nonce: &[u8],
+  ) -> Result<(Vec<u8>), EndpointError> {
+    let GetTimeoutMapResp {
+      block,
+    } = self.clients[random::<usize>() % self.num_grpc_channels]
+      .clone()
+      .ping_all_endorsers(PingAllReq {
+        nonce: nonce.to_vec(),
+      })
+      .await
+      .map_err(|_e| EndpointError::FailedToPingAllEndorsers)?
+      .into_inner();
+    Ok((block))
+  }
 }
 
 pub struct EndpointState {
@@ -632,5 +649,30 @@ impl EndpointState {
 
     // respond to the light client
     Ok((signature, timeout_map))
+  }
+
+  pub async fn ping_all_endorsers(
+    &self,
+    nonce: &[u8],
+  ) -> Result<(Vec<u8>), EndpointError> {
+    
+
+    let (block) = {
+      let res = self.conn.ping_all_endorsers(nonce).await;
+
+      if res.is_err() {
+        return Err(EndpointError::FailedToPingAllEndorsers);
+      }
+      res.unwrap()
+    };
+
+    let sig = self.sk.sign(nonce).unwrap();
+    let signature = match sigformat {
+      SignatureFormat::DER => sig.to_der(),
+      _ => sig.to_bytes(),
+    };
+
+    // respond to the light client
+    Ok((signature))
   }
 }

@@ -28,4 +28,6 @@ pub enum EndpointError {
   FailedToApplyViewChange,
   /// returned if the endpoint fails to get the timeout map
   FailedToGetTimeoutMap,
+  /// returned if failed to ping all endorsers
+  FailedToPingAllEndorsers,
 }
