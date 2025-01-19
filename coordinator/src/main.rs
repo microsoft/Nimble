@@ -224,10 +224,9 @@ impl Call for CoordinatorServiceState {
         .state
         .get_timeout_map();
 
-    let timeout_map = res.unwrap();
     let reply = GetTimeoutMapResp {
       signature: nonce,
-      timeout_map,
+      timeout_map: res,
     };
 
     Ok(Response::new(reply))

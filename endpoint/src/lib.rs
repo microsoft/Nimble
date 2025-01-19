@@ -191,7 +191,7 @@ impl Connection {
     nonce: &[u8],
   ) -> Result<(Vec<u8>), EndpointError> {
     let PingAllResp {
-      signature,
+      id_sig,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .ping_all_endorsers(PingAllReq {
