@@ -11,7 +11,6 @@ service Call {
   rpc ReadViewTail(ReadViewTailReq) returns (ReadViewTailResp);
   rpc PingAllEndorsers(PingAllReq) returns (PingAllResp);
   rpc GetTimeoutMap(GetTimeoutMapReq) returns (GetTimeoutMapResp);
-
 }
 
 message NewLedgerReq {
