@@ -25,7 +25,9 @@ use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber;
 use rand::Rng;
-
+use std::sync::atomic::AtomicUsize;
+use std::cmp::Ordering;
+use std::sync::atomic::Ordering;
 
 const ENDORSER_REFRESH_PERIOD: u32 = 10; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
@@ -33,6 +35,7 @@ const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channe
 struct EndorserClients {
   clients: Vec<endorser_proto::endorser_call_client::EndorserCallClient<Channel>>,
   uri: String,
+  failures: u64,
 }
 
 type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
@@ -46,7 +49,6 @@ pub struct CoordinatorState {
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
   num_grpc_channels: usize,
-  timeout_map: Arc<RwLock<HashMap<String, u64>>>, // Store the timeout count for each endorser
   used_nonces: Arc<RwLock<HashSet<Vec<u8>>>>,
 }
 
@@ -56,8 +58,8 @@ static ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to en
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
-static LOG_FILE_LOCATION: &std = "log.txt";
-static MAX_FAILURES: u32 = 3; // Set the maximum number of allowed failures
+static LOG_FILE_LOCATION: &str = "log.txt";
+static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
 static ENDORSER_DEAD_ALLOWENCE: u32 = 66; // Set the percentage of endorsers that should always be running
 
@@ -485,8 +487,6 @@ impl CoordinatorState {
     args: &HashMap<String, String>,
     num_grpc_channels_opt: Option<usize>,
   ) -> Result<CoordinatorState, CoordinatorError> {
-    let mut dummy_timeout_map = HashMap::new();
-    // dummy_timeout_map.insert("dummy_endorser".to_string(), 12);
     let num_grpc_channels = match num_grpc_channels_opt {
       Some(n) => n,
       None => DEFAULT_NUM_GRPC_CHANNELS,
@@ -497,7 +497,6 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
         used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "table" => CoordinatorState {
@@ -505,7 +504,6 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
         used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "filestore" => CoordinatorState {
@@ -513,7 +511,6 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
         used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       _ => CoordinatorState {
@@ -521,7 +518,6 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        timeout_map: Arc::new(RwLock::new(HashMap::new())),
         used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
     };
@@ -848,6 +844,7 @@ impl CoordinatorState {
               let mut endorser_clients = EndorserClients {
                 clients: Vec::new(),
                 uri: endorser,
+                failures: 0,
               };
               endorser_clients.clients.push(client);
               conn_map_wr.insert(pk, endorser_clients);
@@ -2044,13 +2041,13 @@ impl CoordinatorState {
 
   pub async fn ping_all_endorsers(&self) {
     println!("Pinging all endorsers from coordinator_state");
-    let hostnames = self.get_endorser_uris();
+    let hostnames = self.get_endorser_hostnames;
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
-    for hostname in hostnames {
+    for (pk, hostname) in hostnames {
       let tx = mpsc_tx.clone();
       let endorser = hostname.clone();
-      let timeout_map = Arc::clone(&self.timeout_map); // Clone to use in async task
+      let endorser_key = pk.clone();
 
       let _job = tokio::spawn(async move {
 
@@ -2087,41 +2084,59 @@ impl CoordinatorState {
                       Ok(id_signature) => {
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
-                          println!("Nonce match for endorser: {}", endorser);   //HERE If the nonce matched
+                          info!("Nonce match for endorser: {}", endorser);   //HERE If the nonce matched
 
-                          let mut map: std::sync::RwLockWriteGuard<'_, HashMap<String, u64>> = timeout_map.write().unwrap();
-                          let counter = map.entry(endorser.clone()).or_insert(0);
-                          if(*counter >= MAX_FAILURES) {
-                            info!(message = "Endorser back online", %endorser);
-                            DEAD_ENDORSERS.fetch_sub(1, Ordering::SeqCst);
-                          }
-                          *counter = 0; // Reset counter
+                          if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                            if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+                                // Reset failures on success
+                                endorser_clients.failures = 0;
+                                info!("Endorser {} back online", endorser);
+                                DEAD_ENDORSERS.fetch_sub(1, Ordering::SeqCst);
+                            } else {
+                                eprintln!("Endorser key not found in conn_map");
+                            }
+                        } else {
+                            eprintln!("Failed to acquire write lock on conn_map");
+                        }
 
 
                         } else {
-                            endorser_ping_failed(endorser.clone(), ("Nonce did not match. Expected {:?}, got {:?}", nonce, id_signature), &timeout_map);
+                          let error_message = format!(
+                            "Nonce did not match. Expected {:?}, got {:?}",
+                            nonce, id_signature
+                          );
+                            endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
                           }
                       },
                       Err(_) => {
-                        endorser_ping_failed(endorser.clone(), ("Failed to decode IdSig."), &timeout_map);                        
+                        let error_message = format!("Failed to decode IdSig."
+                        );
+                          endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);                       
                       }
                     } 
                   },
                   Err(status) => {
-                    endorser_ping_failed(endorser.clone(), ("Failed to connect to the endorser {}: {:?}.", endorser, status), &timeout_map);  
+                    let error_message = format!(
+                      "Failed to connect to the endorser {}: {:?}.", 
+                      endorser, status
+                    );
+                      endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
                   }
                 }
               },
               Err(err) => {
-                
-                endorser_ping_failed(endorser.clone(), ("Failed to connect to the endorser {}: {:?}.", endorser, err), &timeout_map); 
+                let error_message = format!(
+                  "Failed to connect to the endorser {}: {:?}.", 
+                  endorser, err
+                );
+                  endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
               }
             }
           },
           Err(err) => {
-            eprintln!("Failed to resolve the endorser host name {}: {:?}", endorser, err);
+            error!("Failed to resolve the endorser host name {}: {:?}", endorser, err);
             if let Err(_) = tx.send((endorser.clone(), Err::<(endorser_proto::endorser_call_client::EndorserCallClient<Channel>, Vec<u8>), CoordinatorError>(CoordinatorError::CannotResolveHostName))).await {
-              eprintln!("Failed to send failure result for endorser: {}", endorser);
+              error!("Failed to send failure result for endorser: {}", endorser);
             }
           }
         }
@@ -2138,17 +2153,23 @@ impl CoordinatorState {
         },
         Err(_) => {
           // TODO: Call endorser refresh for "client"
-          eprintln!("Endorser {} needs to be refreshed", endorser);
+          error!("Endorser {} needs to be refreshed", endorser);
         }
       }
     }
   }
   
   pub fn get_timeout_map(&self) -> HashMap<String, u64> {
-    if let Ok(timeout_map_rd) = self.timeout_map.read() {
-      timeout_map_rd.clone()
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      let mut timeout_map = HashMap::new();
+      for (pk, endorser_clients) in conn_map_rd.iter() {
+        // Convert Vec<u8> to String (assuming UTF-8 encoding)
+        timeout_map.insert(endorser_clients.uri, endorser_clients.failures);
+        
+      }
+      timeout_map
     } else {
-      eprintln!("Failed to acquire read lock");
+      eprintln!("Failed to acquire read lock on conn_map");
       HashMap::new()
     }
   }
@@ -2160,28 +2181,41 @@ fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
   nonce
 }
 
-fn endorser_ping_failed(endorser: Endpoint, error: &str, timeout_map: &Arc<RwLock<HashMap<String, u64>>>) {
-  let mut map = timeout_map.write().unwrap();
-    let counter = map.entry(endorser.to_string()).or_insert(0);
-    *counter += 1;
+fn endorser_ping_failed(endorser: String, error: &str, conn_map: &Arc<RwLock<HashMap<Vec<u8, Global>, EndorserClients, RandomState>>, Global>, endorser_key: Vec<u8>) {
+  if let Ok(mut conn_map_wr) = conn_map.write() {
+      if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+          // Increment the failures count
+          endorser_clients.failures += 1;
 
-    error!(message = "Ping failed for endorser", %endorser, %error, try = *counter);
+          // Log the failure
+          error!(message = "Ping failed for endorser", %endorser, %error, try = endorser_clients.failures);
 
-    if *counter > MAX_FAILURES {
-        DEAD_ENDORSERS.fetch_add(1, Ordering::SeqCst);
-        let error_message = format!(
-            "Endorser {} failed more than {} times! Now {} endorsers are dead.",
-            endorser,
-            MAX_FAILURES,
-            DEAD_ENDORSERS.load(Ordering::SeqCst)
-        );
-        if((DEAD_ENDORSERS.load(Ordering::SeqCst)/map.len()) >= ENDORSER_DEAD_ALLOWENCE) {
-          error!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(Ordering::SeqCst));
-          //TODO: Initialize new endorsers. THis is @JanHa's part
-        }
-        error!(%error_message);
-    }
+          if endorser_clients.failures > MAX_FAILURES {
+              // Increment dead endorser count
+              DEAD_ENDORSERS.fetch_add(1, Ordering::SeqCst);
+              
+              let error_message = format!(
+                  "Endorser {} failed more than {} times! Now {} endorsers are dead.",
+                  endorser,
+                  MAX_FAILURES,
+                  DEAD_ENDORSERS.load(Ordering::SeqCst)
+              );
+              
+              if DEAD_ENDORSERS.load(Ordering::SeqCst) / conn_map_wr.len() >= ENDORSER_DEAD_ALLOWANCE {
+                  error!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(Ordering::SeqCst));
+                  // TODO: Initialize new endorsers. This is @JanHa's part
+              }
+
+              error!(%error_message);
+          }
+      } else {
+          eprintln!("Endorser key not found in conn_map");
+      }
+  } else {
+      eprintln!("Failed to acquire write lock on conn_map");
+  }
 }
+
 
 fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
   MAX_FAILURES = max_failures;

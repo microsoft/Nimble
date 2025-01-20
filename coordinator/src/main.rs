@@ -453,24 +453,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
-  let max_failures = matches
+
+  let max_failures = cli_matches
     .value_of("max_failures")
     .unwrap_or("3")
     .parse::<u32>()
     .unwrap_or(3)
     .max(1);  //ensure max_failures is at least 1
-  let request_timeout = matches
+  let request_timeout = cli_matches
     .value_of("request_timeout")
     .unwrap_or("10")
     .parse::<u64>()
     .unwrap_or(10)
     .max(1);   // Ensure request_timeout is at least 1
-  let run_percentage = matches
+  let run_percentage = cli_matches
     .value_of("run_percentage")
     .unwrap_or("66")
     .parse::<u32>()
     .unwrap_or(66)
-    .clamp(1, 100);   // Ensure run_percentage is between 1 and 100
+    .clamp(51, 100);   // Ensure run_percentage is between 51 and 100
+
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
@@ -478,7 +480,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .collect::<Vec<String>>();
 
 
-  state.overwrite_variables(max_failures, request_timeout, run_percentage);
+  
 
 
   let mut ledger_store_args = HashMap::<String, String>::new();
@@ -515,6 +517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
   coordinator.start_auto_scheduler().await;
+  coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
   println!("Pinging all Endorsers method called from main.rs");
   coordinator.ping_all_endorsers().await;
   let coordinator_ref = Arc::new(coordinator);
