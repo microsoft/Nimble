@@ -38,10 +38,18 @@ use ledger::endorser_proto;
 const ENDORSER_REFRESH_PERIOD: u32 = 10; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
+enum EndorserUsageState {
+  Idle,
+  InUse,
+  Finalized,
+  Unavailable,
+}
+
 struct EndorserClients {
   clients: Vec<endorser_proto::endorser_call_client::EndorserCallClient<Channel>>,
   uri: String,
   failures: u64,
+  usage_state: EndorserUsageState,
 }
 
 type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
@@ -849,6 +857,7 @@ impl CoordinatorState {
                 clients: Vec::new(),
                 uri: endorser,
                 failures: 0,
+                usage_state: EndorserUsageState::InUse,
               };
               endorser_clients.clients.push(client);
               conn_map_wr.insert(pk, endorser_clients);

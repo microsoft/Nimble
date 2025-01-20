@@ -512,6 +512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
   // TODO: Fix this
+  // Idea: Move variables to coordinator state
   //coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
   let coordinator_ref = Arc::new(coordinator);
 
