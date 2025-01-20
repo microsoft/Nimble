@@ -1,11 +1,22 @@
 use crate::errors::CoordinatorError;
-use ledger::{compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut, errors::VerificationError, signature::{PublicKey, PublicKeyTrait}, Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce, Nonces, Receipt, Receipts, VerifierState};
-use rand::random;
+use ledger::{
+  compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut,
+  errors::VerificationError,
+  signature::{PublicKey, PublicKeyTrait},
+  Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait,
+  Nonce, Nonces, Receipt, Receipts, VerifierState,
+};
+use log::{error, info, warn};
+use rand::{random, Rng};
 use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
+  hash::RandomState,
   ops::Deref,
+  sync::atomic::AtomicUsize,
+  sync::atomic::Ordering::SeqCst,
   sync::{Arc, RwLock},
+  time::Duration,
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -18,16 +29,11 @@ use tonic::{
   Code, Status,
 };
 
-use ledger::endorser_proto;
 use clokwerk::TimeUnits;
+use ledger::endorser_proto;
 
-use std::time::Duration;
-use tracing::{error, info};
-use tracing_subscriber;
-use rand::Rng;
-use std::sync::atomic::AtomicUsize;
-use std::cmp::Ordering;
-use std::sync::atomic::Ordering;
+//use tracing::{error, info};
+//use tracing_subscriber;
 
 const ENDORSER_REFRESH_PERIOD: u32 = 10; //seconds: the pinging period to endorsers
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
@@ -41,7 +47,6 @@ struct EndorserClients {
 type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
 
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
-
 
 #[derive(Clone)]
 pub struct CoordinatorState {
@@ -61,7 +66,7 @@ const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 static LOG_FILE_LOCATION: &str = "log.txt";
 static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
-static ENDORSER_DEAD_ALLOWENCE: u32 = 66; // Set the percentage of endorsers that should always be running
+static ENDORSER_DEAD_ALLOWANCE: usize = 66; // Set the percentage of endorsers that should always be running
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -92,11 +97,11 @@ async fn get_public_key_with_retry(
 async fn get_ping_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
   request: endorser_proto::PingReq,
-) -> Result<tonic::Response<endorser_proto::PingResp>,  Status> {
+) -> Result<tonic::Response<endorser_proto::PingResp>, Status> {
   loop {
     let res = endorser_client
-        .ping(tonic::Request::new(request.clone()))
-        .await;
+      .ping(tonic::Request::new(request.clone()))
+      .await;
     match res {
       Ok(resp) => {
         return Ok(resp);
@@ -653,26 +658,25 @@ impl CoordinatorState {
       }
     }
 
-
     // let coordinator_clone = coordinator.clone();
     // let mut scheduler = clokwerk::AsyncScheduler::new ();
-    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || { 
+    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || {
     //   let value = coordinator_clone.clone();
     //   async move {value.ping_all_endorsers().await}
     // });
     // println!("Started the scheduler");
-  
+
     Ok(coordinator)
   }
 
-  pub async fn start_auto_scheduler(&self) {
-    
-    let coordinator_clone = self.clone();
+  pub async fn start_auto_scheduler(self: Arc<Self>) {
     let mut scheduler = clokwerk::AsyncScheduler::new();
-    scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run(move || {
-      let value = coordinator_clone.clone();
-      async move { value.ping_all_endorsers().await }
-    });
+    scheduler
+      .every(ENDORSER_REFRESH_PERIOD.seconds())
+      .run(move || {
+        let value = self.clone();
+        async move { value.ping_all_endorsers().await }
+      });
 
     tokio::spawn(async move {
       loop {
@@ -708,7 +712,7 @@ impl CoordinatorState {
 
     Ok(endorsers)
   }
-  
+
   fn get_endorser_client(
     &self,
     pk: &[u8],
@@ -2036,39 +2040,34 @@ impl CoordinatorState {
     Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
   }
 
-
-
-
-  pub async fn ping_all_endorsers(&self) {
+  pub async fn ping_all_endorsers(self: Arc<Self>) {
     println!("Pinging all endorsers from coordinator_state");
-    let hostnames = self.get_endorser_hostnames;
+    let hostnames = self.get_endorser_hostnames();
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
 
     for (pk, hostname) in hostnames {
       let tx = mpsc_tx.clone();
       let endorser = hostname.clone();
       let endorser_key = pk.clone();
+      let conn_map = self.conn_map.clone();
 
       let _job = tokio::spawn(async move {
-
         let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
-        //TODO Save the nonce for replay protection
-        // Create a connection endpoint
+                                                     //TODO Save the nonce for replay protection
+                                                     // Create a connection endpoint
 
         let endpoint = Endpoint::from_shared(endorser.to_string());
         match endpoint {
           Ok(endpoint) => {
-
-
             let endpoint = endpoint
-                .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
-                .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+              .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
+              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
 
             match endpoint.connect().await {
               Ok(channel) => {
-                let mut client = endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
+                let mut client =
+                  endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
 
-                
                 // Include the nonce in the request
                 let ping_req = endorser_proto::PingReq {
                   nonce: nonce.clone(), // Send the nonce in the request
@@ -2084,61 +2083,81 @@ impl CoordinatorState {
                       Ok(id_signature) => {
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
-                          info!("Nonce match for endorser: {}", endorser);   //HERE If the nonce matched
+                          info!("Nonce match for endorser: {}", endorser); //HERE If the nonce matched
 
-                          if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                          if let Ok(mut conn_map_wr) = conn_map.write() {
                             if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
-                                // Reset failures on success
-                                endorser_clients.failures = 0;
-                                info!("Endorser {} back online", endorser);
-                                DEAD_ENDORSERS.fetch_sub(1, Ordering::SeqCst);
+                              // Reset failures on success
+                              endorser_clients.failures = 0;
+                              info!("Endorser {} back online", endorser);
+                              DEAD_ENDORSERS.fetch_sub(1, SeqCst);
                             } else {
-                                eprintln!("Endorser key not found in conn_map");
+                              eprintln!("Endorser key not found in conn_map");
                             }
-                        } else {
+                          } else {
                             eprintln!("Failed to acquire write lock on conn_map");
-                        }
-
-
+                          }
                         } else {
                           let error_message = format!(
                             "Nonce did not match. Expected {:?}, got {:?}",
                             nonce, id_signature
                           );
-                            endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
-                          }
+                          endorser_ping_failed(
+                            endorser.clone(),
+                            &error_message,
+                            &conn_map,
+                            endorser_key,
+                          );
+                        }
                       },
                       Err(_) => {
-                        let error_message = format!("Failed to decode IdSig."
+                        let error_message = format!("Failed to decode IdSig.");
+                        endorser_ping_failed(
+                          endorser.clone(),
+                          &error_message,
+                          &conn_map,
+                          endorser_key,
                         );
-                          endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);                       
-                      }
-                    } 
+                      },
+                    }
                   },
                   Err(status) => {
                     let error_message = format!(
-                      "Failed to connect to the endorser {}: {:?}.", 
+                      "Failed to connect to the endorser {}: {:?}.",
                       endorser, status
                     );
-                      endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
-                  }
+                    endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+                  },
                 }
               },
               Err(err) => {
-                let error_message = format!(
-                  "Failed to connect to the endorser {}: {:?}.", 
-                  endorser, err
-                );
-                  endorser_ping_failed(endorser.clone(), &error_message, &self.conn_map, endorser_key);
-              }
+                let error_message =
+                  format!("Failed to connect to the endorser {}: {:?}.", endorser, err);
+                endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+              },
             }
           },
           Err(err) => {
-            error!("Failed to resolve the endorser host name {}: {:?}", endorser, err);
-            if let Err(_) = tx.send((endorser.clone(), Err::<(endorser_proto::endorser_call_client::EndorserCallClient<Channel>, Vec<u8>), CoordinatorError>(CoordinatorError::CannotResolveHostName))).await {
+            error!(
+              "Failed to resolve the endorser host name {}: {:?}",
+              endorser, err
+            );
+            if let Err(_) = tx
+              .send((
+                endorser.clone(),
+                Err::<
+                  (
+                    endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+                    Vec<u8>,
+                  ),
+                  CoordinatorError,
+                >(CoordinatorError::CannotResolveHostName),
+              ))
+              .await
+            {
               error!("Failed to send failure result for endorser: {}", endorser);
             }
-          }
+          },
         }
       });
     }
@@ -2154,18 +2173,17 @@ impl CoordinatorState {
         Err(_) => {
           // TODO: Call endorser refresh for "client"
           error!("Endorser {} needs to be refreshed", endorser);
-        }
+        },
       }
     }
   }
-  
+
   pub fn get_timeout_map(&self) -> HashMap<String, u64> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       let mut timeout_map = HashMap::new();
-      for (pk, endorser_clients) in conn_map_rd.iter() {
+      for (_pk, endorser_clients) in conn_map_rd.iter() {
         // Convert Vec<u8> to String (assuming UTF-8 encoding)
-        timeout_map.insert(endorser_clients.uri, endorser_clients.failures);
-        
+        timeout_map.insert(endorser_clients.uri.clone(), endorser_clients.failures);
       }
       timeout_map
     } else {
@@ -2181,44 +2199,50 @@ fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
   nonce
 }
 
-fn endorser_ping_failed(endorser: String, error: &str, conn_map: &Arc<RwLock<HashMap<Vec<u8, Global>, EndorserClients, RandomState>>, Global>, endorser_key: Vec<u8>) {
+fn endorser_ping_failed(
+  endorser: String,
+  error_message: &str,
+  conn_map: &Arc<RwLock<HashMap<Vec<u8>, EndorserClients, RandomState>>>,
+  endorser_key: Vec<u8>,
+) {
   if let Ok(mut conn_map_wr) = conn_map.write() {
-      if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
-          // Increment the failures count
-          endorser_clients.failures += 1;
+    if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+      // Increment the failures count
+      endorser_clients.failures += 1;
 
-          // Log the failure
-          error!(message = "Ping failed for endorser", %endorser, %error, try = endorser_clients.failures);
+      // Log the failure
+      warn!(
+        "Ping failed for endorser {}. {} pings failed.\n{}",
+        endorser, endorser_clients.failures, error_message
+      );
 
-          if endorser_clients.failures > MAX_FAILURES {
-              // Increment dead endorser count
-              DEAD_ENDORSERS.fetch_add(1, Ordering::SeqCst);
-              
-              let error_message = format!(
-                  "Endorser {} failed more than {} times! Now {} endorsers are dead.",
-                  endorser,
-                  MAX_FAILURES,
-                  DEAD_ENDORSERS.load(Ordering::SeqCst)
-              );
-              
-              if DEAD_ENDORSERS.load(Ordering::SeqCst) / conn_map_wr.len() >= ENDORSER_DEAD_ALLOWANCE {
-                  error!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(Ordering::SeqCst));
-                  // TODO: Initialize new endorsers. This is @JanHa's part
-              }
+      if endorser_clients.failures > MAX_FAILURES {
+        // Increment dead endorser count
+        DEAD_ENDORSERS.fetch_add(1, SeqCst);
 
-              error!(%error_message);
-          }
-      } else {
-          eprintln!("Endorser key not found in conn_map");
+        warn!(
+          "Endorser {} failed more than {} times! Now {} endorsers are dead.",
+          endorser,
+          MAX_FAILURES,
+          DEAD_ENDORSERS.load(SeqCst)
+        );
+
+        if DEAD_ENDORSERS.load(SeqCst) / conn_map_wr.len() >= ENDORSER_DEAD_ALLOWANCE {
+          warn!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
+          // TODO: Initialize new endorsers. This is @JanHa's part
+        }
       }
+    } else {
+      eprintln!("Endorser key not found in conn_map");
+    }
   } else {
-      eprintln!("Failed to acquire write lock on conn_map");
+    eprintln!("Failed to acquire write lock on conn_map");
   }
 }
 
-fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
-  MAX_FAILURES = max_failures;
-  ENDORSER_REQUEST_TIMEOUT = request_timeout;
-  ENDORSER_DEAD_ALLOWENCE = run_percentage;
-}
-
+// TODO: Fix this
+//fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
+//  MAX_FAILURES = max_failures;
+//  ENDORSER_REQUEST_TIMEOUT = request_timeout;
+//  ENDORSER_DEAD_ALLOWANCE = run_percentage;
+//}

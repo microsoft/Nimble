@@ -5,7 +5,6 @@ use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
 use tonic::{transport::Server, Request, Response, Status};
-use ledger::{IdSig, signature::{PublicKey, PublicKeyTrait, Signature}};
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
@@ -14,9 +13,9 @@ pub mod coordinator_proto {
 use clap::{App, Arg};
 use coordinator_proto::{
   call_server::{Call, CallServer},
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
-  ReadViewTailResp, PingReq, PingResp,
+  ReadViewTailResp,
 };
 
 use axum::{
@@ -59,9 +58,9 @@ impl Call for CoordinatorServiceState {
     } = req.into_inner();
 
     let res = self
-        .state
-        .create_ledger(None, &handle_bytes, &block_bytes)
-        .await;
+      .state
+      .create_ledger(None, &handle_bytes, &block_bytes)
+      .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to create a new ledger"));
     }
@@ -81,9 +80,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     let res = self
-        .state
-        .append_ledger(None, &handle_bytes, &block_bytes, expected_height as usize)
-        .await;
+      .state
+      .append_ledger(None, &handle_bytes, &block_bytes, expected_height as usize)
+      .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to append to a ledger"));
     }
@@ -107,9 +106,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     let res = self
-        .state
-        .read_ledger_tail(&handle_bytes, &nonce_bytes)
-        .await;
+      .state
+      .read_ledger_tail(&handle_bytes, &nonce_bytes)
+      .await;
     if res.is_err() {
       return Err(Status::aborted("Failed to read a ledger tail"));
     }
@@ -134,9 +133,9 @@ impl Call for CoordinatorServiceState {
     } = request.into_inner();
 
     match self
-        .state
-        .read_ledger_by_index(&handle_bytes, index as usize)
-        .await
+      .state
+      .read_ledger_by_index(&handle_bytes, index as usize)
+      .await
     {
       Ok(ledger_entry) => {
         let reply = ReadByIndexResp {
@@ -190,22 +189,22 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
-
-
   async fn ping_all_endorsers(
     &self,
-    _request: Request<coordinator_proto::PingReq>,  // Accept the gRPC request
-) -> Result<Response<coordinator_proto::PingResp>, Status> {
+    _request: Request<coordinator_proto::PingReq>, // Accept the gRPC request
+  ) -> Result<Response<coordinator_proto::PingResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     println!("Pining all endorsers now from main.rs");
-    self.state.ping_all_endorsers().await;
+    // TODO: Does this line work as it's supposed to, creating another reference to the
+    // Arc<CoordinatorState> or does it just copy the values and move them?
+    self.state.clone().ping_all_endorsers().await;
 
     // Here, create the PingResp with a dummy id_sig (or generate it if necessary)
     // let id_sig =   // Replace with actual logic to generate IdSig if needed
 
     // Construct and return the PingResp with the id_sig
     let reply = PingResp {
-        id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(),  // Make sure id_sig is serialized to bytes
+      id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(), // Make sure id_sig is serialized to bytes
     };
 
     // Return the response
@@ -454,34 +453,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
 
-  let max_failures = cli_matches
+  let _max_failures = cli_matches
     .value_of("max_failures")
     .unwrap_or("3")
     .parse::<u32>()
     .unwrap_or(3)
-    .max(1);  //ensure max_failures is at least 1
-  let request_timeout = cli_matches
+    .max(1); //ensure max_failures is at least 1
+  let _request_timeout = cli_matches
     .value_of("request_timeout")
     .unwrap_or("10")
     .parse::<u64>()
     .unwrap_or(10)
-    .max(1);   // Ensure request_timeout is at least 1
-  let run_percentage = cli_matches
+    .max(1); // Ensure request_timeout is at least 1
+  let _run_percentage = cli_matches
     .value_of("run_percentage")
     .unwrap_or("66")
     .parse::<u32>()
     .unwrap_or(66)
-    .clamp(51, 100);   // Ensure run_percentage is between 51 and 100
+    .clamp(51, 100); // Ensure run_percentage is between 51 and 100
 
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
     .map(|e| e.to_string())
     .collect::<Vec<String>>();
-
-
-  
-
 
   let mut ledger_store_args = HashMap::<String, String>::new();
   if let Some(x) = cli_matches.value_of("cosmosurl") {
@@ -516,14 +511,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
-  coordinator.start_auto_scheduler().await;
-  coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
-  println!("Pinging all Endorsers method called from main.rs");
-  coordinator.ping_all_endorsers().await;
+  // TODO: Fix this
+  //coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
   let coordinator_ref = Arc::new(coordinator);
-  
+
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
 
+  println!("Pinging all Endorsers method called from main.rs");
+  coordinator_ref.clone().ping_all_endorsers().await;
+
+  coordinator_ref.clone().start_auto_scheduler().await;
   // Start the REST server for management
   let control_server = Router::new()
       .route("/endorsers/:uri", get(get_endorser).put(new_endorser).delete(delete_endorser))
@@ -552,7 +549,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   job2.await?;
-  
+
   Ok(())
 }
 
@@ -560,8 +557,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
   use crate::{
     coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingReq, PingResp,
+      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingReq,
+      ReadByIndexReq, ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq,
+      ReadViewTailResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };
@@ -1309,7 +1307,6 @@ mod tests {
       );
     }
 
-    
     if std::env::var_os("STORAGE_ACCOUNT").is_some() {
       ledger_store_args.insert(
         String::from("STORAGE_ACCOUNT"),
@@ -1380,8 +1377,11 @@ mod tests {
     let timeout_map = server.get_state().get_timeout_map();
     println!("Timeout Map after waiting: {:?}", timeout_map);
 
-    let _ = Command::new("pkill").arg("-f").arg("endorser").status().expect("failed to execute process");
-
+    let _ = Command::new("pkill")
+      .arg("-f")
+      .arg("endorser")
+      .status()
+      .expect("failed to execute process");
 
     let req1 = tonic::Request::new(PingReq {
       nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
@@ -1389,7 +1389,9 @@ mod tests {
     let res1 = server.ping_all_endorsers(req1).await;
     assert!(res1.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
-    println!("Timeout Map after waiting and killing process: {:?}", timeout_map);
-
+    println!(
+      "Timeout Map after waiting and killing process: {:?}",
+      timeout_map
+    );
   }
 }
