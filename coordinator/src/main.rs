@@ -1309,6 +1309,7 @@ mod tests {
       );
     }
 
+    
     if std::env::var_os("STORAGE_ACCOUNT").is_some() {
       ledger_store_args.insert(
         String::from("STORAGE_ACCOUNT"),

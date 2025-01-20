@@ -2216,7 +2216,6 @@ fn endorser_ping_failed(endorser: String, error: &str, conn_map: &Arc<RwLock<Has
   }
 }
 
-
 fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
   MAX_FAILURES = max_failures;
   ENDORSER_REQUEST_TIMEOUT = request_timeout;
