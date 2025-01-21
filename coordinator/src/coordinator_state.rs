@@ -39,8 +39,9 @@ const ENDORSER_REFRESH_PERIOD: u32 = 10; //seconds: the pinging period to endors
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
 
 enum EndorserUsageState {
-  Idle,
-  InUse,
+  Uninitialized,
+  Initialized,
+  Active,
   Finalized,
   Unavailable,
 }
@@ -62,7 +63,7 @@ pub struct CoordinatorState {
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
   num_grpc_channels: usize,
-  used_nonces: Arc<RwLock<HashSet<Vec<u8>>>>,
+  _used_nonces: Arc<RwLock<HashSet<Vec<u8>>>>,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
@@ -71,7 +72,7 @@ static ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to en
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
-static LOG_FILE_LOCATION: &str = "log.txt";
+//static _LOG_FILE_LOCATION: &str = "log.txt";
 static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
 static ENDORSER_DEAD_ALLOWANCE: usize = 66; // Set the percentage of endorsers that should always be running
@@ -510,28 +511,28 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        used_nonces: Arc::new(RwLock::new(HashSet::new())),
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        used_nonces: Arc::new(RwLock::new(HashSet::new())),
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        used_nonces: Arc::new(RwLock::new(HashSet::new())),
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
-        used_nonces: Arc::new(RwLock::new(HashSet::new())),
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
     };
 
@@ -857,7 +858,7 @@ impl CoordinatorState {
                 clients: Vec::new(),
                 uri: endorser,
                 failures: 0,
-                usage_state: EndorserUsageState::InUse,
+                usage_state: EndorserUsageState::Uninitialized,
               };
               endorser_clients.clients.push(client);
               conn_map_wr.insert(pk, endorser_clients);
@@ -879,7 +880,7 @@ impl CoordinatorState {
     if let Ok(mut conn_map_wr) = self.conn_map.write() {
       for (pk, uri) in endorsers {
         let res = conn_map_wr.remove_entry(pk);
-        if let Some((_pk, mut endorser)) = res {
+        if let Some((pk, mut endorser)) = res {
           for _idx in 0..self.num_grpc_channels {
             let client = endorser.clients.pop();
             drop(client);
@@ -1001,7 +1002,18 @@ impl CoordinatorState {
           let endorser_proto::InitializeStateResp { receipt } = resp.into_inner();
           let res = Receipt::from_bytes(&receipt);
           match res {
-            Ok(receipt_rs) => receipts.add(&receipt_rs),
+            Ok(receipt_rs) => {
+              receipts.add(&receipt_rs);
+              if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                let e = conn_map_wr.get_mut(&pk_bytes);
+                match e {
+                  None => eprintln!("Couldn't find Endorser in conn_map"),
+                  Some(v) => v.usage_state = EndorserUsageState::Initialized,
+                }
+              } else {
+                eprintln!("Couldn't get write lock on conn_map");
+              }
+            },
             Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
           }
         },
@@ -2092,14 +2104,23 @@ impl CoordinatorState {
                       Ok(id_signature) => {
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
-                          info!("Nonce match for endorser: {}", endorser); //HERE If the nonce matched
+                          // TODO: Replace println with info
+                          println!("Nonce match for endorser: {}", endorser); //HERE If the nonce matched
 
                           if let Ok(mut conn_map_wr) = conn_map.write() {
                             if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
-                              // Reset failures on success
-                              endorser_clients.failures = 0;
-                              info!("Endorser {} back online", endorser);
-                              DEAD_ENDORSERS.fetch_sub(1, SeqCst);
+                              if endorser_clients.failures > 0 {
+                                if endorser_clients.failures > MAX_FAILURES {
+                                  DEAD_ENDORSERS.fetch_sub(1, SeqCst);
+                                }
+                                println!(
+                                  "Endorser {} reconnected after {} tries",
+                                  endorser, endorser_clients.failures
+                                );
+                                // Reset failures on success
+                                endorser_clients.failures = 0;
+                                // TODO: Replace println with info
+                              }
                             } else {
                               eprintln!("Endorser key not found in conn_map");
                             }
@@ -2181,6 +2202,7 @@ impl CoordinatorState {
         },
         Err(_) => {
           // TODO: Call endorser refresh for "client"
+          // Change to error!
           error!("Endorser {} needs to be refreshed", endorser);
         },
       }
@@ -2220,7 +2242,8 @@ fn endorser_ping_failed(
       endorser_clients.failures += 1;
 
       // Log the failure
-      warn!(
+      // TODO: Replace with warn!
+      println!(
         "Ping failed for endorser {}. {} pings failed.\n{}",
         endorser, endorser_clients.failures, error_message
       );
@@ -2229,15 +2252,16 @@ fn endorser_ping_failed(
         // Increment dead endorser count
         DEAD_ENDORSERS.fetch_add(1, SeqCst);
 
-        warn!(
+        println!(
           "Endorser {} failed more than {} times! Now {} endorsers are dead.",
           endorser,
           MAX_FAILURES,
           DEAD_ENDORSERS.load(SeqCst)
         );
 
+        // TODO: Change to only count active endorsers
         if DEAD_ENDORSERS.load(SeqCst) / conn_map_wr.len() >= ENDORSER_DEAD_ALLOWANCE {
-          warn!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
+          println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
           // TODO: Initialize new endorsers. This is @JanHa's part
         }
       }
