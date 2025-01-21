@@ -434,16 +434,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           .value_name("SECONDS")
           .help("Sets the request timeout in seconds before a ping is considered failed")
           .takes_value(true),
-  )
-  .arg(
-    Arg::with_name("run_percentage")
-        .short("pr")
-        .long("percentage")
-        .value_name("PERCENTAGE")
-        .help("Sets the percentage of endorsers that should be running before new once are initialized. (0-100; 66 = 66%)")
-        .takes_value(true),
-)
-    ;
+    )
+    .arg(
+      Arg::with_name("run_percentage")
+          .short("pr")
+          .long("percentage")
+          .value_name("PERCENTAGE")
+          .help("Sets the percentage of endorsers that should be running before new once are initialized. (0-100; 66 = 66%)")
+          .takes_value(true),
+    );
 
   let cli_matches = config.get_matches();
   let hostname = cli_matches.value_of("host").unwrap();

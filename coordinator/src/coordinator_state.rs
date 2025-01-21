@@ -43,7 +43,6 @@ enum EndorserUsageState {
   Initialized,
   Active,
   Finalized,
-  Unavailable,
 }
 
 struct EndorserClients {
@@ -880,7 +879,7 @@ impl CoordinatorState {
     if let Ok(mut conn_map_wr) = self.conn_map.write() {
       for (pk, uri) in endorsers {
         let res = conn_map_wr.remove_entry(pk);
-        if let Some((pk, mut endorser)) = res {
+        if let Some((_pk, mut endorser)) = res {
           for _idx in 0..self.num_grpc_channels {
             let client = endorser.clients.pop();
             drop(client);
@@ -1559,6 +1558,19 @@ impl CoordinatorState {
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
         Ok(_resp) => {
+          if let Ok(mut conn_map_wr) = self.conn_map.write() {
+            let e = conn_map_wr.get_mut(&pk_bytes);
+            match e {
+              None => {
+                eprintln!("Couldn't find endorser in conn_map");
+              },
+              Some(v) => {
+                v.usage_state = EndorserUsageState::Active;
+              },
+            }
+          } else {
+            eprintln!("Coudln't get write lock on conn_map");
+          }
           num_verified_endorers += 1;
         },
         Err(status) => {
@@ -1572,7 +1584,6 @@ impl CoordinatorState {
         },
       }
     }
-
     num_verified_endorers
   }
 
@@ -2110,6 +2121,8 @@ impl CoordinatorState {
                           if let Ok(mut conn_map_wr) = conn_map.write() {
                             if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
                               if endorser_clients.failures > 0 {
+                                // TODO: Change to use conn_map endorser usage state and modify it
+                                // as well
                                 if endorser_clients.failures > MAX_FAILURES {
                                   DEAD_ENDORSERS.fetch_sub(1, SeqCst);
                                 }
@@ -2248,19 +2261,28 @@ fn endorser_ping_failed(
         endorser, endorser_clients.failures, error_message
       );
 
-      if endorser_clients.failures > MAX_FAILURES {
+      // Only count towards allowance if it first crosses the boundary
+      if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
+        && endorser_clients.failures == MAX_FAILURES + 1
+      {
         // Increment dead endorser count
         DEAD_ENDORSERS.fetch_add(1, SeqCst);
 
         println!(
-          "Endorser {} failed more than {} times! Now {} endorsers are dead.",
+          "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
           endorser,
           MAX_FAILURES,
           DEAD_ENDORSERS.load(SeqCst)
         );
 
-        // TODO: Change to only count active endorsers
-        if DEAD_ENDORSERS.load(SeqCst) / conn_map_wr.len() >= ENDORSER_DEAD_ALLOWANCE {
+        if (DEAD_ENDORSERS.load(SeqCst) * 100)
+          / (conn_map_wr
+            .values()
+            .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+            .count()
+            * 100)
+          >= ENDORSER_DEAD_ALLOWANCE
+        {
           println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
           // TODO: Initialize new endorsers. This is @JanHa's part
         }
