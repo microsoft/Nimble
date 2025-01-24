@@ -512,7 +512,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // TODO: Fix this
   // Idea: Move variables to coordinator state
-  //coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
+  coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
   let coordinator_ref = Arc::new(coordinator);
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());

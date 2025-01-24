@@ -2113,6 +2113,21 @@ impl CoordinatorState {
                     let endorser_proto::PingResp { id_sig } = resp.into_inner();
                     match IdSig::from_bytes(&id_sig) {
                       Ok(id_signature) => {
+
+                        let id_pubkey = id_signature.get_id();
+                        if id_pubkey != endorser_key {
+                          let error_message = format!(
+                            "Endorser public_key mismatch. Expected {:?}, got {:?}",
+                            endorser_key, id_pubkey
+                          );
+                          endorser_ping_failed(
+                            endorser.clone(),
+                            &error_message,
+                            &conn_map,
+                            endorser_key,
+                          );
+                        }
+                        
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
                           // TODO: Replace println with info
@@ -2240,6 +2255,15 @@ impl CoordinatorState {
       HashMap::new()
     }
   }
+
+
+  pub fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
+    MAX_FAILURES = max_failures;
+    ENDORSER_REQUEST_TIMEOUT = request_timeout;
+    ENDORSER_DEAD_ALLOWANCE = run_percentage;
+  }
+
+
 }
 
 fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
@@ -2302,8 +2326,4 @@ fn endorser_ping_failed(
 }
 
 // TODO: Fix this
-//fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
-//  MAX_FAILURES = max_failures;
-//  ENDORSER_REQUEST_TIMEOUT = request_timeout;
-//  ENDORSER_DEAD_ALLOWANCE = run_percentage;
-//}
+
