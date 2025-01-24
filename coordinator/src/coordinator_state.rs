@@ -2258,9 +2258,9 @@ impl CoordinatorState {
 
 
   pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u32) {
-    self.max_failures = max_failures;
-    self.request_timeout = request_timeout;
-    self.run_percentage = run_percentage;
+    MAX_FAILURES = max_failures;
+    ENDORSER_REQUEST_TIMEOUT = request_timeout;
+    ENDORSER_DEAD_ALLOWANCE = run_percentage;
   }
 
 
