@@ -74,7 +74,7 @@ const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 //static _LOG_FILE_LOCATION: &str = "log.txt";
 static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
-static ENDORSER_DEAD_ALLOWANCE: usize = 66; // Set the percentage of endorsers that should always be running
+static ENDORSER_DEAD_ALLOWANCE: u64 = 66; // Set the percentage of endorsers that should always be running
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -2257,7 +2257,7 @@ impl CoordinatorState {
   }
 
 
-  pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u32) {
+  pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u64) {
     MAX_FAILURES = max_failures;
     ENDORSER_REQUEST_TIMEOUT = request_timeout;
     ENDORSER_DEAD_ALLOWANCE = run_percentage;
