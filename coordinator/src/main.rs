@@ -455,7 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let max_failures = cli_matches
     .value_of("max_failures")
     .unwrap_or("3")
-    .parse::<u32>()
+    .parse::<u64>()
     .unwrap_or(3)
     .max(1); //ensure max_failures is at least 1
   let request_timeout = cli_matches

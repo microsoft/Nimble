@@ -2124,7 +2124,7 @@ impl CoordinatorState {
                             endorser.clone(),
                             &error_message,
                             &conn_map,
-                            endorser_key,
+                            &endorser_key,
                           );
                         }
                         
@@ -2169,7 +2169,7 @@ impl CoordinatorState {
                             endorser.clone(),
                             &error_message,
                             &conn_map,
-                            endorser_key,
+                            &endorser_key,
                           );
                         }
                       },
@@ -2179,7 +2179,7 @@ impl CoordinatorState {
                           endorser.clone(),
                           &error_message,
                           &conn_map,
-                          endorser_key,
+                          &endorser_key,
                         );
                       },
                     }
@@ -2189,14 +2189,14 @@ impl CoordinatorState {
                       "Failed to connect to the endorser {}: {:?}.",
                       endorser, status
                     );
-                    endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+                    endorser_ping_failed(endorser.clone(), &error_message, &conn_map, &endorser_key);
                   },
                 }
               },
               Err(err) => {
                 let error_message =
                   format!("Failed to connect to the endorser {}: {:?}.", endorser, err);
-                endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+                endorser_ping_failed(endorser.clone(), &error_message, &conn_map, &endorser_key);
               },
             }
           },
@@ -2278,10 +2278,10 @@ fn endorser_ping_failed(
   endorser: String,
   error_message: &str,
   conn_map: &Arc<RwLock<HashMap<Vec<u8>, EndorserClients, RandomState>>>,
-  endorser_key: Vec<u8>,
+  endorser_key: &Vec<u8>,
 ) {
   if let Ok(mut conn_map_wr) = conn_map.write() {
-    if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+    if let Some(endorser_clients) = conn_map_wr.get_mut(endorser_key) {
       // Increment the failures count
       endorser_clients.failures += 1;
 
