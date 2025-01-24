@@ -1,0 +1,39 @@
+name: Rust CI
+
+on:
+  push:
+    branches: # Match all branches
+      - "*"
+  pull_request:
+    branches: # Match all branches
+      - "*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable # Use stable Rust; change if needed
+
+    - name: Cache Cargo
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build with Cargo
+      run: cargo build --verbose
+
+    - name: Run Tests
+      run: cargo test --verbose
