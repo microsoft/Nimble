@@ -2121,9 +2121,14 @@ impl CoordinatorState {
                           if let Ok(mut conn_map_wr) = conn_map.write() {
                             if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
                               if endorser_clients.failures > 0 {
-                                // TODO: Change to use conn_map endorser usage state and modify it
-                                // as well
-                                if endorser_clients.failures > MAX_FAILURES {
+                                // Only update DEAD_ENDORSERS if endorser_client is part of the
+                                // quorum and has previously been marked as unavailable
+                                if endorser_clients.failures > MAX_FAILURES
+                                  && matches!(
+                                    endorser_clients.usage_state,
+                                    EndorserUsageState::Active
+                                  )
+                                {
                                   DEAD_ENDORSERS.fetch_sub(1, SeqCst);
                                 }
                                 println!(
@@ -2275,13 +2280,14 @@ fn endorser_ping_failed(
           DEAD_ENDORSERS.load(SeqCst)
         );
 
+        // TODO: If DEAD_ENDORSERS is less than conn_map... this will just be 0
         if (DEAD_ENDORSERS.load(SeqCst) * 100)
           / (conn_map_wr
             .values()
             .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
             .count()
             * 100)
-          >= ENDORSER_DEAD_ALLOWANCE
+          < ENDORSER_DEAD_ALLOWANCE
         {
           println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
           // TODO: Initialize new endorsers. This is @JanHa's part
