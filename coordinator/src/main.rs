@@ -452,22 +452,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
 
-  let _max_failures = cli_matches
+  let max_failures = cli_matches
     .value_of("max_failures")
     .unwrap_or("3")
     .parse::<u32>()
     .unwrap_or(3)
     .max(1); //ensure max_failures is at least 1
-  let _request_timeout = cli_matches
+  let request_timeout = cli_matches
     .value_of("request_timeout")
     .unwrap_or("10")
     .parse::<u64>()
     .unwrap_or(10)
     .max(1); // Ensure request_timeout is at least 1
-  let _run_percentage = cli_matches
+  let run_percentage = cli_matches
     .value_of("run_percentage")
     .unwrap_or("66")
-    .parse::<u32>()
+    .parse::<u64>()
     .unwrap_or(66)
     .clamp(51, 100); // Ensure run_percentage is between 51 and 100
 

@@ -2115,7 +2115,7 @@ impl CoordinatorState {
                       Ok(id_signature) => {
 
                         let id_pubkey = id_signature.get_id();
-                        if id_pubkey != endorser_key {
+                        if *id_pubkey != endorser_key {
                           let error_message = format!(
                             "Endorser public_key mismatch. Expected {:?}, got {:?}",
                             endorser_key, id_pubkey
@@ -2257,11 +2257,13 @@ impl CoordinatorState {
   }
 
 
-  pub fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
-    MAX_FAILURES = max_failures;
-    ENDORSER_REQUEST_TIMEOUT = request_timeout;
-    ENDORSER_DEAD_ALLOWANCE = run_percentage;
+  pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u32) {
+    self.max_failures = max_failures;
+    self.request_timeout = request_timeout;
+    self.run_percentage = run_percentage;
   }
+
+
 
 
 }
