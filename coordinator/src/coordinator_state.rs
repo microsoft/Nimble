@@ -30,7 +30,7 @@ use tonic::{
 };
 use std::sync::atomic::AtomicU64;
 use std::cmp::Ordering;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::Ordering as OtherOrdering;
 
 use clokwerk::TimeUnits;
 use ledger::endorser_proto;
