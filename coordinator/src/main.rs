@@ -501,6 +501,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = CoordinatorState::new(store, &ledger_store_args, num_grpc_channels).await;
   assert!(res.is_ok());
   let coordinator = res.unwrap();
+  let mut mutcoordinator = res.unwrap();
 
   if !endorser_hostnames.is_empty() {
     let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
@@ -512,7 +513,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // TODO: Fix this
   // Idea: Move variables to coordinator state
-  coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
+  mutcoordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
   let coordinator_ref = Arc::new(coordinator);
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
