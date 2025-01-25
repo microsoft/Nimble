@@ -14,7 +14,7 @@ use std::{
   hash::RandomState,
   ops::Deref,
   sync::atomic::AtomicUsize,
-  sync::atomic::OtherOrdering::SeqCst,
+  sync::atomic::Ordering::SeqCst,
   sync::{Arc, RwLock},
   time::Duration,
 };
@@ -810,7 +810,7 @@ impl CoordinatorState {
             let endorser_endpoint = endorser_endpoint
               .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
             let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(OtherOtherOrdering::SeqCst)));
+              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(OtherOrdering::SeqCst)));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
               let mut client =
