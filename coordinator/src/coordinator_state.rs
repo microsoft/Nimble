@@ -28,6 +28,7 @@ use tonic::{
   transport::{Channel, Endpoint},
   Code, Status,
 };
+use std::sync::atomic::AtomicU64;
 
 use clokwerk::TimeUnits;
 use ledger::endorser_proto;
@@ -2258,7 +2259,7 @@ impl CoordinatorState {
   }
 
 
-  pub fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u64) {
+  pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u64) {
     MAX_FAILURES.store(max_failures, Ordering::SeqCst);
     ENDORSER_REQUEST_TIMEOUT.store(request_timeout, Ordering::SeqCst);
     ENDORSER_DEAD_ALLOWANCE.store(run_percentage, Ordering::SeqCst);
