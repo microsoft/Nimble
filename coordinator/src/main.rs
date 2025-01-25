@@ -500,7 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
   let res = CoordinatorState::new(store, &ledger_store_args, num_grpc_channels).await;
   assert!(res.is_ok());
-  let coordinator = res.as_ref().unwrap();
+  let coordinator = res.unwrap();
   let mut mutcoordinator = coordinator.clone();
 
   if !endorser_hostnames.is_empty() {
