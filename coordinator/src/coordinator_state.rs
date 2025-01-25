@@ -14,7 +14,7 @@ use std::{
   hash::RandomState,
   ops::Deref,
   sync::atomic::AtomicUsize,
-  sync::atomic::Ordering::SeqCst,
+  sync::atomic::OtherOrdering::SeqCst,
   sync::{Arc, RwLock},
   time::Duration,
 };
@@ -810,7 +810,7 @@ impl CoordinatorState {
             let endorser_endpoint = endorser_endpoint
               .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
             let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(Ordering::SeqCst)));
+              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(OtherOtherOrdering::SeqCst)));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
               let mut client =
@@ -2097,7 +2097,7 @@ impl CoordinatorState {
           Ok(endpoint) => {
             let endpoint = endpoint
               .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
-              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(Ordering::SeqCst)));
+              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(OtherOrdering::SeqCst)));
 
             match endpoint.connect().await {
               Ok(channel) => {
@@ -2142,7 +2142,7 @@ impl CoordinatorState {
                               if endorser_clients.failures > 0 {
                                 // Only update DEAD_ENDORSERS if endorser_client is part of the
                                 // quorum and has previously been marked as unavailable
-                                if endorser_clients.failures > MAX_FAILURES.load(Ordering::SeqCst)
+                                if endorser_clients.failures > MAX_FAILURES.load(OtherOrdering::SeqCst)
                                   && matches!(
                                     endorser_clients.usage_state,
                                     EndorserUsageState::Active
@@ -2262,9 +2262,9 @@ impl CoordinatorState {
 
 
   pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u64) {
-    MAX_FAILURES.store(max_failures, Ordering::SeqCst);
-    ENDORSER_REQUEST_TIMEOUT.store(request_timeout, Ordering::SeqCst);
-    ENDORSER_DEAD_ALLOWANCE.store(run_percentage, Ordering::SeqCst);
+    MAX_FAILURES.store(max_failures, OtherOrdering::SeqCst);
+    ENDORSER_REQUEST_TIMEOUT.store(request_timeout, OtherOrdering::SeqCst);
+    ENDORSER_DEAD_ALLOWANCE.store(run_percentage, OtherOrdering::SeqCst);
 }
 
 
@@ -2298,7 +2298,7 @@ fn endorser_ping_failed(
 
       // Only count towards allowance if it first crosses the boundary
       if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-        && endorser_clients.failures == MAX_FAILURES.fetch_add(1, Ordering::SeqCst)
+        && endorser_clients.failures == MAX_FAILURES.fetch_add(1, OtherOrdering::SeqCst)
       {
         // Increment dead endorser count
         DEAD_ENDORSERS.fetch_add(1, SeqCst);
@@ -2306,12 +2306,12 @@ fn endorser_ping_failed(
         println!(
           "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
           endorser,
-          MAX_FAILURES.load(Ordering::SeqCst),
+          MAX_FAILURES.load(OtherOrdering::SeqCst),
           DEAD_ENDORSERS.load(SeqCst)
         );
 
         // TODO: If DEAD_ENDORSERS is less than conn_map... this will just be 0
-        let dead_endorsers = DEAD_ENDORSERS.load(Ordering::SeqCst);
+        let dead_endorsers = DEAD_ENDORSERS.load(OtherOrdering::SeqCst);
         let active_endorsers = conn_map_wr
             .values()
             .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
@@ -2321,7 +2321,7 @@ fn endorser_ping_failed(
             // Calculate the percentage of dead endorsers
             let dead_percentage = (dead_endorsers * 100) / active_endorsers;
 
-            if dead_percentage >= ENDORSER_DEAD_ALLOWANCE.load(Ordering::SeqCst).try_into().unwrap()  {
+            if dead_percentage >= ENDORSER_DEAD_ALLOWANCE.load(OtherOrdering::SeqCst).try_into().unwrap()  {
                 println!(
                     "Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.",
                     dead_endorsers
