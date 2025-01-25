@@ -67,14 +67,15 @@ pub struct CoordinatorState {
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
 const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
-static ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
 //static _LOG_FILE_LOCATION: &str = "log.txt";
-static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
-static ENDORSER_DEAD_ALLOWANCE: u64 = 66; // Set the percentage of endorsers that should always be running
+
+static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
+static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
+static ENDORSER_DEAD_ALLOWANCE: AtomicU64 = AtomicU64::new(66);
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -806,7 +807,7 @@ impl CoordinatorState {
             let endorser_endpoint = endorser_endpoint
               .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
             let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(Ordering::SeqCst)));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
               let mut client =
@@ -2093,7 +2094,7 @@ impl CoordinatorState {
           Ok(endpoint) => {
             let endpoint = endpoint
               .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
-              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(Ordering::SeqCst)));
 
             match endpoint.connect().await {
               Ok(channel) => {
@@ -2138,7 +2139,7 @@ impl CoordinatorState {
                               if endorser_clients.failures > 0 {
                                 // Only update DEAD_ENDORSERS if endorser_client is part of the
                                 // quorum and has previously been marked as unavailable
-                                if endorser_clients.failures > MAX_FAILURES
+                                if endorser_clients.failures > MAX_FAILURES.load(Ordering::SeqCst)
                                   && matches!(
                                     endorser_clients.usage_state,
                                     EndorserUsageState::Active
@@ -2257,11 +2258,11 @@ impl CoordinatorState {
   }
 
 
-  pub fn overwrite_variables(&mut self, max_failures: u64, request_timeout: u64, run_percentage: u64) {
-    MAX_FAILURES = max_failures;
-    ENDORSER_REQUEST_TIMEOUT = request_timeout;
-    ENDORSER_DEAD_ALLOWANCE = run_percentage;
-  }
+  pub fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u64) {
+    MAX_FAILURES.store(max_failures, Ordering::SeqCst);
+    ENDORSER_REQUEST_TIMEOUT.store(request_timeout, Ordering::SeqCst);
+    ENDORSER_DEAD_ALLOWANCE.store(run_percentage, Ordering::SeqCst);
+}
 
 
 
@@ -2294,7 +2295,7 @@ fn endorser_ping_failed(
 
       // Only count towards allowance if it first crosses the boundary
       if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-        && endorser_clients.failures == MAX_FAILURES + 1
+        && endorser_clients.failures == MAX_FAILURES.fetch_add(1, Ordering::SeqCst)
       {
         // Increment dead endorser count
         DEAD_ENDORSERS.fetch_add(1, SeqCst);
@@ -2302,21 +2303,28 @@ fn endorser_ping_failed(
         println!(
           "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
           endorser,
-          MAX_FAILURES,
+          MAX_FAILURES.load(Ordering::SeqCst),
           DEAD_ENDORSERS.load(SeqCst)
         );
 
         // TODO: If DEAD_ENDORSERS is less than conn_map... this will just be 0
-        if (DEAD_ENDORSERS.load(SeqCst) * 100)
-          / (conn_map_wr
+        let dead_endorsers = DEAD_ENDORSERS.load(Ordering::SeqCst);
+        let active_endorsers = conn_map_wr
             .values()
             .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-            .count()
-            * 100)
-          < ENDORSER_DEAD_ALLOWANCE
-        {
-          println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
-          // TODO: Initialize new endorsers. This is @JanHa's part
+            .count();
+
+        if active_endorsers > 0 {
+            // Calculate the percentage of dead endorsers
+            let dead_percentage = (dead_endorsers * 100) / active_endorsers;
+
+            if dead_percentage >= ENDORSER_DEAD_ALLOWANCE.load(Ordering::SeqCst) {
+                println!(
+                    "Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.",
+                    dead_endorsers
+                );
+                // TODO: Initialize new endorsers. This is @JanHa's part
+            }
         }
       }
     } else {
