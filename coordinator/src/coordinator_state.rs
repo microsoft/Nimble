@@ -29,6 +29,8 @@ use tonic::{
   Code, Status,
 };
 use std::sync::atomic::AtomicU64;
+use std::cmp::Ordering;
+use std::sync::atomic::Ordering;
 
 use clokwerk::TimeUnits;
 use ledger::endorser_proto;
@@ -2319,7 +2321,7 @@ fn endorser_ping_failed(
             // Calculate the percentage of dead endorsers
             let dead_percentage = (dead_endorsers * 100) / active_endorsers;
 
-            if dead_percentage >= ENDORSER_DEAD_ALLOWANCE.load(Ordering::SeqCst) {
+            if dead_percentage >= ENDORSER_DEAD_ALLOWANCE.load(Ordering::SeqCst).try_into().unwrap()  {
                 println!(
                     "Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.",
                     dead_endorsers
