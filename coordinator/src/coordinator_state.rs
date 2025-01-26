@@ -1558,6 +1558,7 @@ impl CoordinatorState {
 
     let mut num_verified_endorers = 0;
 
+    // TODO: Better error handling here
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
         Ok(_resp) => {
@@ -1572,7 +1573,7 @@ impl CoordinatorState {
               },
             }
           } else {
-            eprintln!("Coudln't get write lock on conn_map");
+            eprintln!("Couldn't get write lock on conn_map");
           }
           num_verified_endorers += 1;
         },
@@ -1591,17 +1592,13 @@ impl CoordinatorState {
   }
 
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
+    // TODO: Make the new stuff optional
     // TODO: Replace with get_endorer_uris()
     let existing_endorsers = self.get_endorser_hostnames();
 
-    // TODO: Maybe add partial quorum init here and allow just conn_map to be given
-    // Check if in conn_map and if not, add to it.
-    // Then select a set of qualified endorsers and activate
-    // All new functionality probably happens right here at the beginning
-    //
     // Check if hostnames contains endorsers that are not in existing_endorsers.
     // If yes, connect to those and then continue
-    // Once done, select the new endorser quorum from the conn_map and continue as usual
+    // Once done, select the new endorser quorum from the conn_map and reconfigure
 
     // NOTE: This code could probably be much simpler and more efficient than making a new iterator
     // over existing_endorsers for every element in hostnames
@@ -1611,18 +1608,18 @@ impl CoordinatorState {
       added_endorsers.retain(|x| !existing_endorsers.iter().any(|(_key, uri)| x == uri));
 
       let added_endorsers = self.connect_endorsers(&added_endorsers).await;
-
       // After the previous ^ line the new endorsers are in the conn_map as uninitialized
       if added_endorsers.is_empty() {
-        // TODO: This is not an error as long as there are enough qualified endorsers already connected
+        // This is not an error as long as there are enough qualified endorsers already connected
         warn!("New endorsers couldn't be reached");
       }
       println!("connected to new endorsers");
     }
-    //INFO: Now all available endorsers are in the conn_map, so we select the new quorum from
+    // Now all available endorsers are in the conn_map, so we select the new quorum from
     //there
 
     let mut new_endorsers: EndorserHostnames;
+    let old_endorsers: EndorserHostnames;
 
     if let Ok(conn_map_rd) = self.conn_map.read() {
       new_endorsers = conn_map_rd
@@ -1634,20 +1631,25 @@ impl CoordinatorState {
         .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
         .collect();
 
+      old_endorsers = conn_map_rd
+        .iter()
+        .filter(|(_pk, endorser)| matches!(endorser.usage_state, EndorserUsageState::Active))
+        .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
+        .collect();
       if new_endorsers.is_empty() {
-        eprintln!("No eligable endorsers");
+        eprintln!("No eligible endorsers");
         return Err(CoordinatorError::FailedToObtainQuorum);
       }
 
-      // TODO: Replace with better choosing method
+      // TODO: Replace with better selection method
       new_endorsers.truncate(DESIRED_QUORUM_SIZE);
     } else {
       eprintln!("Couldn't get read lock on conn_map");
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
-    // TODO: At this point new_endorsers should contain the hostnames of the new quorum
-    // and existing_endorser should contain the currently active quorum
+    // At this point new_endorsers should contain the hostnames of the new quorum
+    // and old_endorsers should contain the currently active quorum
 
     // Package the list of endorsers into a genesis block of the view ledger
     let view_ledger_genesis_block = {
@@ -1690,7 +1692,7 @@ impl CoordinatorState {
 
     self
       .apply_view_change(
-        &existing_endorsers,
+        &old_endorsers,
         &new_endorsers,
         &tail,
         &view_ledger_genesis_block,
@@ -1724,7 +1726,7 @@ impl CoordinatorState {
       match res {
         Ok(metablock) => metablock,
         Err(_e) => {
-          eprintln!("faield to retrieve metablock from view receipts");
+          eprintln!("failed to retrieve metablock from view receipts");
           return Err(CoordinatorError::UnexpectedError);
         },
       }
@@ -1834,6 +1836,8 @@ impl CoordinatorState {
         &receipts,
       )
       .await;
+    // TODO: Change this line? Would allow to use a smaller quorum if not enough eligble endorsers
+    // are available
     if num_verified_endorsers * 2 <= new_endorsers.len() {
       eprintln!(
         "insufficient verified endorsers {} * 2 <= {}",
@@ -2203,22 +2207,12 @@ impl CoordinatorState {
                             "Nonce did not match. Expected {:?}, got {:?}",
                             nonce, id_signature
                           );
-                          endorser_ping_failed(
-                            endorser.clone(),
-                            &error_message,
-                            &conn_map,
-                            endorser_key,
-                          );
+                          self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
                         }
                       },
                       Err(_) => {
                         let error_message = format!("Failed to decode IdSig.");
-                        endorser_ping_failed(
-                          endorser.clone(),
-                          &error_message,
-                          &conn_map,
-                          endorser_key,
-                        );
+                        self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
                       },
                     }
                   },
@@ -2227,14 +2221,14 @@ impl CoordinatorState {
                       "Failed to connect to the endorser {}: {:?}.",
                       endorser, status
                     );
-                    endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+                    self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
                   },
                 }
               },
               Err(err) => {
                 let error_message =
                   format!("Failed to connect to the endorser {}: {:?}.", endorser, err);
-                endorser_ping_failed(endorser.clone(), &error_message, &conn_map, endorser_key);
+                self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
               },
             }
           },
@@ -2280,6 +2274,57 @@ impl CoordinatorState {
     }
   }
 
+  pub async fn endorser_ping_failed(
+    &self,
+    endorser: String,
+    error_message: &str,
+    endorser_key: Vec<u8>,
+  ) {
+    if let Ok(mut conn_map_wr) = conn_map.write() {
+      if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+        // Increment the failures count
+        endorser_clients.failures += 1;
+
+        // Log the failure
+        // TODO: Replace with warn!
+        println!(
+          "Ping failed for endorser {}. {} pings failed.\n{}",
+          endorser, endorser_clients.failures, error_message
+        );
+
+        // Only count towards allowance if it first crosses the boundary
+        if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
+          && endorser_clients.failures == MAX_FAILURES + 1
+        {
+          // Increment dead endorser count
+          DEAD_ENDORSERS.fetch_add(1, SeqCst);
+
+          println!(
+            "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
+            endorser,
+            MAX_FAILURES,
+            DEAD_ENDORSERS.load(SeqCst)
+          );
+
+          if (DEAD_ENDORSERS.load(SeqCst) * 100)
+            / conn_map_wr
+              .values()
+              .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+              .count()
+            < ENDORSER_DEAD_ALLOWANCE
+          {
+            println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
+            // TODO: Initialize new endorsers. This is @JanHa's part
+          }
+        }
+      } else {
+        eprintln!("Endorser key not found in conn_map");
+      }
+    } else {
+      eprintln!("Failed to acquire write lock on conn_map");
+    }
+  }
+
   pub fn get_timeout_map(&self) -> HashMap<String, u64> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       let mut timeout_map = HashMap::new();
@@ -2299,59 +2344,6 @@ fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
   let mut rng = rand::thread_rng();
   let nonce: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
   nonce
-}
-
-fn endorser_ping_failed(
-  endorser: String,
-  error_message: &str,
-  conn_map: &Arc<RwLock<HashMap<Vec<u8>, EndorserClients, RandomState>>>,
-  endorser_key: Vec<u8>,
-) {
-  if let Ok(mut conn_map_wr) = conn_map.write() {
-    if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
-      // Increment the failures count
-      endorser_clients.failures += 1;
-
-      // Log the failure
-      // TODO: Replace with warn!
-      println!(
-        "Ping failed for endorser {}. {} pings failed.\n{}",
-        endorser, endorser_clients.failures, error_message
-      );
-
-      // Only count towards allowance if it first crosses the boundary
-      if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-        && endorser_clients.failures == MAX_FAILURES + 1
-      {
-        // Increment dead endorser count
-        DEAD_ENDORSERS.fetch_add(1, SeqCst);
-
-        println!(
-          "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
-          endorser,
-          MAX_FAILURES,
-          DEAD_ENDORSERS.load(SeqCst)
-        );
-
-        // TODO: If DEAD_ENDORSERS is less than conn_map... this will just be 0
-        if (DEAD_ENDORSERS.load(SeqCst) * 100)
-          / (conn_map_wr
-            .values()
-            .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-            .count()
-            * 100)
-          < ENDORSER_DEAD_ALLOWANCE
-        {
-          println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
-          // TODO: Initialize new endorsers. This is @JanHa's part
-        }
-      }
-    } else {
-      eprintln!("Endorser key not found in conn_map");
-    }
-  } else {
-    eprintln!("Failed to acquire write lock on conn_map");
-  }
 }
 
 // TODO: Fix this
