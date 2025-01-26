@@ -7,7 +7,7 @@ use ledger::{
   Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
 use log::{error, info, warn};
-use rand::{random, Rng};
+use rand::{random, seq::SliceRandom, Rng};
 use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
@@ -75,6 +75,7 @@ const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
 static ENDORSER_DEAD_ALLOWANCE: usize = 66; // Set the percentage of endorsers that should always be running
+static DESIRED_QUORUM_SIZE: usize = 10; // TODO: Move this
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -867,7 +868,7 @@ impl CoordinatorState {
             },
           };
         } else {
-          eprintln!("Failed to acquire the write lock");
+          eprintln!("Failed to acquire the conn_map write lock");
         }
       }
     }
@@ -1472,6 +1473,7 @@ impl CoordinatorState {
     let mut ledger_tail_maps = Vec::new();
     let mut state_hashes = HashSet::new();
 
+    // TODO: Set usage_state in conn_map to finalized
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
         Ok(resp) => {
@@ -1483,6 +1485,7 @@ impl CoordinatorState {
           let receipt_rs = match res {
             Ok(receipt_rs) => {
               receipts.add(&receipt_rs);
+
               receipt_rs
             },
             Err(error) => {
@@ -1588,14 +1591,64 @@ impl CoordinatorState {
   }
 
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
+    // TODO: Replace with get_endorer_uris()
     let existing_endorsers = self.get_endorser_hostnames();
 
-    // Connect to new endorsers
-    let new_endorsers = self.connect_endorsers(hostnames).await;
-    if new_endorsers.is_empty() {
-      return Err(CoordinatorError::NoNewEndorsers);
+    // TODO: Maybe add partial quorum init here and allow just conn_map to be given
+    // Check if in conn_map and if not, add to it.
+    // Then select a set of qualified endorsers and activate
+    // All new functionality probably happens right here at the beginning
+    //
+    // Check if hostnames contains endorsers that are not in existing_endorsers.
+    // If yes, connect to those and then continue
+    // Once done, select the new endorser quorum from the conn_map and continue as usual
+
+    // NOTE: This code could probably be much simpler and more efficient than making a new iterator
+    // over existing_endorsers for every element in hostnames
+    if !hostnames.is_empty() {
+      // Filter out those endorsers which haven't been connected to, yet and connect to them.
+      let mut added_endorsers: Vec<String> = hostnames.to_vec();
+      added_endorsers.retain(|x| !existing_endorsers.iter().any(|(_key, uri)| x == uri));
+
+      let added_endorsers = self.connect_endorsers(&added_endorsers).await;
+
+      // After the previous ^ line the new endorsers are in the conn_map as uninitialized
+      if added_endorsers.is_empty() {
+        // TODO: This is not an error as long as there are enough qualified endorsers already connected
+        warn!("New endorsers couldn't be reached");
+      }
+      println!("connected to new endorsers");
     }
-    println!("connected to new endorsers");
+    //INFO: Now all available endorsers are in the conn_map, so we select the new quorum from
+    //there
+
+    let mut new_endorsers: EndorserHostnames;
+
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      new_endorsers = conn_map_rd
+        .iter()
+        .filter(|(_pk, endorser)| {
+          matches!(endorser.usage_state, EndorserUsageState::Uninitialized)
+            && endorser.failures == 0
+        })
+        .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
+        .collect();
+
+      if new_endorsers.is_empty() {
+        eprintln!("No eligable endorsers");
+        return Err(CoordinatorError::FailedToObtainQuorum);
+      }
+
+      // TODO: Replace with better choosing method
+      new_endorsers.truncate(DESIRED_QUORUM_SIZE);
+    } else {
+      eprintln!("Couldn't get read lock on conn_map");
+      return Err(CoordinatorError::FailedToAcquireReadLock);
+    }
+
+    // TODO: At this point new_endorsers should contain the hostnames of the new quorum
+    // and existing_endorser should contain the currently active quorum
+
     // Package the list of endorsers into a genesis block of the view ledger
     let view_ledger_genesis_block = {
       let res = bincode::serialize(&new_endorsers);
