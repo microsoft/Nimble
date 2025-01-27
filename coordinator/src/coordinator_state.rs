@@ -7,11 +7,10 @@ use ledger::{
   Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
 use log::{error, info, warn};
-use rand::{random, seq::SliceRandom, Rng};
+use rand::{random, Rng};
 use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
-  hash::RandomState,
   ops::Deref,
   sync::atomic::AtomicUsize,
   sync::atomic::Ordering::SeqCst,
@@ -1473,7 +1472,6 @@ impl CoordinatorState {
     let mut ledger_tail_maps = Vec::new();
     let mut state_hashes = HashSet::new();
 
-    // TODO: Set usage_state in conn_map to finalized
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
         Ok(resp) => {
@@ -1485,7 +1483,14 @@ impl CoordinatorState {
           let receipt_rs = match res {
             Ok(receipt_rs) => {
               receipts.add(&receipt_rs);
-
+              if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                match conn_map_wr.get_mut(&pk_bytes) {
+                  None => eprintln!("Endorser wasn't in conn_map during finalization."),
+                  Some(e) => e.usage_state = EndorserUsageState::Finalized,
+                }
+              } else {
+                eprint!("Couldn't get write lock on conn_map");
+              }
               receipt_rs
             },
             Err(error) => {
@@ -1593,28 +1598,27 @@ impl CoordinatorState {
 
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     // TODO: Make the new stuff optional
-    // TODO: Replace with get_endorer_uris()
-    let existing_endorsers = self.get_endorser_hostnames();
+    let existing_endorsers = self.get_endorser_uris();
 
     // Check if hostnames contains endorsers that are not in existing_endorsers.
     // If yes, connect to those and then continue
     // Once done, select the new endorser quorum from the conn_map and reconfigure
 
-    // NOTE: This code could probably be much simpler and more efficient than making a new iterator
-    // over existing_endorsers for every element in hostnames
     if !hostnames.is_empty() {
       // Filter out those endorsers which haven't been connected to, yet and connect to them.
       let mut added_endorsers: Vec<String> = hostnames.to_vec();
-      added_endorsers.retain(|x| !existing_endorsers.iter().any(|(_key, uri)| x == uri));
+      added_endorsers.retain(|x| !existing_endorsers.contains(x));
 
       let added_endorsers = self.connect_endorsers(&added_endorsers).await;
       // After the previous ^ line the new endorsers are in the conn_map as uninitialized
       if added_endorsers.is_empty() {
         // This is not an error as long as there are enough qualified endorsers already connected
-        warn!("New endorsers couldn't be reached");
+        println!("New endorsers couldn't be reached");
+      } else {
+        println!("Connected to new endorsers");
       }
-      println!("connected to new endorsers");
     }
+
     // Now all available endorsers are in the conn_map, so we select the new quorum from
     //there
 
@@ -2139,6 +2143,7 @@ impl CoordinatorState {
       let endorser = hostname.clone();
       let endorser_key = pk.clone();
       let conn_map = self.conn_map.clone();
+      let self_c = self.clone();
 
       let _job = tokio::spawn(async move {
         let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
@@ -2207,12 +2212,16 @@ impl CoordinatorState {
                             "Nonce did not match. Expected {:?}, got {:?}",
                             nonce, id_signature
                           );
-                          self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
+                          self_c
+                            .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                            .await;
                         }
                       },
                       Err(_) => {
                         let error_message = format!("Failed to decode IdSig.");
-                        self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
+                        self_c
+                          .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                          .await;
                       },
                     }
                   },
@@ -2221,14 +2230,18 @@ impl CoordinatorState {
                       "Failed to connect to the endorser {}: {:?}.",
                       endorser, status
                     );
-                    self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
+                    self_c
+                      .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                      .await;
                   },
                 }
               },
               Err(err) => {
                 let error_message =
                   format!("Failed to connect to the endorser {}: {:?}.", endorser, err);
-                self.endorser_ping_failed(endorser.clone(), &error_message, endorser_key);
+                self_c
+                  .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                  .await;
               },
             }
           },
@@ -2275,16 +2288,26 @@ impl CoordinatorState {
   }
 
   pub async fn endorser_ping_failed(
-    &self,
+    self: Arc<Self>,
     endorser: String,
     error_message: &str,
     endorser_key: Vec<u8>,
   ) {
-    if let Ok(mut conn_map_wr) = conn_map.write() {
+    if let Ok(mut conn_map_wr) = self.conn_map.write() {
       if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
         // Increment the failures count
         endorser_clients.failures += 1;
+      } else {
+        eprintln!("Endorser key not found in conn_map");
+      }
+    } else {
+      eprintln!("Failed to acquire write lock on conn_map");
+    }
 
+    let mut replace = false;
+
+    if let Ok(conn_map_r) = self.conn_map.read() {
+      if let Some(endorser_clients) = conn_map_r.get(&endorser_key) {
         // Log the failure
         // TODO: Replace with warn!
         println!(
@@ -2307,21 +2330,36 @@ impl CoordinatorState {
           );
 
           if (DEAD_ENDORSERS.load(SeqCst) * 100)
-            / conn_map_wr
+            / conn_map_r
               .values()
               .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
               .count()
             < ENDORSER_DEAD_ALLOWANCE
           {
+            println!(
+              "Debug: {} % dead",
+              (DEAD_ENDORSERS.load(SeqCst) * 100)
+                / conn_map_r
+                  .values()
+                  .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+                  .count()
+            );
             println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
-            // TODO: Initialize new endorsers. This is @JanHa's part
+            replace = true;
           }
         }
       } else {
         eprintln!("Endorser key not found in conn_map");
       }
     } else {
-      eprintln!("Failed to acquire write lock on conn_map");
+      eprintln!("Failed to acquire read lock on conn_map");
+    }
+
+    if replace {
+      match self.replace_endorsers(&[]).await {
+        Ok(_) => (),
+        Err(_) => eprintln!("Endorser replacement failed"),
+      }
     }
   }
 
