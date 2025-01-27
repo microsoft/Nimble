@@ -421,27 +421,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("max_failures")
-        .short("m")
+        .short("mf")
         .long("max-failures")
         .value_name("COUNT")
-        .help("Sets the maximum number of allowed ping failures before an endorser is declared dead")
+        .help(
+          "Sets the maximum number of allowed ping failures before an endorser is declared dead",
+        )
         .takes_value(true),
     )
     .arg(
       Arg::with_name("request_timeout")
-          .short("to")
-          .long("request-timeout")
-          .value_name("SECONDS")
-          .help("Sets the request timeout in seconds before a ping is considered failed")
-          .takes_value(true),
+        .short("to")
+        .long("request-timeout")
+        .value_name("SECONDS")
+        .help("Sets the request timeout in seconds before a ping is considered failed")
+        .takes_value(true),
     )
     .arg(
-      Arg::with_name("run_percentage")
-          .short("pr")
-          .long("percentage")
-          .value_name("PERCENTAGE")
-          .help("Sets the percentage of endorsers that should be running before new once are initialized. (0-100; 66 = 66%)")
-          .takes_value(true),
+      Arg::with_name("min_alive_percentage")
+        .short("ma")
+        .long("min-alive")
+        .value_name("PERCENTAGE")
+        .help("Sets the percentage of in-quorum endorsers that must respond to pings. (51-100; 66 = 66%)")
+        .takes_value(true),
+    )
+    .arg(
+      Arg::with_name("quorum_size")
+        .short("qs")
+        .long("quorum-size")
+        .value_name("COUNT")
+        .help("How many endorsers should be in an active quorum at once")
+        .takes_value(true),
     );
 
   let cli_matches = config.get_matches();
@@ -452,24 +462,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
 
-  let _max_failures = cli_matches
+  let max_failures = cli_matches
     .value_of("max_failures")
     .unwrap_or("3")
-    .parse::<u32>()
+    .parse::<u64>()
     .unwrap_or(3)
     .max(1); //ensure max_failures is at least 1
-  let _request_timeout = cli_matches
+  let request_timeout = cli_matches
     .value_of("request_timeout")
     .unwrap_or("10")
     .parse::<u64>()
     .unwrap_or(10)
     .max(1); // Ensure request_timeout is at least 1
-  let _run_percentage = cli_matches
-    .value_of("run_percentage")
+
+  // TODO: Standard value should be 0 to deactivate functionality
+  let min_alive_percentage = cli_matches
+    .value_of("min_alive_percentage")
     .unwrap_or("66")
-    .parse::<u32>()
+    .parse::<u64>()
     .unwrap_or(66)
-    .clamp(51, 100); // Ensure run_percentage is between 51 and 100
+    .clamp(51, 100); // Ensure min_alive_percentage is between 51 and 100
+
+  let quorum_size = cli_matches
+    .value_of("quorum_size")
+    .unwrap_or("10")
+    .parse::<u64>()
+    .unwrap_or(10)
+    .max(1);
 
   let endorser_hostnames = str_vec
     .iter()
@@ -501,6 +520,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = CoordinatorState::new(store, &ledger_store_args, num_grpc_channels).await;
   assert!(res.is_ok());
   let coordinator = res.unwrap();
+  let mut mutcoordinator = coordinator.clone();
 
   if !endorser_hostnames.is_empty() {
     let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
@@ -512,7 +532,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // TODO: Fix this
   // Idea: Move variables to coordinator state
-  //coordinator.overwrite_variables(max_failures, request_timeout, run_percentage);
+  // Add desired quorum size
+  mutcoordinator.overwrite_variables(
+    max_failures,
+    request_timeout,
+    min_alive_percentage,
+    quorum_size,
+  );
   let coordinator_ref = Arc::new(coordinator);
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());

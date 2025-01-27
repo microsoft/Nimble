@@ -12,10 +12,10 @@ use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
   ops::Deref,
-  sync::atomic::AtomicUsize,
-  sync::atomic::Ordering::SeqCst,
+  sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
   sync::{Arc, RwLock},
   time::Duration,
+  u64::MAX,
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -66,15 +66,15 @@ pub struct CoordinatorState {
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
 const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
-static ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
 //static _LOG_FILE_LOCATION: &str = "log.txt";
-static MAX_FAILURES: u64 = 3; // Set the maximum number of allowed failures
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
-static ENDORSER_DEAD_ALLOWANCE: usize = 66; // Set the percentage of endorsers that should always be running
-static DESIRED_QUORUM_SIZE: usize = 10; // TODO: Move this
+static DESIRED_QUORUM_SIZE: AtomicU64 = AtomicU64::new(MAX);
+static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
+static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
+static ENDORSER_DEAD_ALLOWANCE: AtomicU64 = AtomicU64::new(66);
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -805,8 +805,9 @@ impl CoordinatorState {
           if let Ok(endorser_endpoint) = res {
             let endorser_endpoint = endorser_endpoint
               .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
-            let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+            let endorser_endpoint = endorser_endpoint.timeout(std::time::Duration::from_secs(
+              ENDORSER_REQUEST_TIMEOUT.load(SeqCst),
+            ));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
               let mut client =
@@ -1646,7 +1647,7 @@ impl CoordinatorState {
       }
 
       // TODO: Replace with better selection method
-      new_endorsers.truncate(DESIRED_QUORUM_SIZE);
+      new_endorsers.truncate(DESIRED_QUORUM_SIZE.load(SeqCst).try_into().unwrap());
     } else {
       eprintln!("Couldn't get read lock on conn_map");
       return Err(CoordinatorError::FailedToAcquireReadLock);
@@ -2155,7 +2156,7 @@ impl CoordinatorState {
           Ok(endpoint) => {
             let endpoint = endpoint
               .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
-              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(SeqCst)));
 
             match endpoint.connect().await {
               Ok(channel) => {
@@ -2175,6 +2176,18 @@ impl CoordinatorState {
                     let endorser_proto::PingResp { id_sig } = resp.into_inner();
                     match IdSig::from_bytes(&id_sig) {
                       Ok(id_signature) => {
+                        let id_pubkey = id_signature.get_id();
+                        if *id_pubkey != endorser_key {
+                          let error_message = format!(
+                            "Endorser public_key mismatch. Expected {:?}, got {:?}",
+                            endorser_key, id_pubkey
+                          );
+                          self_c
+                            .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                            .await;
+                          return;
+                        }
+
                         // Verify the signature with the original nonce
                         if id_signature.verify(&nonce).is_ok() {
                           // TODO: Replace println with info
@@ -2185,7 +2198,7 @@ impl CoordinatorState {
                               if endorser_clients.failures > 0 {
                                 // Only update DEAD_ENDORSERS if endorser_client is part of the
                                 // quorum and has previously been marked as unavailable
-                                if endorser_clients.failures > MAX_FAILURES
+                                if endorser_clients.failures > MAX_FAILURES.load(SeqCst)
                                   && matches!(
                                     endorser_clients.usage_state,
                                     EndorserUsageState::Active
@@ -2317,7 +2330,7 @@ impl CoordinatorState {
 
         // Only count towards allowance if it first crosses the boundary
         if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-          && endorser_clients.failures == MAX_FAILURES + 1
+          && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1
         {
           // Increment dead endorser count
           DEAD_ENDORSERS.fetch_add(1, SeqCst);
@@ -2325,7 +2338,7 @@ impl CoordinatorState {
           println!(
             "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
             endorser,
-            MAX_FAILURES,
+            MAX_FAILURES.load(SeqCst),
             DEAD_ENDORSERS.load(SeqCst)
           );
 
@@ -2344,7 +2357,7 @@ impl CoordinatorState {
       eprintln!("Failed to acquire read lock on conn_map");
     }
 
-    if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE {
+    if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
         Err(_) => eprintln!("Endorser replacement failed"),
@@ -2365,6 +2378,19 @@ impl CoordinatorState {
       HashMap::new()
     }
   }
+
+  pub fn overwrite_variables(
+    &mut self,
+    max_failures: u64,
+    request_timeout: u64,
+    min_alive_percentage: u64,
+    quorum_size: u64,
+  ) {
+    MAX_FAILURES.store(max_failures, SeqCst);
+    ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
+    ENDORSER_DEAD_ALLOWANCE.store(min_alive_percentage, SeqCst);
+    DESIRED_QUORUM_SIZE.store(quorum_size, SeqCst);
+  }
 }
 
 fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
@@ -2372,10 +2398,3 @@ fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
   let nonce: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
   nonce
 }
-
-// TODO: Fix this
-//fn overwrite_variables(max_failures: u64, request_timeout: u64, run_percentage: u32) {
-//  MAX_FAILURES = max_failures;
-//  ENDORSER_REQUEST_TIMEOUT = request_timeout;
-//  ENDORSER_DEAD_ALLOWANCE = run_percentage;
-//}
