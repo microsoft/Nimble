@@ -4,9 +4,9 @@ import os
 import signal
 
 # Start two terminal processes in the background with arguments
-endorser1_args = ['/home/kilian/Nimble/target/release/endorser', '-p', '9090']
-endorser2_args = ['/home/kilian/Nimble/target/release/endorser', '-p', '9091']
-coordinator_args = ['/home/kilian/Nimble/target/release/coordinator', '-e', 'http://localhost:9090,http://localhost:9091']
+endorser1_args = ['/home/jan/uni/ws24/comp-sys/Nimble/target/release/endorser', '-p', '9090']
+endorser2_args = ['/home/jan/uni/ws24/comp-sys/Nimble/target/release/endorser', '-p', '9091']
+coordinator_args = ['/home/jan/uni/ws24/comp-sys/Nimble/target/release/coordinator', '-e', 'http://localhost:9090,http://localhost:9091']
 
 print("Starting first endorser")
 endorser1 = subprocess.Popen(endorser1_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
