@@ -2304,7 +2304,7 @@ impl CoordinatorState {
       eprintln!("Failed to acquire write lock on conn_map");
     }
 
-    let mut replace = false;
+    let mut alive_endorser_percentage = 0;
 
     if let Ok(conn_map_r) = self.conn_map.read() {
       if let Some(endorser_clients) = conn_map_r.get(&endorser_key) {
@@ -2329,24 +2329,13 @@ impl CoordinatorState {
             DEAD_ENDORSERS.load(SeqCst)
           );
 
-          if (DEAD_ENDORSERS.load(SeqCst) * 100)
+          alive_endorser_percentage = (DEAD_ENDORSERS.load(SeqCst) * 100)
             / conn_map_r
               .values()
               .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-              .count()
-            < ENDORSER_DEAD_ALLOWANCE
-          {
-            println!(
-              "Debug: {} % dead",
-              (DEAD_ENDORSERS.load(SeqCst) * 100)
-                / conn_map_r
-                  .values()
-                  .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-                  .count()
-            );
-            println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
-            replace = true;
-          }
+              .count();
+          println!("Debug: {} % alive", alive_endorser_percentage);
+          println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
         }
       } else {
         eprintln!("Endorser key not found in conn_map");
@@ -2355,7 +2344,7 @@ impl CoordinatorState {
       eprintln!("Failed to acquire read lock on conn_map");
     }
 
-    if replace {
+    if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE {
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
         Err(_) => eprintln!("Endorser replacement failed"),
