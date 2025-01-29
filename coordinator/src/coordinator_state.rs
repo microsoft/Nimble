@@ -2330,7 +2330,7 @@ impl CoordinatorState {
 
         // Only count towards allowance if it first crosses the boundary
         if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-          && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1
+          && endorser_clients.failures >= MAX_FAILURES.load(SeqCst) + 1
         {
           // Increment dead endorser count
           DEAD_ENDORSERS.fetch_add(1, SeqCst);
@@ -2360,22 +2360,11 @@ impl CoordinatorState {
     } else {
       eprintln!("Failed to acquire read lock on conn_map");
     }
-    // let active_endorsers_count = conn_map_r
-    //   .values()
-    //   .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-    //   .count();
-    // let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
-    // println!("Debug: active_endorsers_count = {}", active_endorsers_count);
-    // println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
-    // alive_endorser_percentage = 100 - ((dead_endorsers_count * 100) / active_endorsers_count);
 
-    print!("Debug: {} % alive before replace trigger", alive_endorser_percentage);
+    println!("Debug: {} % alive before replace trigger", alive_endorser_percentage);
 
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
       println!("Endorser replacement triggered");
-      println!("MAX_FAILURES: {}", MAX_FAILURES.load(SeqCst));
-      println!("ENDORSER_REQUEST_TIMEOUT: {}", ENDORSER_REQUEST_TIMEOUT.load(SeqCst));
-      println!("ENDORSER_DEAD_ALLOWANCE: {}", ENDORSER_DEAD_ALLOWANCE.load(SeqCst));
       println!("DESIRED_QUORUM_SIZE: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
