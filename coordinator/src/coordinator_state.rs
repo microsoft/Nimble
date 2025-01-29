@@ -1647,6 +1647,7 @@ impl CoordinatorState {
       }
 
       // TODO: Replace with better selection method
+      println!("Desired quorum size: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
       new_endorsers.truncate(DESIRED_QUORUM_SIZE.load(SeqCst).try_into().unwrap());
     } else {
       eprintln!("Couldn't get read lock on conn_map");
