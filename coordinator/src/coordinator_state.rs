@@ -1654,6 +1654,8 @@ impl CoordinatorState {
       return Err(CoordinatorError::FailedToAcquireReadLock);
     }
 
+    DEAD_ENDORSERS.store(0, SeqCst);
+    
     // At this point new_endorsers should contain the hostnames of the new quorum
     // and old_endorsers should contain the currently active quorum
 
