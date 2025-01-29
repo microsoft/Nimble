@@ -2360,9 +2360,13 @@ impl CoordinatorState {
     } else {
       eprintln!("Failed to acquire read lock on conn_map");
     }
-
+    
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
       println!("Endorser replacement triggered");
+      println!("MAX_FAILURES: {}", MAX_FAILURES.load(SeqCst));
+      println!("ENDORSER_REQUEST_TIMEOUT: {}", ENDORSER_REQUEST_TIMEOUT.load(SeqCst));
+      println!("ENDORSER_DEAD_ALLOWANCE: {}", ENDORSER_DEAD_ALLOWANCE.load(SeqCst));
+      println!("DESIRED_QUORUM_SIZE: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
         Err(_) => eprintln!("Endorser replacement failed"),
