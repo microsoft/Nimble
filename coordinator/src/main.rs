@@ -421,7 +421,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("max_failures")
-        .short("mf")
+        .short("f")
         .long("max-failures")
         .value_name("COUNT")
         .help(
@@ -432,7 +432,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("request_timeout")
-        .short("to")
         .long("request-timeout")
         .value_name("SECONDS")
         .help("Sets the request timeout in seconds before a ping is considered failed")
@@ -441,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("min_alive_percentage")
-        .short("ma")
+        .short("m")
         .long("min-alive")
         .value_name("PERCENTAGE")
         .help("Sets the percentage of in-quorum endorsers that must respond to pings. (51-100; 66 = 66%)")
@@ -450,7 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .arg(
       Arg::with_name("quorum_size")
-        .short("qs")
+        .short("q")
         .long("quorum-size")
         .value_name("COUNT")
         .help("How many endorsers should be in an active quorum at once")
