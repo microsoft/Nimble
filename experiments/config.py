@@ -81,9 +81,9 @@ PORT_SGX_ENDORSER_3 = "9093"
 
 
 # Paths to Nimble executables and wrk2 for workload generation
-NIMBLE_PATH = "/root/Nimble"
+NIMBLE_PATH = "/home/kilian/Nimble"
 NIMBLE_BIN_PATH = NIMBLE_PATH + "/target/release"
-WRK2_PATH = "/nix/store/kfh6s74hilmpr0kjwy163n7lri1fk7i4-wrk2-4.0.0-e0109df/bin"
+WRK2_PATH = "/nix/store/bmnf0j48mppj7i24pk12qaj8jja41imx-wrk2-4.0.0-e0109df/bin"
 OUTPUT_FOLDER = NIMBLE_PATH + "/experiments/results"
 
 # SSH User and Key Path for connecting to remote machines
