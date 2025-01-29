@@ -514,14 +514,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator = res.unwrap();
   let mut mutcoordinator = coordinator.clone();
 
-  if !endorser_hostnames.is_empty() {
-    let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
-  }
-  if coordinator.get_endorser_pks().is_empty() {
-    panic!("No endorsers are available!");
-  }
-  println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
-
   // TODO: Fix this
   // Idea: Move variables to coordinator state
   // Add desired quorum size
@@ -531,6 +523,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     min_alive_percentage,
     quorum_size,
   );
+  
+  if !endorser_hostnames.is_empty() {
+    let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
+  }
+  if coordinator.get_endorser_pks().is_empty() {
+    panic!("No endorsers are available!");
+  }
+  println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
+
+  
   let coordinator_ref = Arc::new(coordinator);
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
