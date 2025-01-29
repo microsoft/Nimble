@@ -465,34 +465,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+  let max_failures_str = cli_matches.value_of("max_failures").unwrap_or("4");
+  println!("Raw max_failures value: {}", max_failures_str);
+  let max_failures = max_failures_str.parse::<u64>().unwrap_or(5).max(1);
+  println!("Parsed max_failures value: {}", max_failures);
 
-  let max_failures = cli_matches
-    .value_of("max_failures")
-    .unwrap_or("4")
-    .parse::<u64>()
-    .unwrap_or(5)
-    .max(1); //ensure max_failures is at least 1
-  let request_timeout = cli_matches
-    .value_of("request_timeout")
-    .unwrap_or("11")
-    .parse::<u64>()
-    .unwrap_or(12)
-    .max(1); // Ensure request_timeout is at least 1
+  let request_timeout_str = cli_matches.value_of("request_timeout").unwrap_or("11");
+  println!("Raw request_timeout value: {}", request_timeout_str);
+  let request_timeout = request_timeout_str.parse::<u64>().unwrap_or(12).max(1);
+  println!("Parsed request_timeout value: {}", request_timeout);
 
-  // TODO: Standard value should be 0 to deactivate functionality
-  let min_alive_percentage = cli_matches
-    .value_of("min_alive_percentage")
-    .unwrap_or("67")
-    .parse::<u64>()
-    .unwrap_or(68)
-    .clamp(51, 100); // Ensure min_alive_percentage is between 51 and 100
+  let min_alive_percentage_str = cli_matches.value_of("min_alive_percentage").unwrap_or("67");
+  println!("Raw min_alive_percentage value: {}", min_alive_percentage_str);
+  let min_alive_percentage = min_alive_percentage_str.parse::<u64>().unwrap_or(68).clamp(51, 100);
+  println!("Parsed min_alive_percentage value: {}", min_alive_percentage);
 
-  let quorum_size = cli_matches
-    .value_of("quorum_size")
-    .unwrap_or("10")
-    .parse::<u64>()
-    .unwrap_or(11)
-    .max(1);
+  let quorum_size_str = cli_matches.value_of("quorum_size").unwrap_or("10");
+  println!("Raw quorum_size value: {}", quorum_size_str);
+  let quorum_size = quorum_size_str.parse::<u64>().unwrap_or(11).max(1);
+  println!("Parsed quorum_size value: {}", quorum_size);
+  // let max_failures = cli_matches
+  //   .value_of("max_failures")
+  //   .unwrap_or("4")
+  //   .parse::<u64>()
+  //   .unwrap_or(5)
+  //   .max(1); //ensure max_failures is at least 1
+  // let request_timeout = cli_matches
+  //   .value_of("request_timeout")
+  //   .unwrap_or("11")
+  //   .parse::<u64>()
+  //   .unwrap_or(12)
+  //   .max(1); // Ensure request_timeout is at least 1
+
+  // // TODO: Standard value should be 0 to deactivate functionality
+  // let min_alive_percentage = cli_matches
+  //   .value_of("min_alive_percentage")
+  //   .unwrap_or("67")
+  //   .parse::<u64>()
+  //   .unwrap_or(68)
+  //   .clamp(51, 100); // Ensure min_alive_percentage is between 51 and 100
+
+  // let quorum_size = cli_matches
+  //   .value_of("quorum_size")
+  //   .unwrap_or("10")
+  //   .parse::<u64>()
+  //   .unwrap_or(11)
+  //   .max(1);
 
   println!(
     "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
