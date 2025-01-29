@@ -2349,16 +2349,10 @@ impl CoordinatorState {
           let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
           println!("Debug: active_endorsers_count = {}", active_endorsers_count);
           println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
-          alive_endorser_percentage = (dead_endorsers_count * 100) / active_endorsers_count;
+          alive_endorser_percentage = 1 - (dead_endorsers_count * 100) / active_endorsers_count;
           println!("Debug: {} % alive", alive_endorser_percentage);
-          
-          alive_endorser_percentage = (DEAD_ENDORSERS.load(SeqCst) * 100)
-            / conn_map_r
-              .values()
-              .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-              .count();
-          println!("Debug: {} % alive", alive_endorser_percentage);
-          println!("Enough endorsers have failed. Now {} endorsers are dead. Initializing new endorsers now.", DEAD_ENDORSERS.load(SeqCst));
+
+          println!("Enough endorsers have failed. Now {} endorsers are dead.", dead_endorsers_count);
         }
       } else {
         eprintln!("Endorser key not found in conn_map");
@@ -2368,6 +2362,7 @@ impl CoordinatorState {
     }
 
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
+      println!("Endorser replacement triggered");
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
         Err(_) => eprintln!("Endorser replacement failed"),
