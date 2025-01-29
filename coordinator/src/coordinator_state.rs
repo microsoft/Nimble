@@ -2354,8 +2354,6 @@ impl CoordinatorState {
           println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
           alive_endorser_percentage = 100 - ((dead_endorsers_count * 100) / active_endorsers_count);
           println!("Debug: {} % alive", alive_endorser_percentage);
-
-          println!("Enough endorsers have failed. Now {} endorsers are dead.", dead_endorsers_count);
         }
       } else {
         eprintln!("Endorser key not found in conn_map");
@@ -2367,7 +2365,7 @@ impl CoordinatorState {
     println!("Debug: {} % alive before replace trigger", alive_endorser_percentage);
 
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
-      println!("Endorser replacement triggered");
+      println!("Enough Endorsers have failed now. Endorser replacement triggered");
       println!("DESIRED_QUORUM_SIZE: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
       match self.replace_endorsers(&[]).await {
         Ok(_) => (),
