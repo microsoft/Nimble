@@ -2317,7 +2317,7 @@ impl CoordinatorState {
       eprintln!("Failed to acquire write lock on conn_map");
     }
 
-    let mut alive_endorser_percentage = 0;
+    let mut alive_endorser_percentage = 100;
 
     if let Ok(conn_map_r) = self.conn_map.read() {
       if let Some(endorser_clients) = conn_map_r.get(&endorser_key) {
