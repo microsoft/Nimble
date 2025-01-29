@@ -2333,7 +2333,10 @@ impl CoordinatorState {
           && endorser_clients.failures >= MAX_FAILURES.load(SeqCst) + 1
         {
           // Increment dead endorser count
-          DEAD_ENDORSERS.fetch_add(1, SeqCst);
+          if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
+          && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1 {
+            DEAD_ENDORSERS.fetch_add(1, SeqCst);
+          }
 
           println!(
             "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
