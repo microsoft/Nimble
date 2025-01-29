@@ -490,6 +490,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .unwrap_or(10)
     .max(1);
 
+  println!(
+    "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
+    max_failures, request_timeout, min_alive_percentage, quorum_size
+  );
+  
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
