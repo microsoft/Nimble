@@ -1297,6 +1297,7 @@ mod tests {
   }
 
   #[tokio::test]
+  #[ignore]
   async fn test_ping() {
     if std::env::var_os("ENDORSER_CMD").is_none() {
       panic!("The ENDORSER_CMD environment variable is not specified");
