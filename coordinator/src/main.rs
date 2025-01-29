@@ -427,6 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help(
           "Sets the maximum number of allowed ping failures before an endorser is declared dead",
         )
+        .default_value(3)
         .takes_value(true),
     )
     .arg(
@@ -435,6 +436,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("request-timeout")
         .value_name("SECONDS")
         .help("Sets the request timeout in seconds before a ping is considered failed")
+        .default_value(10)
         .takes_value(true),
     )
     .arg(
@@ -443,6 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("min-alive")
         .value_name("PERCENTAGE")
         .help("Sets the percentage of in-quorum endorsers that must respond to pings. (51-100; 66 = 66%)")
+      .default_value(66)
         .takes_value(true),
     )
     .arg(
@@ -451,6 +454,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("quorum-size")
         .value_name("COUNT")
         .help("How many endorsers should be in an active quorum at once")
+        .default_value(5)
         .takes_value(true),
     );
 
@@ -464,37 +468,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let max_failures = cli_matches
     .value_of("max_failures")
-    .unwrap_or("3")
+    .unwrap_or("4")
     .parse::<u64>()
-    .unwrap_or(3)
+    .unwrap_or(5)
     .max(1); //ensure max_failures is at least 1
   let request_timeout = cli_matches
     .value_of("request_timeout")
-    .unwrap_or("10")
+    .unwrap_or("11")
     .parse::<u64>()
-    .unwrap_or(10)
+    .unwrap_or(12)
     .max(1); // Ensure request_timeout is at least 1
 
   // TODO: Standard value should be 0 to deactivate functionality
   let min_alive_percentage = cli_matches
     .value_of("min_alive_percentage")
-    .unwrap_or("66")
+    .unwrap_or("67")
     .parse::<u64>()
-    .unwrap_or(66)
+    .unwrap_or(68)
     .clamp(51, 100); // Ensure min_alive_percentage is between 51 and 100
 
   let quorum_size = cli_matches
     .value_of("quorum_size")
     .unwrap_or("10")
     .parse::<u64>()
-    .unwrap_or(10)
+    .unwrap_or(11)
     .max(1);
 
   println!(
     "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
     max_failures, request_timeout, min_alive_percentage, quorum_size
   );
-  
+
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
