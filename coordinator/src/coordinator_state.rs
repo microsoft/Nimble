@@ -2360,14 +2360,16 @@ impl CoordinatorState {
     } else {
       eprintln!("Failed to acquire read lock on conn_map");
     }
-    let active_endorsers_count = conn_map_r
-      .values()
-      .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
-      .count();
-    let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
-    println!("Debug: active_endorsers_count = {}", active_endorsers_count);
-    println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
-    alive_endorser_percentage = 100 - ((dead_endorsers_count * 100) / active_endorsers_count);
+    // let active_endorsers_count = conn_map_r
+    //   .values()
+    //   .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+    //   .count();
+    // let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
+    // println!("Debug: active_endorsers_count = {}", active_endorsers_count);
+    // println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
+    // alive_endorser_percentage = 100 - ((dead_endorsers_count * 100) / active_endorsers_count);
+
+    print!("Debug: {} % alive before replace trigger", alive_endorser_percentage);
 
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
       println!("Endorser replacement triggered");
