@@ -2342,6 +2342,16 @@ impl CoordinatorState {
             DEAD_ENDORSERS.load(SeqCst)
           );
 
+          let active_endorsers_count = conn_map_r
+            .values()
+            .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+            .count();
+          let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
+          println!("Debug: active_endorsers_count = {}", active_endorsers_count);
+          println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
+          alive_endorser_percentage = (dead_endorsers_count * 100) / active_endorsers_count;
+          println!("Debug: {} % alive", alive_endorser_percentage);
+          
           alive_endorser_percentage = (DEAD_ENDORSERS.load(SeqCst) * 100)
             / conn_map_r
               .values()
