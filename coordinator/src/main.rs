@@ -210,6 +210,8 @@ impl Call for CoordinatorServiceState {
     // Return the response
     Ok(Response::new(reply))
   }
+
+  
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -455,6 +457,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help("How many endorsers should be in an active quorum at once")
         .takes_value(true)
         .default_value("3"),
+    ).arg(
+      Arg::with_name("ping_inverval")
+        .short("i")
+        .long("ping-interval")
+        .value_name("SEC")
+        .help("How often to ping endorsers in seconds")
+        .takes_value(true)
+        .default_value("10"),
     );
 
   let cli_matches = config.get_matches();
@@ -476,6 +486,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let quorum_size_str = cli_matches.value_of("quorum_size").unwrap();
   let quorum_size = quorum_size_str.parse::<u64>().unwrap_or(11).max(1);
+
+  let ping_interval_str = cli_matches.value_of("ping_inverval").unwrap();
+  let ping_interval = ping_interval_str.parse::<u64>().unwrap_or(10).max(1);
 
   println!(
     "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
@@ -522,8 +535,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     request_timeout,
     min_alive_percentage,
     quorum_size,
+    ping_interval,
   );
-  
+
   if !endorser_hostnames.is_empty() {
     let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
   }
