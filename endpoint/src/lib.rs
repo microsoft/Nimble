@@ -672,4 +672,27 @@ impl EndpointState {
     // respond to the light client
     Ok((signature))
   }
+
+  pub async fn add_endorsers(
+    &self,
+    nonce: &[u8],
+    uri: String,
+  ) -> Result<(Vec<u8>), EndpointError> {
+    
+
+    let (block) = {
+      let res = self.conn.ping_all_endorsers(nonce).await;
+
+      if res.is_err() {
+        return Err(EndpointError::FailedToAddEndorsers);
+      }
+      res.unwrap()
+    };
+
+    let sig = self.sk.sign(nonce).unwrap();
+    let signature = sig.to_bytes();
+
+    // respond to the light client
+    Ok((signature))
+  }
 }

@@ -30,4 +30,6 @@ pub enum EndpointError {
   FailedToGetTimeoutMap,
   /// returned if failed to ping all endorsers
   FailedToPingAllEndorsers,
+  /// returned if failed to add endorsers
+  FailedToAddEndorsers,
 }

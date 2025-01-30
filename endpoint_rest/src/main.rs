@@ -4,7 +4,7 @@ use axum::{
   extract::{Extension, Path, Query},
   http::StatusCode,
   response::IntoResponse,
-  routing::get,
+  routing::{get, put},
   Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
@@ -99,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .route("/serviceid", get(get_identity))
       .route("/timeoutmap", get(get_timeout_map))
       .route("/pingallendorsers", get(ping_all_endorsers))
+      .route("/addendorsers/:uri", put(add_endorsers))
       .route("/counters/:handle", get(read_counter).put(new_counter).post(increment_counter))
       // Add middleware to all routes
       .layer(
@@ -421,6 +422,45 @@ async fn ping_all_endorsers(
   };
 
   let res = state.ping_all_endorsers(&nonce).await;
+  if res.is_err() {
+    eprintln!("failed to get the timeout map");
+    return (StatusCode::CONFLICT, Json(json!({})));
+  }
+  let (signature) = res.unwrap();
+
+  let resp = PingAllResp {
+    signature: base64_url::encode(&signature),
+  };
+
+  (StatusCode::OK, Json(json!(resp)))
+}
+
+async fn add_endorsers(
+  Query(params): Query<HashMap<String, String>>,
+  Extension(state): Extension<Arc<EndpointState>>,
+) -> impl IntoResponse {
+
+  if !params.contains_key("nonce") {
+    eprintln!("missing a nonce");
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let res = base64_url::decode(&params["nonce"]);
+  if res.is_err() {
+    eprintln!("received a bad nonce {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let nonce = res.unwrap();
+
+  let sigformat = if params.contains_key("sigformat") {
+    match params["sigformat"].as_ref() {
+      "der" => SignatureFormat::DER,
+      _ => SignatureFormat::RAW,
+    }
+  } else {
+    SignatureFormat::RAW
+  };
+
+  let res = state.add_endorsers(&nonce, &endorsers).await;
   if res.is_err() {
     eprintln!("failed to get the timeout map");
     return (StatusCode::CONFLICT, Json(json!({})));
