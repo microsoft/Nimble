@@ -13,7 +13,7 @@ pub mod coordinator_proto {
 use clap::{App, Arg};
 use coordinator_proto::{
   call_server::{Call, CallServer},
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingResp, ReadByIndexReq, ReadByIndexResp,
+  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
   ReadViewTailResp, PingAllReq, PingAllResp, GetTimeoutMapReq, GetTimeoutMapResp,
 };
@@ -191,8 +191,8 @@ impl Call for CoordinatorServiceState {
 
   async fn ping_all_endorsers(
     &self,
-    _request: Request<coordinator_proto::PingAllReq>,  // Accept the gRPC request
-) -> Result<Response<coordinator_proto::PingAllResp>, Status> {
+    _request: Request<PingAllReq>,  // Accept the gRPC request
+) -> Result<Response<PingAllResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     println!("Pining all endorsers now from main.rs");
     // TODO: Does this line work as it's supposed to, creating another reference to the
@@ -233,9 +233,9 @@ impl Call for CoordinatorServiceState {
 
   async fn add_endorsers(
     &self,
-    equest: tonic::Request<super::AddEndorsersReq>,
-    ) -> Result<tonic::Response<super::AddEndorsersResp>, tonic::Status> {
-      
+    equest: tonic::Request<AddEndorsersReq>,
+    ) -> Result<tonic::Response<AddEndorsersResp>, tonic::Status> {
+
     }
 }
 
