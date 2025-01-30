@@ -211,7 +211,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
-  
+
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -488,7 +488,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let quorum_size = quorum_size_str.parse::<u64>().unwrap_or(11).max(1);
 
   let ping_interval_str = cli_matches.value_of("ping_inverval").unwrap();
-  let ping_interval = ping_interval_str.parse::<u64>().unwrap_or(10).max(1);
+  let ping_interval = ping_interval_str.parse::<u32>().unwrap_or(10).max(1);
 
   println!(
     "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
