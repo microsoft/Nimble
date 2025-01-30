@@ -235,7 +235,15 @@ impl Call for CoordinatorServiceState {
     &self,
     equest: tonic::Request<AddEndorsersReq>,
     ) -> Result<tonic::Response<AddEndorsersResp>, tonic::Status> {
-
+      let AddEndorsersReq {
+        nonce,
+        endorsers,
+      } = request.into_inner();
+      
+      let reply = AddEndorsersResp {
+        nonce,
+      };
+      Ok(Response::new(reply))
     }
 }
 
