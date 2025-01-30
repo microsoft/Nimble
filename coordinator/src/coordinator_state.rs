@@ -2400,7 +2400,7 @@ impl CoordinatorState {
     request_timeout: u64,
     min_alive_percentage: u64,
     quorum_size: u64,
-    ping_interval: u64,
+    ping_interval: u32,
   ) {
     MAX_FAILURES.store(max_failures, SeqCst);
     ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
