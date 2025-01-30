@@ -233,15 +233,15 @@ impl Call for CoordinatorServiceState {
 
   async fn add_endorsers(
     &self,
-    equest: tonic::Request<AddEndorsersReq>,
-    ) -> Result<tonic::Response<AddEndorsersResp>, tonic::Status> {
+    request: Request<AddEndorsersReq>,
+    ) -> Result<Response<AddEndorsersResp>, Status> {
       let AddEndorsersReq {
         nonce,
         endorsers,
       } = request.into_inner();
-      
+
       let reply = AddEndorsersResp {
-        nonce,
+        signature: nonce,
       };
       Ok(Response::new(reply))
     }
