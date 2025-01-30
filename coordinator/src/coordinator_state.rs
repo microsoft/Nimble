@@ -12,8 +12,7 @@ use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
   ops::Deref,
-  sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst},
-  sync::{Arc, RwLock},
+  sync::{atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock},
   time::Duration,
   u64::MAX,
 };
@@ -74,7 +73,7 @@ static DESIRED_QUORUM_SIZE: AtomicU64 = AtomicU64::new(MAX);
 static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
 static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
 static ENDORSER_DEAD_ALLOWANCE: AtomicU64 = AtomicU64::new(66);
-static PING_INTERVAL: u64 = 10; // seconds
+static PING_INTERVAL: AtomicU32 = AtomicU32::new(10); // seconds
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -680,7 +679,7 @@ impl CoordinatorState {
   pub async fn start_auto_scheduler(self: Arc<Self>) {
     let mut scheduler = clokwerk::AsyncScheduler::new();
     scheduler
-      .every(PING_INTERVAL.seconds())
+      .every(PING_INTERVAL.load(SeqCst).seconds())
       .run(move || {
         let value = self.clone();
         async move { value.ping_all_endorsers().await }
@@ -2407,7 +2406,7 @@ impl CoordinatorState {
     ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
     ENDORSER_DEAD_ALLOWANCE.store(min_alive_percentage, SeqCst);
     DESIRED_QUORUM_SIZE.store(quorum_size, SeqCst);
-    PING_INTERVAL = ping_interval;
+    PING_INTERVAL.store(ping_interval, SeqCst);
   }
 }
 
