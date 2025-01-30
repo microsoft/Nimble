@@ -234,17 +234,41 @@ impl Call for CoordinatorServiceState {
   async fn add_endorsers(
     &self,
     request: Request<AddEndorsersReq>,
-    ) -> Result<Response<AddEndorsersResp>, Status> {
-      let AddEndorsersReq {
-        nonce,
-        endorsers,
-      } = request.into_inner();
+  ) -> Result<Response<AddEndorsersResp>, Status> {
+    let AddEndorsersReq {
+      nonce,
+      uri,
+    } = request.into_inner();
 
-      let reply = AddEndorsersResp {
-        signature: nonce,
-      };
-      Ok(Response::new(reply))
+      let res = base64_url::decode(&uri);
+    if res.is_err() {
+      eprintln!("received a bad endorser uri {:?}", res);
+      return Err(Status::aborted("Received a bad endorser uri"));
     }
+    let endorser_uri = res.unwrap();
+
+    let res = String::from_utf8(endorser_uri.clone());
+    if res.is_err() {
+      eprintln!(
+        "cannot convert the endorser uri {:?} to string {:?}",
+        endorser_uri, res
+      );
+      return Err(Status::aborted("Received a bad endorser uri"));
+    }
+    let endorser_uri_string = res.unwrap();
+
+    let endorsers = endorser_uri_string
+      .split(';')
+      .filter(|e| !e.is_empty())
+      .map(|e| e.to_string())
+      .collect::<Vec<String>>();
+
+    let res = state.connect_endorsers(&endorsers).await;
+    let reply = AddEndorsersResp {
+      signature: nonce,
+    };
+    Ok(Response::new(reply))
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
