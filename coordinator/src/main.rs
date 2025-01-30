@@ -230,6 +230,13 @@ impl Call for CoordinatorServiceState {
 
     Ok(Response::new(reply))
   }
+
+  async fn add_endorsers(
+    &self,
+    equest: tonic::Request<super::AddEndorsersReq>,
+    ) -> Result<tonic::Response<super::AddEndorsersResp>, tonic::Status> {
+      
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
