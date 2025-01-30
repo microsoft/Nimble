@@ -15,7 +15,7 @@ use coordinator_proto::{
   call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
-  ReadViewTailResp,
+  ReadViewTailResp, PingAllReq, PingAllResp, GetTimeoutMapReq, GetTimeoutMapResp,
 };
 
 use axum::{
@@ -191,27 +191,45 @@ impl Call for CoordinatorServiceState {
 
   async fn ping_all_endorsers(
     &self,
-    _request: Request<coordinator_proto::PingReq>, // Accept the gRPC request
-  ) -> Result<Response<coordinator_proto::PingResp>, Status> {
+    _request: Request<coordinator_proto::PingAllReq>,  // Accept the gRPC request
+) -> Result<Response<coordinator_proto::PingAllResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     println!("Pining all endorsers now from main.rs");
     // TODO: Does this line work as it's supposed to, creating another reference to the
     // Arc<CoordinatorState> or does it just copy the values and move them?
     self.state.clone().ping_all_endorsers().await;
 
-    // Here, create the PingResp with a dummy id_sig (or generate it if necessary)
+    // Here, create the PingAllResp with a dummy id_sig (or generate it if necessary)
     // let id_sig =   // Replace with actual logic to generate IdSig if needed
 
-    // Construct and return the PingResp with the id_sig
-    let reply = PingResp {
-      id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(), // Make sure id_sig is serialized to bytes
+    // Construct and return the PingAllResp with the id_sig
+    let reply = PingAllResp {
+        id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(),  // Make sure id_sig is serialized to bytes
     };
 
     // Return the response
     Ok(Response::new(reply))
   }
 
+  async fn get_timeout_map(
+    &self,
+    request: Request<GetTimeoutMapReq>,
+  ) -> Result<Response<GetTimeoutMapResp>, Status> {
+    let GetTimeoutMapReq {
+      nonce,
+    } = request.into_inner();
 
+    let res = self
+        .state
+        .get_timeout_map();
+
+    let reply = GetTimeoutMapResp {
+      signature: nonce,
+      timeout_map: res,
+    };
+
+    Ok(Response::new(reply))
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -591,9 +609,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
   use crate::{
     coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingReq,
-      ReadByIndexReq, ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq,
-      ReadViewTailResp,
+      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
+      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingAllReq, PingAllResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };
@@ -1404,7 +1421,7 @@ mod tests {
     println!("Timeout Map: {:?}", timeout_map);
 
     // Print the whole timeout_map from the coordinator state again
-    let req = tonic::Request::new(PingReq {
+    let req = tonic::Request::new(PingAllReq {
       nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
     });
     let res = server.ping_all_endorsers(req).await;
@@ -1418,7 +1435,7 @@ mod tests {
       .status()
       .expect("failed to execute process");
 
-    let req1 = tonic::Request::new(PingReq {
+    let req1 = tonic::Request::new(PingAllReq {
       nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
     });
     let res1 = server.ping_all_endorsers(req1).await;

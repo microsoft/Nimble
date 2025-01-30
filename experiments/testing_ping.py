@@ -5,6 +5,8 @@ from datetime import datetime
 from setup_nodes import *
 from config import *
 
+# /home/kilian/Nimble/target/release/endorser
+
 # Setup logging
 def setup_logging(log_folder):
     if not os.path.exists(log_folder):
