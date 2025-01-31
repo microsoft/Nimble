@@ -250,6 +250,7 @@ impl EndorserCall for EndorserServiceState {
           receipt: receipt.to_bytes().to_vec(),
           ledger_tail_map,
         };
+        println!("Finalized endorser");
         Ok(Response::new(reply))
       },
       Err(error) => {
