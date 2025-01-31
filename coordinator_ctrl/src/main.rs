@@ -58,7 +58,7 @@ async fn main() {
 
   let client = reqwest::Client::new();
 
-  /// Adds a new endorser.
+  // Adds a new endorser.
   if let Some(x) = cli_matches.value_of("add") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -81,7 +81,7 @@ async fn main() {
     }
   }
 
-  /// Deletes an existing endorser.
+  // Deletes an existing endorser.
   if let Some(x) = cli_matches.value_of("delete") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -100,7 +100,7 @@ async fn main() {
     }
   }
 
-  /// Retrieves information about an endorser.
+  // Retrieves information about an endorser.
   if let Some(x) = cli_matches.value_of("get") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -119,7 +119,7 @@ async fn main() {
     }
   }
 
-  /// Retrieves the timeout map of endorsers.
+  // Retrieves the timeout map of endorsers.
   if cli_matches.is_present("gettimeoutmap") {
     let endorser_url = reqwest::Url::parse(&format!("{}/timeoutmap", coordinator_addr)).unwrap();
     let res = client.get(endorser_url).send().await;
@@ -135,7 +135,7 @@ async fn main() {
     }
   }
 
-  /// Pings all endorsers.
+  // Pings all endorsers.
   if cli_matches.is_present("pingallendorsers") {
     let endorser_url = reqwest::Url::parse(&format!("{}/pingallendorsers", coordinator_addr)).unwrap();
     let res = client.get(endorser_url).send().await;
