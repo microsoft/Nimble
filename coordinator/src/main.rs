@@ -240,7 +240,7 @@ impl Call for CoordinatorServiceState {
       endorsers,
     } = request.into_inner();
 
-      let res = base64_url::decode(&uri);
+      let res = base64_url::decode(&endorsers);
     if res.is_err() {
       eprintln!("received a bad endorser uri {:?}", res);
       return Err(Status::aborted("Received a bad endorser uri"));

@@ -219,7 +219,7 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToAddEndorsers)?
       .into_inner();
-    Ok((id_sig))
+    Ok((signature))
   }
 }
 
