@@ -209,12 +209,12 @@ impl Connection {
     uri: String,
   ) -> Result<(Vec<u8>), EndpointError> {
     let AddEndorsersResp {
-      id_sig,
+      signature,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .add_endorsers(AddEndorsersReq {
         nonce: nonce.to_vec(),
-        uri: uri,
+        endorsers: uri,
       })
       .await
       .map_err(|_e| EndpointError::FailedToAddEndorsers)?
