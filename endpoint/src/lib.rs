@@ -44,6 +44,7 @@ pub struct Connection {
 }
 
 impl Connection {
+  /// Creates a new connection to the coordinator.
   pub async fn new(
     coordinator_endpoint_address: String,
     num_grpc_channels_opt: Option<usize>,
@@ -69,6 +70,7 @@ impl Connection {
     })
   }
 
+  /// Creates a new ledger with the given handle and block.
   pub async fn new_ledger(&self, handle: &[u8], block: &[u8]) -> Result<Vec<u8>, EndpointError> {
     let req = Request::new(NewLedgerReq {
       handle: handle.to_vec(),
@@ -86,6 +88,7 @@ impl Connection {
     Ok(receipts)
   }
 
+  /// Appends a block to the ledger with the given handle and expected height.
   pub async fn append(
     &self,
     handle: &[u8],
@@ -112,6 +115,7 @@ impl Connection {
     Ok((hash_nonces, receipts))
   }
 
+  /// Reads the latest block from the ledger with the given handle and nonce.
   pub async fn read_latest(
     &self,
     handle: &[u8],
@@ -136,6 +140,7 @@ impl Connection {
     Ok((block, nonces, receipts))
   }
 
+  /// Reads a block from the view ledger by index.
   pub async fn read_view_by_index(
     &self,
     index: usize,
@@ -152,6 +157,7 @@ impl Connection {
     Ok((block, receipts))
   }
 
+  /// Reads the tail of the view ledger.
   pub async fn read_view_tail(&self) -> Result<(Vec<u8>, Vec<u8>, usize, Vec<u8>), EndpointError> {
     let ReadViewTailResp {
       block,
@@ -167,6 +173,7 @@ impl Connection {
     Ok((block, receipts, height as usize, attestations))
   }
 
+  /// Gets the timeout map from the coordinator.
   pub async fn get_timeout_map(
     &self,
   ) -> Result<HashMap<String, u64>, EndpointError> {
@@ -181,6 +188,7 @@ impl Connection {
     Ok(timeout_map)
   }
 
+  /// Pings all endorsers.
   pub async fn ping_all_endorsers(
     &self,
   ) -> Result<(), EndpointError> {
@@ -193,6 +201,7 @@ impl Connection {
     Ok(())
   }
 
+  /// Adds endorsers with the given URI.
   pub async fn add_endorsers(
     &self,
     uri: String,
@@ -231,6 +240,7 @@ pub enum SignatureFormat {
 }
 
 impl EndpointState {
+  /// Creates a new endpoint state.
   pub async fn new(
     hostname: String,
     pem_opt: Option<String>,
@@ -293,6 +303,7 @@ impl EndpointState {
     })
   }
 
+  /// Gets the identity of the endpoint.
   pub fn get_identity(
     &self,
     pkformat: PublicKeyFormat,
@@ -308,6 +319,7 @@ impl EndpointState {
     ))
   }
 
+  /// Updates the view of the endpoint.
   async fn update_view(&self) -> Result<(), EndpointError> {
     let start_height = {
       if let Ok(vs_rd) = self.vs.read() {
@@ -342,6 +354,7 @@ impl EndpointState {
     Ok(())
   }
 
+  /// Creates a new counter with the given handle, tag, and signature format.
   pub async fn new_counter(
     &self,
     handle: &[u8],
@@ -429,6 +442,7 @@ impl EndpointState {
     Ok(signature)
   }
 
+  /// Increments the counter with the given handle, tag, expected counter, and signature format.
   pub async fn increment_counter(
     &self,
     handle: &[u8],
@@ -525,6 +539,7 @@ impl EndpointState {
     Ok(signature)
   }
 
+  /// Reads the counter with the given handle, nonce, and signature format.
   pub async fn read_counter(
     &self,
     handle: &[u8],
@@ -630,6 +645,7 @@ impl EndpointState {
     Ok((tag.to_vec(), counter as u64, signature))
   }
 
+  /// Gets the timeout map from the coordinator.
   pub async fn get_timeout_map(
     &self
   ) -> Result<HashMap<String, u64>, EndpointError> {
@@ -648,6 +664,7 @@ impl EndpointState {
     Ok(timeout_map)
   }
 
+  /// Pings all endorsers.
   pub async fn ping_all_endorsers(
     &self,
   ) -> Result<(), EndpointError> {
@@ -666,6 +683,7 @@ impl EndpointState {
     Ok(())
   }
 
+  /// Adds endorsers with the given URI.
   pub async fn add_endorsers(
     &self,
     uri: String,

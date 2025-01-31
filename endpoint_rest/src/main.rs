@@ -16,6 +16,7 @@ use clap::{App, Arg};
 
 use serde::{Deserialize, Serialize};
 
+/// Main function to start the endpoint service.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("endpoint")
@@ -136,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
+/// Response structure for the get_identity endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct GetIdentityResponse {
   #[serde(rename = "Identity")]
@@ -144,18 +146,21 @@ struct GetIdentityResponse {
   pub pk: String,
 }
 
+/// Request structure for the new_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterRequest {
   #[serde(rename = "Tag")]
   pub tag: String,
 }
 
+/// Response structure for the new_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
 }
 
+/// Request structure for the increment_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterRequest {
   #[serde(rename = "Tag")]
@@ -164,12 +169,14 @@ struct IncrementCounterRequest {
   pub expected_counter: u64,
 }
 
+/// Response structure for the increment_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
 }
 
+/// Response structure for the read_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct ReadCounterResponse {
   #[serde(rename = "Tag")]
@@ -180,26 +187,29 @@ struct ReadCounterResponse {
   pub signature: String,
 }
 
+/// Response structure for the get_timeout_map endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct GetTimeoutMapResp {
   #[serde(rename = "timeout_map")]
   pub timeout_map: HashMap<String, u64>,
 }
 
+/// Response structure for the ping_all_endorsers endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct PingAllResp {
 }
 
+/// Response structure for the add_endorsers endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct AddEndorsersResp {
 }
 
+/// Request structure for the add_endorsers endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct AddEndorsersRequest {
 }
 
-
-
+/// Handler for the get_identity endpoint.
 async fn get_identity(
   Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
@@ -226,6 +236,7 @@ async fn get_identity(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the new_counter endpoint.
 async fn new_counter(
   Path(handle): Path<String>,
   Json(req): Json<NewCounterRequest>,
@@ -269,6 +280,7 @@ async fn new_counter(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the read_counter endpoint.
 async fn read_counter(
   Path(handle): Path<String>,
   Query(params): Query<HashMap<String, String>>,
@@ -317,6 +329,7 @@ async fn read_counter(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the increment_counter endpoint.
 async fn increment_counter(
   Path(handle): Path<String>,
   Json(req): Json<IncrementCounterRequest>,
@@ -362,6 +375,7 @@ async fn increment_counter(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the get_timeout_map endpoint.
 async fn get_timeout_map(
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
@@ -380,6 +394,7 @@ async fn get_timeout_map(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the ping_all_endorsers endpoint.
 async fn ping_all_endorsers(
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
@@ -395,6 +410,7 @@ async fn ping_all_endorsers(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the add_endorsers endpoint.
 async fn add_endorsers(
   Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
