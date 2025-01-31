@@ -12,7 +12,7 @@ use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
   ops::Deref,
-  sync::{atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock},
+  sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock},
   time::Duration,
   u64::MAX,
 };
@@ -74,6 +74,7 @@ static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
 static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
 static ENDORSER_DEAD_ALLOWANCE: AtomicU64 = AtomicU64::new(66);
 static PING_INTERVAL: AtomicU32 = AtomicU32::new(10); // seconds
+static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -2401,12 +2402,14 @@ impl CoordinatorState {
     min_alive_percentage: u64,
     quorum_size: u64,
     ping_interval: u32,
+    deactivate_auto_reconfig: bool,
   ) {
     MAX_FAILURES.store(max_failures, SeqCst);
     ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
     ENDORSER_DEAD_ALLOWANCE.store(min_alive_percentage, SeqCst);
     DESIRED_QUORUM_SIZE.store(quorum_size, SeqCst);
     PING_INTERVAL.store(ping_interval, SeqCst);
+    DEACTIVATE_AUTO_RECONFIG.store(deactivate_auto_reconfig, SeqCst);
   }
 }
 

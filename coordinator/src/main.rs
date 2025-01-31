@@ -3,7 +3,10 @@ mod errors;
 
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+  collections::HashMap, 
+  sync::{atomic::{AtomicBool, Ordering::SeqCst}, Arc},
+};
 use tonic::{transport::Server, Request, Response, Status};
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
@@ -30,6 +33,9 @@ use serde_json::json;
 use tower::ServiceBuilder;
 
 use rand::Rng;
+
+
+static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
 
 pub struct CoordinatorServiceState {
   state: Arc<CoordinatorState>,
@@ -343,7 +349,12 @@ async fn new_endorser(
     .map(|e| e.to_string())
     .collect::<Vec<String>>();
 
-  let res = state.replace_endorsers(&endorsers).await;
+  if DEACTIVATE_AUTO_RECONFIG.load(SeqCst) {
+    let res = state.replace_endorsers(&endorsers).await;
+  } else {
+    let res = state.connect_endorsers(&endorsers).await;
+  }
+  
   if res.is_err() {
     eprintln!("failed to add the endorser ({:?})", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
@@ -402,6 +413,21 @@ async fn delete_endorser(
     .await;
 
   (StatusCode::OK, Json(json!(resp)))
+}
+
+async fn get_timeout_map(
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+
+  let res = state.get_timeout_map();
+  return (StatusCode::OK, Json(json!(res)));
+}
+
+async fn ping_all_endorsers(
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+  let res = state.ping_all_endorsers();
+  return (StatusCode::OK, Json(json!({})));
 }
 
 #[tokio::main]
@@ -522,6 +548,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help("How often to ping endorsers in seconds")
         .takes_value(true)
         .default_value("10"),
+    ).arg(
+      Arg::with_name("deactivate_auto_reconfig")
+      .long("deactivate_auto_reconfig")
+      .help("Deactivate automatic reconfiguration of endorsers")
+      .takes_value(false),
     );
 
   let cli_matches = config.get_matches();
@@ -546,6 +577,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let ping_interval_str = cli_matches.value_of("ping_inverval").unwrap();
   let ping_interval = ping_interval_str.parse::<u32>().unwrap_or(10).max(1);
+
+  if cli_matches.is_present("deactivate_auto_reconfig") {
+    DEACTIVATE_AUTO_RECONFIG.store(true, SeqCst);
+  }
 
   println!(
     "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
@@ -593,6 +628,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     min_alive_percentage,
     quorum_size,
     ping_interval,
+    DEACTIVATE_AUTO_RECONFIG.load(SeqCst),
   );
 
   if !endorser_hostnames.is_empty() {
@@ -615,6 +651,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Start the REST server for management
   let control_server = Router::new()
       .route("/endorsers/:uri", get(get_endorser).put(new_endorser).delete(delete_endorser))
+      .route("/pingallendorsers", get(ping_all_endorsers))
+      .route("/timeoutmap", get(get_timeout_map))
       // Add middleware to all routes
       .layer(
           ServiceBuilder::new()
