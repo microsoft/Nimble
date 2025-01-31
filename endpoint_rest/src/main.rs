@@ -194,6 +194,12 @@ struct PingAllResp {
   pub signature: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct AddEndorsersResp {
+  #[serde(rename = "signature")]
+  pub signature: String,
+}
+
 async fn get_identity(
   Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
@@ -423,7 +429,7 @@ async fn ping_all_endorsers(
 
   let res = state.ping_all_endorsers(&nonce).await;
   if res.is_err() {
-    eprintln!("failed to get the timeout map");
+    eprintln!("failed to ping all endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let (signature) = res.unwrap();
@@ -462,12 +468,12 @@ async fn add_endorsers(
 
   let res = state.add_endorsers(&nonce, &endorsers).await;
   if res.is_err() {
-    eprintln!("failed to get the timeout map");
+    eprintln!("failed to add endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
   let (signature) = res.unwrap();
 
-  let resp = PingAllResp {
+  let resp = AddEndorsersResp {
     signature: base64_url::encode(&signature),
   };
 
