@@ -457,6 +457,25 @@ async fn add_endorsers(
   }
   let nonce = res.unwrap();
 
+  if !params.contains_key("endorsers") {
+    eprintln!("missing a uri endorsers");
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+
+  let res = base64_url::decode(&params["endorsers"]);
+  if res.is_err() {
+    eprintln!("received no endorsers uri {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorsers = res.unwrap().as_slice();
+  let endorsers = std::str::from_utf8(endorsers);
+  if endorsers.is_err() {
+    eprintln!("received a bad endorsers uri {:?}", endorsers);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorsers = endorsers.unwrap();
+  
+
   let sigformat = if params.contains_key("sigformat") {
     match params["sigformat"].as_ref() {
       "der" => SignatureFormat::DER,
