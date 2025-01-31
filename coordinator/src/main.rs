@@ -201,16 +201,10 @@ impl Call for CoordinatorServiceState {
 ) -> Result<Response<PingAllResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     println!("Pining all endorsers now from main.rs");
-    // TODO: Does this line work as it's supposed to, creating another reference to the
-    // Arc<CoordinatorState> or does it just copy the values and move them?
     self.state.clone().ping_all_endorsers().await;
 
-    // Here, create the PingAllResp with a dummy id_sig (or generate it if necessary)
-    // let id_sig =   // Replace with actual logic to generate IdSig if needed
-
-    // Construct and return the PingAllResp with the id_sig
-    let reply = PingAllResp { // Make sure id_sig is serialized to bytes
-    };
+    // Construct and return the PingAllResp 
+    let reply = PingAllResp {};
 
     // Return the response
     Ok(Response::new(reply))
@@ -606,9 +600,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator = res.unwrap();
   let mut mutcoordinator = coordinator.clone();
 
-  // TODO: Fix this
-  // Idea: Move variables to coordinator state
-  // Add desired quorum size
   mutcoordinator.overwrite_variables(
     max_failures,
     request_timeout,
@@ -674,7 +665,7 @@ mod tests {
   use crate::{
     coordinator_proto::{
       call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingAllReq, PingAllResp,
+      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingAllReq
     },
     CoordinatorServiceState, CoordinatorState,
   };
@@ -1464,7 +1455,7 @@ mod tests {
     }
 
     // Launch the endorser
-    let endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
+    let _endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
     println!("Endorser started");
     // Create the coordinator
     let coordinator = Arc::new(

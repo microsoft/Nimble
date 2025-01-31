@@ -6,7 +6,7 @@ use ledger::{
   Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait,
   Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
-use log::{error};
+use log::error;
 use rand::{random, Rng};
 use std::{
   collections::{HashMap, HashSet}, convert::TryInto, ops::Deref, sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock}, time::Duration, u64::MAX
@@ -62,7 +62,6 @@ const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to end
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
-//static _LOG_FILE_LOCATION: &str = "log.txt";
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
 static DESIRED_QUORUM_SIZE: AtomicU64 = AtomicU64::new(MAX);
 static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
@@ -660,14 +659,6 @@ impl CoordinatorState {
         return Err(CoordinatorError::FailedToAcquireWriteLock);
       }
     }
-
-    // let coordinator_clone = coordinator.clone();
-    // let mut scheduler = clokwerk::AsyncScheduler::new ();
-    // scheduler.every(ENDORSER_REFRESH_PERIOD.seconds()).run( move || {
-    //   let value = coordinator_clone.clone();
-    //   async move {value.ping_all_endorsers().await}
-    // });
-    // println!("Started the scheduler");
 
     Ok(coordinator)
   }
