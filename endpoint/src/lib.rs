@@ -13,7 +13,7 @@ pub mod coordinator_proto {
 use crate::errors::EndpointError;
 use coordinator_proto::{
   call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp, GetTimeoutMapReq, GetTimeoutMapResp, PingAllReq, PingAllResp
+  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp, GetTimeoutMapReq, GetTimeoutMapResp, PingAllReq, PingAllResp, AddEndorsersReq, AddEndorsersResp
 };
 use ledger::{
   errors::VerificationError,

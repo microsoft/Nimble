@@ -69,7 +69,7 @@ message GetTimeoutMapResp {
 
 message AddEndorsersReq {
   bytes nonce = 1;
-  repeated string endorsers = 2;
+  string endorsers = 2;
 }
 
 message AddEndorsersResp {

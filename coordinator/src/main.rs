@@ -237,7 +237,7 @@ impl Call for CoordinatorServiceState {
   ) -> Result<Response<AddEndorsersResp>, Status> {
     let AddEndorsersReq {
       nonce,
-      uri,
+      endorsers,
     } = request.into_inner();
 
       let res = base64_url::decode(&uri);
@@ -263,7 +263,7 @@ impl Call for CoordinatorServiceState {
       .map(|e| e.to_string())
       .collect::<Vec<String>>();
 
-    let res = state.connect_endorsers(&endorsers).await;
+    let res = self.state.connect_endorsers(&endorsers).await;
     let reply = AddEndorsersResp {
       signature: nonce,
     };
