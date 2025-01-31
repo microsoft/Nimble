@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .route("/serviceid", get(get_identity))
       .route("/timeoutmap", get(get_timeout_map))
       .route("/pingallendorsers", get(ping_all_endorsers))
-      .route("/addendorsers/:uri", put(add_endorsers))
+      .route("/addendorsers", put(add_endorsers))
       .route("/counters/:handle", get(read_counter).put(new_counter).post(increment_counter))
       // Add middleware to all routes
       .layer(
@@ -182,23 +182,23 @@ struct ReadCounterResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GetTimeoutMapResp {
-  #[serde(rename = "signature")]
-  pub signature: String,
   #[serde(rename = "timeout_map")]
   pub timeout_map: HashMap<String, u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PingAllResp {
-  #[serde(rename = "signature")]
-  pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AddEndorsersResp {
-  #[serde(rename = "signature")]
-  pub signature: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AddEndorsersRequest {
+}
+
+
 
 async fn get_identity(
   Query(params): Query<HashMap<String, String>>,
@@ -363,39 +363,17 @@ async fn increment_counter(
 }
 
 async fn get_timeout_map(
-  Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
 
-  if !params.contains_key("nonce") {
-    eprintln!("missing a nonce");
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let res = base64_url::decode(&params["nonce"]);
-  if res.is_err() {
-    eprintln!("received a bad nonce {:?}", res);
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let nonce = res.unwrap();
-
-  let sigformat = if params.contains_key("sigformat") {
-    match params["sigformat"].as_ref() {
-      "der" => SignatureFormat::DER,
-      _ => SignatureFormat::RAW,
-    }
-  } else {
-    SignatureFormat::RAW
-  };
-
-  let res = state.get_timeout_map(&nonce, sigformat).await;
+  let res = state.get_timeout_map().await;
   if res.is_err() {
     eprintln!("failed to get the timeout map");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
-  let (signature, timeout_map) = res.unwrap();
+  let timeout_map = res.unwrap();
 
   let resp = GetTimeoutMapResp {
-    signature: base64_url::encode(&signature),
     timeout_map: timeout_map,
   };
 
@@ -403,40 +381,16 @@ async fn get_timeout_map(
 }
 
 async fn ping_all_endorsers(
-  Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
 
-  if !params.contains_key("nonce") {
-    eprintln!("missing a nonce");
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let res = base64_url::decode(&params["nonce"]);
-  if res.is_err() {
-    eprintln!("received a bad nonce {:?}", res);
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let nonce = res.unwrap();
-
-  let sigformat = if params.contains_key("sigformat") {
-    match params["sigformat"].as_ref() {
-      "der" => SignatureFormat::DER,
-      _ => SignatureFormat::RAW,
-    }
-  } else {
-    SignatureFormat::RAW
-  };
-
-  let res = state.ping_all_endorsers(&nonce).await;
+  let res = state.ping_all_endorsers().await;
   if res.is_err() {
     eprintln!("failed to ping all endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
-  let signature = res.unwrap();
 
-  let resp = PingAllResp {
-    signature: base64_url::encode(&signature),
-  };
+  let resp = PingAllResp {};
 
   (StatusCode::OK, Json(json!(resp)))
 }
@@ -445,17 +399,6 @@ async fn add_endorsers(
   Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
 ) -> impl IntoResponse {
-
-  if !params.contains_key("nonce") {
-    eprintln!("missing a nonce");
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let res = base64_url::decode(&params["nonce"]);
-  if res.is_err() {
-    eprintln!("received a bad nonce {:?}", res);
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
-  let nonce = res.unwrap();
 
   if !params.contains_key("endorsers") {
     eprintln!("missing a uri endorsers");
@@ -475,27 +418,14 @@ async fn add_endorsers(
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
   let endorsers = endorsers.unwrap();
-  
 
-  let sigformat = if params.contains_key("sigformat") {
-    match params["sigformat"].as_ref() {
-      "der" => SignatureFormat::DER,
-      _ => SignatureFormat::RAW,
-    }
-  } else {
-    SignatureFormat::RAW
-  };
-
-  let res = state.add_endorsers(&nonce, endorsers.to_string()).await;
+  let res = state.add_endorsers(endorsers.to_string()).await;
   if res.is_err() {
     eprintln!("failed to add endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
-  let signature = res.unwrap();
 
-  let resp = AddEndorsersResp {
-    signature: base64_url::encode(&signature),
-  };
+  let resp = AddEndorsersResp {};
 
   (StatusCode::OK, Json(json!(resp)))
 }

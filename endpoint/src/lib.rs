@@ -169,56 +169,43 @@ impl Connection {
 
   pub async fn get_timeout_map(
     &self,
-    nonce: &[u8],
-  ) -> Result<(Vec<u8>, HashMap<String, u64>), EndpointError> {
+  ) -> Result<HashMap<String, u64>, EndpointError> {
     let GetTimeoutMapResp {
-      signature,
       timeout_map,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
-      .get_timeout_map(GetTimeoutMapReq {
-        nonce: nonce.to_vec(),
-      })
+      .get_timeout_map(GetTimeoutMapReq {})
       .await
       .map_err(|_e| EndpointError::FailedToGetTimeoutMap)?
       .into_inner();
-    Ok((signature, timeout_map))
+    Ok(timeout_map)
   }
 
   pub async fn ping_all_endorsers(
     &self,
-    nonce: &[u8],
-  ) -> Result<Vec<u8>, EndpointError> {
-    let PingAllResp {
-      id_sig,
-    } = self.clients[random::<usize>() % self.num_grpc_channels]
+  ) -> Result<(), EndpointError> {
+    let PingAllResp {} = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
-      .ping_all_endorsers(PingAllReq {
-        nonce: nonce.to_vec(),
-      })
+      .ping_all_endorsers(PingAllReq {})
       .await
       .map_err(|_e| EndpointError::FailedToPingAllEndorsers)?
       .into_inner();
-    Ok(id_sig)
+    Ok(())
   }
 
   pub async fn add_endorsers(
     &self,
-    nonce: &[u8],
     uri: String,
-  ) -> Result<Vec<u8>, EndpointError> {
-    let AddEndorsersResp {
-      signature,
-    } = self.clients[random::<usize>() % self.num_grpc_channels]
+  ) -> Result<(), EndpointError> {
+    let AddEndorsersResp {} = self.clients[random::<usize>() % self.num_grpc_channels]
       .clone()
       .add_endorsers(AddEndorsersReq {
-        nonce: nonce.to_vec(),
         endorsers: uri,
       })
       .await
       .map_err(|_e| EndpointError::FailedToAddEndorsers)?
       .into_inner();
-    Ok(signature)
+    Ok(())
   }
 }
 
@@ -644,14 +631,12 @@ impl EndpointState {
   }
 
   pub async fn get_timeout_map(
-    &self,
-    nonce: &[u8],
-    sigformat: SignatureFormat,
-  ) -> Result<(Vec<u8>, HashMap<String, u64>), EndpointError> {
+    &self
+  ) -> Result<HashMap<String, u64>, EndpointError> {
     
 
-    let (block, timeout_map) = {
-      let res = self.conn.get_timeout_map(nonce).await;
+    let timeout_map = {
+      let res = self.conn.get_timeout_map().await;
 
       if res.is_err() {
         return Err(EndpointError::FailedToGetTimeoutMap);
@@ -659,24 +644,17 @@ impl EndpointState {
       res.unwrap()
     };
 
-    let sig = self.sk.sign(nonce).unwrap();
-    let signature = match sigformat {
-      SignatureFormat::DER => sig.to_der(),
-      _ => sig.to_bytes(),
-    };
-
     // respond to the light client
-    Ok((signature, timeout_map))
+    Ok(timeout_map)
   }
 
   pub async fn ping_all_endorsers(
     &self,
-    nonce: &[u8],
-  ) -> Result<Vec<u8>, EndpointError> {
+  ) -> Result<(), EndpointError> {
     
 
-    let block = {
-      let res = self.conn.ping_all_endorsers(nonce).await;
+    let _block = {
+      let res = self.conn.ping_all_endorsers().await;
 
       if res.is_err() {
         return Err(EndpointError::FailedToPingAllEndorsers);
@@ -684,22 +662,18 @@ impl EndpointState {
       res.unwrap()
     };
 
-    let sig = self.sk.sign(nonce).unwrap();
-    let signature = sig.to_bytes();
-
     // respond to the light client
-    Ok(signature)
+    Ok(())
   }
 
   pub async fn add_endorsers(
     &self,
-    nonce: &[u8],
     uri: String,
-  ) -> Result<Vec<u8>, EndpointError> {
+  ) -> Result<(), EndpointError> {
     
 
-    let block = {
-      let res = self.conn.add_endorsers(nonce, uri).await;
+    let _block = {
+      let res = self.conn.add_endorsers(uri).await;
 
       if res.is_err() {
         return Err(EndpointError::FailedToAddEndorsers);
@@ -707,10 +681,7 @@ impl EndpointState {
       res.unwrap()
     };
 
-    let sig = self.sk.sign(nonce).unwrap();
-    let signature = sig.to_bytes();
-
     // respond to the light client
-    Ok(signature)
+    Ok(())
   }
 }

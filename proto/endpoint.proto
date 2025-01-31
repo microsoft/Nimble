@@ -51,27 +51,21 @@ message ReadCounterResp {
 }
 
 message PingAllReq { 
-  bytes nonce = 1; 
 }
 
 message PingAllResp { 
-  bytes id_sig = 1; 
 }
 
 message GetTimeoutMapReq {
-  bytes nonce = 1;
 }
 
 message GetTimeoutMapResp {
-  bytes signature = 1;
-  map<string, uint64> timeout_map = 2;
+  map<string, uint64> timeout_map = 1;
 }
 
 message AddEndorsersReq {
-  bytes nonce = 1;
-  string endorsers = 2;
+  string endorsers = 1;
 }
 
 message AddEndorsersResp {
-  bytes signature = 1;
 }

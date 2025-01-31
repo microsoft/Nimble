@@ -1,0 +1,105 @@
+2025-01-31 17:02:56,735 - Executing command: /Users/matheis/VSCProjects/Nimble/target/release/endorser -p9090
+2025-01-31 17:02:58,742 - Executing command: /Users/matheis/VSCProjects/Nimble/target/release/endorser -p9091
+2025-01-31 17:03:00,753 - Executing command: /Users/matheis/VSCProjects/Nimble/target/release/coordinator -ehttp://localhost:9090 -i1
+2025-01-31 17:03:02,765 - Executing command: /Users/matheis/VSCProjects/Nimble/target/release/endpoint_rest
+2025-01-31 17:03:08,792 - Starting new HTTP connection (1): localhost:8082
+2025-01-31 17:03:08,800 - http://localhost:8082 "GET /pingallendorsers HTTP/1.1" 200 2
+2025-01-31 17:03:08,800 - GET http://localhost:8082/pingallendorsers - Status Code: 200
+2025-01-31 17:03:08,800 - Response: {}
+2025-01-31 17:03:09,806 - Starting new HTTP connection (1): localhost:8082
+2025-01-31 17:03:09,809 - http://localhost:8082 "GET /timeoutmap HTTP/1.1" 200 43
+2025-01-31 17:03:09,809 - GET http://localhost:8082/timeoutmap - Status Code: 200
+2025-01-31 17:03:09,810 - Response: {"timeout_map":{"http://localhost:9090":0}}
+2025-01-31 17:03:10,816 - Starting new HTTP connection (1): localhost:8082
+2025-01-31 17:03:10,821 - http://localhost:8082 "PUT /addendorsers?endorsers=aHR0cDovL2xvY2FsaG9zdDo5MDkx HTTP/1.1" 200 2
+2025-01-31 17:03:10,822 - PUT http://localhost:8082/addendorsers - Code: 200
+2025-01-31 17:03:10,822 - Response: {}
+2025-01-31 17:03:14,829 - Output of command /Users/matheis/VSCProjects/Nimble/target/release/endorser -p9090:
+2025-01-31 17:03:14,830 - stdout:
+2025-01-31 17:03:14,830 - Endorser host listening on [::1]:9090
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+
+2025-01-31 17:03:14,830 - stderr:
+2025-01-31 17:03:14,830 - 
+2025-01-31 17:03:14,830 - Output of command /Users/matheis/VSCProjects/Nimble/target/release/endorser -p9091:
+2025-01-31 17:03:14,830 - stdout:
+2025-01-31 17:03:14,830 - Endorser host listening on [::1]:9091
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+
+2025-01-31 17:03:14,830 - stderr:
+2025-01-31 17:03:14,830 - 
+2025-01-31 17:03:14,830 - Output of command /Users/matheis/VSCProjects/Nimble/target/release/coordinator -ehttp://localhost:9090 -i1:
+2025-01-31 17:03:14,830 - stdout:
+2025-01-31 17:03:14,830 - Coordinator starting with max_failures: 3, request_timeout: 10, min_alive_percentage: 66, quorum_size: 3
+Connected to new endorsers
+Desired quorum size: 3
+New endorser URI: http://localhost:9090
+created view ledger genesis block
+read view ledger tail
+appended view ledger genesis block
+Endorser URIs: ["http://localhost:9090"]
+Pinging all Endorsers method called from main.rs
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Started the scheduler
+Running control service at [::1]:8090
+Running gRPC Coordinator Service at [::1]:8080
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pining all endorsers now from main.rs
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+
+2025-01-31 17:03:14,830 - stderr:
+2025-01-31 17:03:14,830 - 
+2025-01-31 17:03:14,830 - Output of command /Users/matheis/VSCProjects/Nimble/target/release/endpoint_rest:
+2025-01-31 17:03:14,831 - stdout:
+2025-01-31 17:03:14,831 - Running endpoint at [::1]:8082
+
+2025-01-31 17:03:14,831 - stderr:
+2025-01-31 17:03:14,831 - 

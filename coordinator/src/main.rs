@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower::ServiceBuilder;
 
-use rand::Rng;
+
 
 
 static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
@@ -209,8 +209,7 @@ impl Call for CoordinatorServiceState {
     // let id_sig =   // Replace with actual logic to generate IdSig if needed
 
     // Construct and return the PingAllResp with the id_sig
-    let reply = PingAllResp {
-        id_sig: rand::thread_rng().gen::<[u8; 16]>().to_vec(),  // Make sure id_sig is serialized to bytes
+    let reply = PingAllResp { // Make sure id_sig is serialized to bytes
     };
 
     // Return the response
@@ -219,11 +218,8 @@ impl Call for CoordinatorServiceState {
 
   async fn get_timeout_map(
     &self,
-    request: Request<GetTimeoutMapReq>,
+    _request: Request<GetTimeoutMapReq>,
   ) -> Result<Response<GetTimeoutMapResp>, Status> {
-    let GetTimeoutMapReq {
-      nonce,
-    } = request.into_inner();
 
     let res = self
         .state
@@ -236,7 +232,6 @@ impl Call for CoordinatorServiceState {
     let res = res.unwrap();
 
     let reply = GetTimeoutMapResp {
-      signature: nonce,
       timeout_map: res,
     };
 
@@ -248,36 +243,17 @@ impl Call for CoordinatorServiceState {
     request: Request<AddEndorsersReq>,
   ) -> Result<Response<AddEndorsersResp>, Status> {
     let AddEndorsersReq {
-      nonce,
       endorsers,
     } = request.into_inner();
 
-      let res = base64_url::decode(&endorsers);
-    if res.is_err() {
-      eprintln!("received a bad endorser uri {:?}", res);
-      return Err(Status::aborted("Received a bad endorser uri"));
-    }
-    let endorser_uri = res.unwrap();
-
-    let res = String::from_utf8(endorser_uri.clone());
-    if res.is_err() {
-      eprintln!(
-        "cannot convert the endorser uri {:?} to string {:?}",
-        endorser_uri, res
-      );
-      return Err(Status::aborted("Received a bad endorser uri"));
-    }
-    let endorser_uri_string = res.unwrap();
-
-    let endorsers = endorser_uri_string
+    let endorsers_uris = endorsers
       .split(';')
       .filter(|e| !e.is_empty())
       .map(|e| e.to_string())
       .collect::<Vec<String>>();
 
-    let res = self.state.connect_endorsers(&endorsers).await;
+    let _res = self.state.connect_endorsers(&endorsers_uris).await;
     let reply = AddEndorsersResp {
-      signature: nonce,
     };
     Ok(Response::new(reply))
   }
@@ -1509,9 +1485,7 @@ mod tests {
     println!("Timeout Map: {:?}", timeout_map);
 
     // Print the whole timeout_map from the coordinator state again
-    let req = tonic::Request::new(PingAllReq {
-      nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
-    });
+    let req = tonic::Request::new(PingAllReq {});
     let res = server.ping_all_endorsers(req).await;
     assert!(res.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
@@ -1523,9 +1497,7 @@ mod tests {
       .status()
       .expect("failed to execute process");
 
-    let req1 = tonic::Request::new(PingAllReq {
-      nonce: rand::thread_rng().gen::<[u8; 16]>().to_vec(),
-    });
+    let req1 = tonic::Request::new(PingAllReq {});
     let res1 = server.ping_all_endorsers(req1).await;
     assert!(res1.is_ok());
     let timeout_map = server.get_state().get_timeout_map();
