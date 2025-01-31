@@ -485,7 +485,7 @@ async fn add_endorsers(
     SignatureFormat::RAW
   };
 
-  let res = state.add_endorsers(&nonce, &endorsers).await;
+  let res = state.add_endorsers(&nonce, endorsers.to_string()).await;
   if res.is_err() {
     eprintln!("failed to add endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
