@@ -17,7 +17,7 @@ async fn main() {
         .short("c")
         .long("coordinator")
         .help("The hostname of the coordinator")
-        .default_value("http://127.0.0.1:8090"),
+        .default_value("http://localhost:8090"),
     )
     .arg(
       Arg::with_name("add")
