@@ -9,12 +9,7 @@ use ledger::{
 use log::{error, info, warn};
 use rand::{random, Rng};
 use std::{
-  collections::{HashMap, HashSet},
-  convert::TryInto,
-  ops::Deref,
-  sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock},
-  time::Duration,
-  u64::MAX,
+  collections::{HashMap, HashSet}, convert::TryInto, f32::consts::E, ops::Deref, sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock}, time::Duration, u64::MAX
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -2381,17 +2376,17 @@ impl CoordinatorState {
     }
   }
 
-  pub fn get_timeout_map(&self) -> HashMap<String, u64> {
+  pub fn get_timeout_map(&self) -> Result<HashMap<String, u64>, CoordinatorError> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       let mut timeout_map = HashMap::new();
       for (_pk, endorser_clients) in conn_map_rd.iter() {
         // Convert Vec<u8> to String (assuming UTF-8 encoding)
         timeout_map.insert(endorser_clients.uri.clone(), endorser_clients.failures);
       }
-      timeout_map
+      Ok(timeout_map)
     } else {
       eprintln!("Failed to acquire read lock on conn_map");
-      HashMap::new()
+      Err(CoordinatorError::FailedToGetTimeoutMap)
     }
   }
 

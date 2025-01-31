@@ -228,6 +228,12 @@ impl Call for CoordinatorServiceState {
     let res = self
         .state
         .get_timeout_map();
+    
+    if res.is_err() {
+      return Err(Status::aborted("Failed to get the timeout map"));
+    } 
+
+    let res = res.unwrap();
 
     let reply = GetTimeoutMapResp {
       signature: nonce,
@@ -351,14 +357,15 @@ async fn new_endorser(
 
   if DEACTIVATE_AUTO_RECONFIG.load(SeqCst) {
     let res = state.replace_endorsers(&endorsers).await;
+    if res.is_err() {
+      eprintln!("failed to add the endorser ({:?})", res);
+      return (StatusCode::BAD_REQUEST, Json(json!({})));
+    }
   } else {
     let res = state.connect_endorsers(&endorsers).await;
   }
   
-  if res.is_err() {
-    eprintln!("failed to add the endorser ({:?})", res);
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
-  }
+  
 
   let pks = state.get_endorser_pks();
   let mut pks_vec = Vec::new();
@@ -420,13 +427,17 @@ async fn get_timeout_map(
 ) -> impl IntoResponse {
 
   let res = state.get_timeout_map();
-  return (StatusCode::OK, Json(json!(res)));
+  if res.is_err() {
+    eprintln!("failed to get the timeout map ({:?})", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  return (StatusCode::OK, Json(json!(res.unwrap())));
 }
 
 async fn ping_all_endorsers(
   Extension(state): Extension<Arc<CoordinatorState>>,
 ) -> impl IntoResponse {
-  let res = state.ping_all_endorsers();
+  let _res = state.ping_all_endorsers();
   return (StatusCode::OK, Json(json!({})));
 }
 
