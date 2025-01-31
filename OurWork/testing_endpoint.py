@@ -25,23 +25,25 @@ for command in commands:
     print(f"Executing command: {command}")
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     processes.append(process)
+    time.sleep(2)
 
 time.sleep(4)
 
 # Define the URIs for the requests
 get_uris = [
     "http://localhost:8082/pingallendorsers",
-    "http://localhost:8082/gettimeoutmap"
+    "http://localhost:8082/timeoutmap"
 ]
+get_data = {"nonce": 3}  # Define the data for the GET requests
 put_uri = "http://localhost:8082/addendorsers"
-put_data = {"uri": "http://localhost:9091"}  # Define the data for the PUT request
+put_data = {"uri": "http://localhost:9091", "nonce": 4}  # Define the data for the PUT request
 
 
 
 # Send GET requests
 for uri in get_uris:
     try:
-        response = requests.get(uri)
+        response = requests.get(uri, json=get_data)
         logging.info(f"GET {uri} - Status Code: {response.status_code}")
         logging.info(f"Response: {response.text}")
     except requests.RequestException as e:
