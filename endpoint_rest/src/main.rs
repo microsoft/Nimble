@@ -467,7 +467,8 @@ async fn add_endorsers(
     eprintln!("received no endorsers uri {:?}", res);
     return (StatusCode::BAD_REQUEST, Json(json!({})));
   }
-  let endorsers = res.unwrap().as_slice();
+  let endorsers = res.unwrap();
+  let endorsers = endorsers.as_slice();
   let endorsers = std::str::from_utf8(endorsers);
   if endorsers.is_err() {
     eprintln!("received a bad endorsers uri {:?}", endorsers);
