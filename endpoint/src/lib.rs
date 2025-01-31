@@ -21,9 +21,8 @@ use ledger::{
   Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
 use rand::random;
-use core::time;
 use std::{
-  collections::HashMap, convert::TryFrom, ops::Add, sync::{Arc, RwLock}
+  collections::HashMap, convert::TryFrom, sync::{Arc, RwLock}
 };
 
 #[allow(dead_code)]
@@ -189,7 +188,7 @@ impl Connection {
   pub async fn ping_all_endorsers(
     &self,
     nonce: &[u8],
-  ) -> Result<(Vec<u8>), EndpointError> {
+  ) -> Result<Vec<u8>, EndpointError> {
     let PingAllResp {
       id_sig,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
@@ -200,14 +199,14 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToPingAllEndorsers)?
       .into_inner();
-    Ok((id_sig))
+    Ok(id_sig)
   }
 
   pub async fn add_endorsers(
     &self,
     nonce: &[u8],
     uri: String,
-  ) -> Result<(Vec<u8>), EndpointError> {
+  ) -> Result<Vec<u8>, EndpointError> {
     let AddEndorsersResp {
       signature,
     } = self.clients[random::<usize>() % self.num_grpc_channels]
@@ -219,7 +218,7 @@ impl Connection {
       .await
       .map_err(|_e| EndpointError::FailedToAddEndorsers)?
       .into_inner();
-    Ok((signature))
+    Ok(signature)
   }
 }
 
@@ -673,10 +672,10 @@ impl EndpointState {
   pub async fn ping_all_endorsers(
     &self,
     nonce: &[u8],
-  ) -> Result<(Vec<u8>), EndpointError> {
+  ) -> Result<Vec<u8>, EndpointError> {
     
 
-    let (block) = {
+    let block = {
       let res = self.conn.ping_all_endorsers(nonce).await;
 
       if res.is_err() {
@@ -689,17 +688,17 @@ impl EndpointState {
     let signature = sig.to_bytes();
 
     // respond to the light client
-    Ok((signature))
+    Ok(signature)
   }
 
   pub async fn add_endorsers(
     &self,
     nonce: &[u8],
     uri: String,
-  ) -> Result<(Vec<u8>), EndpointError> {
+  ) -> Result<Vec<u8>, EndpointError> {
     
 
-    let (block) = {
+    let block = {
       let res = self.conn.add_endorsers(nonce, uri).await;
 
       if res.is_err() {
@@ -712,6 +711,6 @@ impl EndpointState {
     let signature = sig.to_bytes();
 
     // respond to the light client
-    Ok((signature))
+    Ok(signature)
   }
 }

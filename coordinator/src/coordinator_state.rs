@@ -6,10 +6,10 @@ use ledger::{
   Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait,
   Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
-use log::{error, info, warn};
+use log::{error};
 use rand::{random, Rng};
 use std::{
-  collections::{HashMap, HashSet}, convert::TryInto, f32::consts::E, ops::Deref, sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock}, time::Duration, u64::MAX
+  collections::{HashMap, HashSet}, convert::TryInto, ops::Deref, sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock}, time::Duration, u64::MAX
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,

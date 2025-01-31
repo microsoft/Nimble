@@ -432,7 +432,7 @@ async fn ping_all_endorsers(
     eprintln!("failed to ping all endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
-  let (signature) = res.unwrap();
+  let signature = res.unwrap();
 
   let resp = PingAllResp {
     signature: base64_url::encode(&signature),
@@ -491,7 +491,7 @@ async fn add_endorsers(
     eprintln!("failed to add endorsers");
     return (StatusCode::CONFLICT, Json(json!({})));
   }
-  let (signature) = res.unwrap();
+  let signature = res.unwrap();
 
   let resp = AddEndorsersResp {
     signature: base64_url::encode(&signature),

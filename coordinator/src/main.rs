@@ -362,7 +362,7 @@ async fn new_endorser(
       return (StatusCode::BAD_REQUEST, Json(json!({})));
     }
   } else {
-    let res = state.connect_endorsers(&endorsers).await;
+    let _res = state.connect_endorsers(&endorsers).await;
   }
   
   
