@@ -489,6 +489,17 @@ fn process_error(
 }
 
 impl CoordinatorState {
+  /// Creates a new instance of `CoordinatorState`.
+  ///
+  /// # Arguments
+  ///
+  /// * `ledger_store_type` - The type of ledger store to use.
+  /// * `args` - A map of arguments for the ledger store.
+  /// * `num_grpc_channels_opt` - An optional number of gRPC channels.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the new `CoordinatorState` or a `CoordinatorError`.
   pub async fn new(
     ledger_store_type: &str,
     args: &HashMap<String, String>,
@@ -663,6 +674,7 @@ impl CoordinatorState {
     Ok(coordinator)
   }
 
+  /// Starts the auto scheduler for pinging endorsers.
   pub async fn start_auto_scheduler(self: Arc<Self>) {
     let mut scheduler = clokwerk::AsyncScheduler::new();
     scheduler
@@ -681,6 +693,15 @@ impl CoordinatorState {
     println!("Started the scheduler");
   }
 
+  /// Connects to existing endorsers using the view ledger block.
+  ///
+  /// # Arguments
+  ///
+  /// * `view_ledger_block` - The view ledger block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the endorser hostnames or a `CoordinatorError`.
   async fn connect_to_existing_endorsers(
     &self,
     view_ledger_block: &[u8],
@@ -707,6 +728,15 @@ impl CoordinatorState {
     Ok(endorsers)
   }
 
+  /// Gets the endorser client for the given public key.
+  ///
+  /// # Arguments
+  ///
+  /// * `pk` - The public key of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// An optional tuple containing the endorser client and URI.
   fn get_endorser_client(
     &self,
     pk: &[u8],
@@ -732,6 +762,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the public keys of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of public keys.
   pub fn get_endorser_pks(&self) -> Vec<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -744,6 +779,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the URIs of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of URIs.
   pub fn get_endorser_uris(&self) -> Vec<String> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -756,6 +796,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the hostnames of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of endorser hostnames.
   fn get_endorser_hostnames(&self) -> EndorserHostnames {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -768,6 +813,15 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the public key of an endorser by hostname.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostname` - The hostname of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// An optional public key.
   pub fn get_endorser_pk(&self, hostname: &str) -> Option<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       for (pk, endorser) in conn_map_rd.iter() {
@@ -779,6 +833,15 @@ impl CoordinatorState {
     None
   }
 
+  /// Connects to the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostnames` - The hostnames of the endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of endorser hostnames.
   pub async fn connect_endorsers(&self, hostnames: &[String]) -> EndorserHostnames {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for hostname in hostnames {
@@ -862,6 +925,11 @@ impl CoordinatorState {
     endorser_hostnames
   }
 
+  /// Disconnects the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to disconnect.
   pub async fn disconnect_endorsers(&self, endorsers: &EndorserHostnames) {
     if let Ok(mut conn_map_wr) = self.conn_map.write() {
       for (pk, uri) in endorsers {
@@ -881,6 +949,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Filters the endorsers based on the view ledger height.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to filter.
+  /// * `view_ledger_height` - The height of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   async fn filter_endorsers(
     &self,
     endorsers: &EndorserHostnames,
@@ -942,6 +1020,20 @@ impl CoordinatorState {
     Ok(())
   }
 
+  /// Initializes the state of the endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `group_identity` - The group identity of the endorsers.
+  /// * `endorsers` - The endorsers to initialize.
+  /// * `ledger_tail_map` - The ledger tail map.
+  /// * `view_tail_metablock` - The tail metablock of the view ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A `Receipts` object containing the receipts.
   async fn endorser_initialize_state(
     &self,
     group_identity: &NimbleDigest,
@@ -1022,6 +1114,18 @@ impl CoordinatorState {
     receipts
   }
 
+  /// Creates a new ledger with the given handle, block hash, and block.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to create the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `ledger_block_hash` - The hash of the block.
+  /// * `ledger_block` - The block to add to the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   async fn endorser_create_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1096,6 +1200,20 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Appends a block to the ledger with the given handle, block hash, expected height, block, and nonces.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to append the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  /// * `block` - The block to append to the ledger.
+  /// * `nonces` - The nonces to use for appending the block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   pub async fn endorser_append_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1251,6 +1369,14 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Updates the ledger for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to update the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `max_height` - The maximum height of the ledger.
+  /// * `endorser_height_map` - A map of endorser heights.
   async fn endorser_update_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1315,6 +1441,17 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads the tail of the ledger for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to read the ledger tail.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `client_nonce` - The nonce to use for reading the ledger tail.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   async fn endorser_read_ledger_tail(
     &self,
     endorsers: &[Vec<u8>],
@@ -1423,6 +1560,17 @@ impl CoordinatorState {
     Err(CoordinatorError::FailedToObtainQuorum)
   }
 
+  /// Finalizes the state of the endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to finalize the state.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A tuple containing the receipts and ledger tail maps.
   async fn endorser_finalize_state(
     &self,
     endorsers: &EndorserHostnames,
@@ -1507,6 +1655,20 @@ impl CoordinatorState {
     (receipts, ledger_tail_maps)
   }
 
+  /// Verifies the view change for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to verify the view change.
+  /// * `old_config` - The old configuration.
+  /// * `new_config` - The new configuration.
+  /// * `ledger_tail_maps` - The ledger tail maps.
+  /// * `ledger_chunks` - The ledger chunks.
+  /// * `receipts` - The receipts.
+  ///
+  /// # Returns
+  ///
+  /// The number of verified endorsers.
   async fn endorser_verify_view_change(
     &self,
     endorsers: &EndorserHostnames,
@@ -1583,6 +1745,15 @@ impl CoordinatorState {
     num_verified_endorers
   }
 
+  /// Replaces the endorsers with the given hostnames.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostnames` - The hostnames of the new endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
     // TODO: Make the new stuff optional
     let existing_endorsers = self.get_endorser_uris();
@@ -1699,6 +1870,19 @@ impl CoordinatorState {
       .await
   }
 
+  /// Applies the view change to the verifier state.
+  ///
+  /// # Arguments
+  ///
+  /// * `existing_endorsers` - The existing endorsers.
+  /// * `new_endorsers` - The new endorsers.
+  /// * `view_ledger_entry` - The view ledger entry.
+  /// * `view_ledger_genesis_block` - The genesis block of the view ledger.
+  /// * `view_ledger_height` - The height of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   async fn apply_view_change(
     &self,
     existing_endorsers: &EndorserHostnames,
@@ -1863,11 +2047,23 @@ impl CoordinatorState {
     Ok(())
   }
 
+  /// Resets the ledger store.
   pub async fn reset_ledger_store(&self) {
     let res = self.ledger_store.reset_store().await;
     assert!(res.is_ok());
   }
 
+  /// Creates a new ledger with the given handle and block.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers_opt` - An optional vector of endorsers.
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `block_bytes` - The block to add to the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   pub async fn create_ledger(
     &self,
     endorsers_opt: Option<Vec<Vec<u8>>>,
@@ -1925,6 +2121,18 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Appends a block to the ledger with the given handle, block, and expected height.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers_opt` - An optional vector of endorsers.
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `block_bytes` - The block to append to the ledger.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the hash of the nonces and the receipts or a `CoordinatorError`.
   pub async fn append_ledger(
     &self,
     endorsers_opt: Option<Vec<Vec<u8>>>,
@@ -2023,6 +2231,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads the tail of the ledger with the given handle and nonce.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `nonce_bytes` - The nonce to use for reading the ledger tail.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_ledger_tail(
     &self,
     handle_bytes: &[u8],
@@ -2082,6 +2300,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads a block from the ledger by index.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `index` - The index of the block to read.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_ledger_by_index(
     &self,
     handle_bytes: &[u8],
@@ -2101,6 +2329,15 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads a block from the view ledger by index.
+  ///
+  /// # Arguments
+  ///
+  /// * `index` - The index of the block to read.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_view_by_index(&self, index: usize) -> Result<LedgerEntry, CoordinatorError> {
     let ledger_entry = {
       let res = self.ledger_store.read_view_ledger_by_index(index).await;
@@ -2113,6 +2350,11 @@ impl CoordinatorState {
     Ok(ledger_entry)
   }
 
+  /// Reads the tail of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry, height, and attestation string or a `CoordinatorError`.
   pub async fn read_view_tail(&self) -> Result<(LedgerEntry, usize, Vec<u8>), CoordinatorError> {
     let res = self.ledger_store.read_view_ledger_tail().await;
     if let Err(error) = res {
@@ -2127,6 +2369,7 @@ impl CoordinatorState {
     Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
   }
 
+  /// Pings all endorsers.
   pub async fn ping_all_endorsers(self: Arc<Self>) {
     println!("Pinging all endorsers from coordinator_state");
     let hostnames = self.get_endorser_hostnames();
@@ -2293,6 +2536,13 @@ impl CoordinatorState {
     }
   }
 
+  /// Handles the failure of an endorser ping.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorser` - The endorser that failed to respond.
+  /// * `error_message` - The error message.
+  /// * `endorser_key` - The public key of the endorser.
   pub async fn endorser_ping_failed(
     self: Arc<Self>,
     endorser: String,
@@ -2367,6 +2617,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the timeout map for the endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the timeout map or a `CoordinatorError`.
   pub fn get_timeout_map(&self) -> Result<HashMap<String, u64>, CoordinatorError> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       let mut timeout_map = HashMap::new();
@@ -2381,6 +2636,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Overwrites the configuration variables.
+  ///
+  /// # Arguments
+  ///
+  /// * `max_failures` - The maximum number of failures allowed.
+  /// * `request_timeout` - The request timeout in seconds.
+  /// * `min_alive_percentage` - The minimum percentage of alive endorsers.
+  /// * `quorum_size` - The desired quorum size.
+  /// * `ping_interval` - The interval for pinging endorsers in seconds.
+  /// * `deactivate_auto_reconfig` - Whether to deactivate auto reconfiguration.
   pub fn overwrite_variables(
     &mut self,
     max_failures: u64,

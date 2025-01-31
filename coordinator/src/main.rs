@@ -42,6 +42,7 @@ pub struct CoordinatorServiceState {
 }
 
 impl CoordinatorServiceState {
+  /// Creates a new instance of `CoordinatorServiceState`.
   pub fn new(coordinator: Arc<CoordinatorState>) -> Self {
     CoordinatorServiceState { state: coordinator }
   }
@@ -54,6 +55,7 @@ impl CoordinatorServiceState {
 
 #[tonic::async_trait]
 impl Call for CoordinatorServiceState {
+  /// Creates a new ledger with the given handle and block.
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
@@ -78,6 +80,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Appends a block to the ledger with the given handle, block, and expected height.
   async fn append(&self, request: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
     let AppendReq {
       handle: handle_bytes,
@@ -102,6 +105,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads the latest block from the ledger with the given handle and nonce.
   async fn read_latest(
     &self,
     request: Request<ReadLatestReq>,
@@ -129,6 +133,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads a block from the ledger by index.
   async fn read_by_index(
     &self,
     request: Request<ReadByIndexReq>,
@@ -155,6 +160,7 @@ impl Call for CoordinatorServiceState {
     }
   }
 
+  /// Reads a block from the view ledger by index.
   async fn read_view_by_index(
     &self,
     request: Request<ReadViewByIndexReq>,
@@ -175,6 +181,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads the tail of the view ledger.
   async fn read_view_tail(
     &self,
     _request: Request<ReadViewTailReq>,
@@ -195,6 +202,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Pings all endorsers.
   async fn ping_all_endorsers(
     &self,
     _request: Request<PingAllReq>,  // Accept the gRPC request
@@ -210,6 +218,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Gets the timeout map from the coordinator.
   async fn get_timeout_map(
     &self,
     _request: Request<GetTimeoutMapReq>,
@@ -232,6 +241,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Adds endorsers with the given URIs.
   async fn add_endorsers(
     &self,
     request: Request<AddEndorsersReq>,
@@ -259,6 +269,7 @@ struct EndorserOpResponse {
   pub pk: String,
 }
 
+/// Retrieves the public key of an endorser.
 async fn get_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -298,6 +309,7 @@ async fn get_endorser(
   }
 }
 
+/// Adds a new endorser.
 async fn new_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -348,6 +360,7 @@ async fn new_endorser(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Deletes an existing endorser.
 async fn delete_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -392,6 +405,7 @@ async fn delete_endorser(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Retrieves the timeout map of endorsers.
 async fn get_timeout_map(
   Extension(state): Extension<Arc<CoordinatorState>>,
 ) -> impl IntoResponse {
@@ -404,6 +418,7 @@ async fn get_timeout_map(
   return (StatusCode::OK, Json(json!(res.unwrap())));
 }
 
+/// Pings all endorsers.
 async fn ping_all_endorsers(
   Extension(state): Extension<Arc<CoordinatorState>>,
 ) -> impl IntoResponse {
@@ -411,6 +426,7 @@ async fn ping_all_endorsers(
   return (StatusCode::OK, Json(json!({})));
 }
 
+/// Main function to start the coordinator service.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
