@@ -1,0 +1,202 @@
+2025-01-31 18:08:07,081 - Starting first endorser
+2025-01-31 18:08:07,083 - Starting second endorser
+2025-01-31 18:08:09,090 - Starting coordinator
+2025-01-31 18:08:19,098 - Killing first endorser
+2025-01-31 18:08:29,102 - STDOUT of first endorser:
+2025-01-31 18:08:29,102 - Endorser host listening on [::1]:9090
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+
+2025-01-31 18:08:29,102 - STDERR of first endorser:
+2025-01-31 18:08:29,102 - 
+2025-01-31 18:08:29,102 - STDOUT of second endorser:
+2025-01-31 18:08:29,102 - Endorser host listening on [::1]:9091
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+Pinged Endorser
+
+2025-01-31 18:08:29,103 - STDERR of second endorser:
+2025-01-31 18:08:29,103 - 
+2025-01-31 18:08:29,103 - STDOUT of coordinator:
+2025-01-31 18:08:29,103 - Coordinator starting with max_failures: 3, request_timeout: 10, min_alive_percentage: 66, quorum_size: 3
+Connected to new endorsers
+Desired quorum size: 3
+New endorser URI: http://localhost:9090
+New endorser URI: http://localhost:9091
+created view ledger genesis block
+read view ledger tail
+appended view ledger genesis block
+Endorser URIs: ["http://localhost:9090", "http://localhost:9091"]
+Pinging all Endorsers method called from main.rs
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Started the scheduler
+Running control service at [::1]:8090
+Running gRPC Coordinator Service at [::1]:8080
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9091
+Nonce match for endorser: http://localhost:9090
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Nonce match for endorser: http://localhost:9090
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 1 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Debug: 100 % alive before replace trigger
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 2 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Debug: 100 % alive before replace trigger
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 3 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Debug: 100 % alive before replace trigger
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 4 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 5 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 6 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 7 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 8 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 9 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+Pinging all endorsers from coordinator_state
+Ping failed for endorser http://localhost:9090. 10 pings failed.
+Failed to connect to the endorser http://localhost:9090: tonic::transport::Error(Transport, hyper::Error(Connect, ConnectError("tcp connect error", Os { code: 61, kind: ConnectionRefused, message: "Connection refused" }))).
+Active endorser http://localhost:9090 failed more than 3 times! Now 1 endorsers are dead.
+Debug: active_endorsers_count = 2
+Debug: dead_endorsers_count = 1
+Debug: 50 % alive
+Debug: 50 % alive before replace trigger
+Enough Endorsers have failed now. Endorser replacement triggered
+DESIRED_QUORUM_SIZE: 3
+Nonce match for endorser: http://localhost:9091
+
+2025-01-31 18:08:29,103 - STDERR of coordinator:
+2025-01-31 18:08:29,103 - No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+No eligible endorsers
+Endorser replacement failed
+

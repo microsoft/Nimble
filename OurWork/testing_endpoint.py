@@ -6,7 +6,8 @@ import os
 import base64
 
 # Set up logging
-log_directory = "/Users/matheis/VSCProjects/Nimble/OurWork/testing_results"
+current_directory = os.getcwd()
+log_directory = os.path.join(current_directory, "/testing_results")
 os.makedirs(log_directory, exist_ok=True)
 log_file = os.path.join(log_directory, f"endpoint_{time.strftime('%Y%m%d_%H%M%S')}.log")
 logging.basicConfig(filename=log_file, level=logging.DEBUG, format='%(asctime)s - %(message)s')
