@@ -9,7 +9,15 @@ use ledger::{
 use log::error;
 use rand::{random, Rng};
 use std::{
-  collections::{HashMap, HashSet}, convert::TryInto, ops::Deref, sync::{atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst}, Arc, RwLock}, time::Duration, u64::MAX
+  collections::{HashMap, HashSet},
+  convert::TryInto,
+  ops::Deref,
+  sync::{
+    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst},
+    Arc, RwLock,
+  },
+  time::Duration,
+  u64::MAX,
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -2018,7 +2026,7 @@ impl CoordinatorState {
         &receipts,
       )
       .await;
-    // TODO: Change this line? Would allow to use a smaller quorum if not enough eligble endorsers
+    // TODO: Change this line? Would allow to use a smaller quorum if not enough eligible endorsers
     // are available
     if num_verified_endorsers * 2 <= new_endorsers.len() {
       eprintln!(
@@ -2384,7 +2392,7 @@ impl CoordinatorState {
 
       let _job = tokio::spawn(async move {
         let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
-                                                     //TODO Save the nonce for replay protection
+                                                     // TODO: Save the nonce for replay protection
                                                      // Create a connection endpoint
 
         let endpoint = Endpoint::from_shared(endorser.to_string());
@@ -2529,7 +2537,6 @@ impl CoordinatorState {
         },
         Err(_) => {
           // TODO: Call endorser refresh for "client"
-          // Change to error!
           error!("Endorser {} needs to be refreshed", endorser);
         },
       }
@@ -2577,7 +2584,8 @@ impl CoordinatorState {
         {
           // Increment dead endorser count
           if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
-          && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1 {
+            && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1
+          {
             DEAD_ENDORSERS.fetch_add(1, SeqCst);
           }
 
@@ -2605,7 +2613,10 @@ impl CoordinatorState {
       eprintln!("Failed to acquire read lock on conn_map");
     }
 
-    println!("Debug: {} % alive before replace trigger", alive_endorser_percentage);
+    println!(
+      "Debug: {} % alive before replace trigger",
+      alive_endorser_percentage
+    );
 
     if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
       println!("Enough Endorsers have failed now. Endorser replacement triggered");

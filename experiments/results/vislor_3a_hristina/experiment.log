@@ -1,9 +1,0 @@
-2024-11-20 18:33:14,594 - INFO - Executing command: '/home/hristina/.nix-profile/bin/wrk2 -t120 -c120 -d90s -R50000 --latency http://127.0.0.1:8082 -s /home/hristina/Nimble/experiments/create.lua -- 50000req > /home/hristina/Nimble/experiments/results/fig-3a-date-2024-11-20-time-18-32-59/create-50000.log'
-2024-11-20 18:33:14,621 - ERROR - Command failed with return code: 1
-2024-11-20 18:33:14,622 - ERROR - Standard Output: 
-2024-11-20 18:33:14,622 - ERROR - Standard Error: PANIC: unprotected error in call to Lua API (/home/hristina/.luarocks/share/lua/5.1/uuid.lua:29: Not implemented, please set a function to generate random bytes by calling `uuid.set_rng(func)`)
-
-2024-11-20 18:33:14,622 - INFO - Executing command: '/home/hristina/.nix-profile/bin/wrk2 -t120 -c120 -d30s -R50000 --latency http://127.0.0.1:8082 -s /home/hristina/Nimble/experiments/append.lua -- 50000req > /home/hristina/Nimble/experiments/results/fig-3a-date-2024-11-20-time-18-32-59/append-50000.log'
-2024-11-20 18:33:44,702 - INFO - Command executed successfully. Output captured in: /home/hristina/Nimble/experiments/results/fig-3a-date-2024-11-20-time-18-32-59/append-50000.log
-2024-11-20 18:33:44,703 - INFO - Executing command: '/home/hristina/.nix-profile/bin/wrk2 -t120 -c120 -d30s -R50000 --latency http://127.0.0.1:8082 -s /home/hristina/Nimble/experiments/read.lua -- 50000req > /home/hristina/Nimble/experiments/results/fig-3a-date-2024-11-20-time-18-32-59/read-50000.log'
-2024-11-20 18:34:14,745 - INFO - Command executed successfully. Output captured in: /home/hristina/Nimble/experiments/results/fig-3a-date-2024-11-20-time-18-32-59/read-50000.log

@@ -1,1 +1,0 @@
-2024-11-24 13:06:04,518 - INFO - Executing command: '/nix/store/sn7vaa513ldb98h3c5p08si6911vkbki-wrk2-4.0.0-e0109df/bin//wrk2 -t120 -c120 -d90s -R2000 --latency http://127.0.0.1:8082 -s /home/janhe/Nimble/Nimble/experiments/create_azurite.lua -- 2000req > /home/janhe/Nimble/Nimble/experiments/results/fig-3b-date-2024-11-24-time-13-05-49/create_azurite-2000.log'

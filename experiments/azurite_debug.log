@@ -1,4 +1,0 @@
-2024-11-22T16:20:36.036Z 	 info: Azurite Blob service is starting on 127.0.0.1:10000
-2024-11-22T16:20:36.037Z 	 info: AccountDataStore:init() Refresh accounts from environment variable AZURITE_ACCOUNTS with value undefined
-2024-11-22T16:20:36.037Z 	 info: AccountDataStore:init() Fallback to default emulator account devstoreaccount1.
-2024-11-22T16:20:36.046Z 	 info: BlobGCManager:start() Starting BlobGCManager. Set status to Initializing.
