@@ -4,8 +4,11 @@ mod errors;
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{
-  collections::HashMap, 
-  sync::{atomic::{AtomicBool, Ordering::SeqCst}, Arc},
+  collections::HashMap,
+  sync::{
+    atomic::{AtomicBool, Ordering::SeqCst},
+    Arc,
+  },
 };
 use tonic::{transport::Server, Request, Response, Status};
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -16,9 +19,10 @@ pub mod coordinator_proto {
 use clap::{App, Arg};
 use coordinator_proto::{
   call_server::{Call, CallServer},
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+  AddEndorsersReq, AddEndorsersResp, AppendReq, AppendResp, GetTimeoutMapReq, GetTimeoutMapResp,
+  NewLedgerReq, NewLedgerResp, PingAllReq, PingAllResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
-  ReadViewTailResp, PingAllReq, PingAllResp, GetTimeoutMapReq, GetTimeoutMapResp, AddEndorsersReq, AddEndorsersResp,
+  ReadViewTailResp,
 };
 
 use axum::{
@@ -31,9 +35,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower::ServiceBuilder;
-
-
-
 
 static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
 
@@ -205,13 +206,13 @@ impl Call for CoordinatorServiceState {
   /// Pings all endorsers.
   async fn ping_all_endorsers(
     &self,
-    _request: Request<PingAllReq>,  // Accept the gRPC request
-) -> Result<Response<PingAllResp>, Status> {
+    _request: Request<PingAllReq>, // Accept the gRPC request
+  ) -> Result<Response<PingAllResp>, Status> {
     // Call the state method to perform the ping task (no return value)
     println!("Pining all endorsers now from main.rs");
     self.state.clone().ping_all_endorsers().await;
 
-    // Construct and return the PingAllResp 
+    // Construct and return the PingAllResp
     let reply = PingAllResp {};
 
     // Return the response
@@ -223,20 +224,15 @@ impl Call for CoordinatorServiceState {
     &self,
     _request: Request<GetTimeoutMapReq>,
   ) -> Result<Response<GetTimeoutMapResp>, Status> {
+    let res = self.state.get_timeout_map();
 
-    let res = self
-        .state
-        .get_timeout_map();
-    
     if res.is_err() {
       return Err(Status::aborted("Failed to get the timeout map"));
-    } 
+    }
 
     let res = res.unwrap();
 
-    let reply = GetTimeoutMapResp {
-      timeout_map: res,
-    };
+    let reply = GetTimeoutMapResp { timeout_map: res };
 
     Ok(Response::new(reply))
   }
@@ -246,9 +242,7 @@ impl Call for CoordinatorServiceState {
     &self,
     request: Request<AddEndorsersReq>,
   ) -> Result<Response<AddEndorsersResp>, Status> {
-    let AddEndorsersReq {
-      endorsers,
-    } = request.into_inner();
+    let AddEndorsersReq { endorsers } = request.into_inner();
 
     let endorsers_uris = endorsers
       .split(';')
@@ -257,8 +251,7 @@ impl Call for CoordinatorServiceState {
       .collect::<Vec<String>>();
 
     let _res = self.state.connect_endorsers(&endorsers_uris).await;
-    let reply = AddEndorsersResp {
-    };
+    let reply = AddEndorsersResp {};
     Ok(Response::new(reply))
   }
 }
@@ -346,8 +339,6 @@ async fn new_endorser(
   } else {
     let _res = state.connect_endorsers(&endorsers).await;
   }
-  
-  
 
   let pks = state.get_endorser_pks();
   let mut pks_vec = Vec::new();
@@ -406,10 +397,7 @@ async fn delete_endorser(
 }
 
 /// Retrieves the timeout map of endorsers.
-async fn get_timeout_map(
-  Extension(state): Extension<Arc<CoordinatorState>>,
-) -> impl IntoResponse {
-
+async fn get_timeout_map(Extension(state): Extension<Arc<CoordinatorState>>) -> impl IntoResponse {
   let res = state.get_timeout_map();
   if res.is_err() {
     eprintln!("failed to get the timeout map ({:?})", res);
@@ -521,23 +509,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .default_value("10"),
     )
     .arg(
-      Arg::with_name("min_alive_percentage")
-        .short("m")
-        .long("min-alive")
-        .value_name("PERCENTAGE")
-        .help("Sets the percentage of in-quorum endorsers that must respond to pings. (51-100; 66 = 66%)")
-        .takes_value(true)
-        .default_value("66"),
-    )
-    .arg(
-      Arg::with_name("quorum_size")
-        .short("q")
-        .long("quorum-size")
-        .value_name("COUNT")
-        .help("How many endorsers should be in an active quorum at once")
-        .takes_value(true)
-        .default_value("3"),
-    ).arg(
       Arg::with_name("ping_inverval")
         .short("i")
         .long("ping-interval")
@@ -545,11 +516,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .help("How often to ping endorsers in seconds")
         .takes_value(true)
         .default_value("10"),
-    ).arg(
-      Arg::with_name("deactivate_auto_reconfig")
-      .long("deactivate_auto_reconfig")
-      .help("Deactivate automatic reconfiguration of endorsers")
-      .takes_value(false),
     );
 
   let cli_matches = config.get_matches();
@@ -566,22 +532,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let request_timeout_str = cli_matches.value_of("request_timeout").unwrap();
   let request_timeout = request_timeout_str.parse::<u64>().unwrap_or(12).max(1);
 
-  let min_alive_percentage_str = cli_matches.value_of("min_alive_percentage").unwrap();
-  let min_alive_percentage = min_alive_percentage_str.parse::<u64>().unwrap_or(68).clamp(51, 100);
-
-  let quorum_size_str = cli_matches.value_of("quorum_size").unwrap();
-  let quorum_size = quorum_size_str.parse::<u64>().unwrap_or(11).max(1);
-
   let ping_interval_str = cli_matches.value_of("ping_inverval").unwrap();
   let ping_interval = ping_interval_str.parse::<u32>().unwrap_or(10).max(1);
 
-  if cli_matches.is_present("deactivate_auto_reconfig") {
-    DEACTIVATE_AUTO_RECONFIG.store(true, SeqCst);
-  }
-
   println!(
-    "Coordinator starting with max_failures: {}, request_timeout: {}, min_alive_percentage: {}, quorum_size: {}",
-    max_failures, request_timeout, min_alive_percentage, quorum_size
+    "Coordinator starting with max_failures: {}, request_timeout: {}",
+    max_failures, request_timeout
   );
 
   let endorser_hostnames = str_vec
@@ -616,14 +572,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let coordinator = res.unwrap();
   let mut mutcoordinator = coordinator.clone();
 
-  mutcoordinator.overwrite_variables(
-    max_failures,
-    request_timeout,
-    min_alive_percentage,
-    quorum_size,
-    ping_interval,
-    DEACTIVATE_AUTO_RECONFIG.load(SeqCst),
-  );
+  mutcoordinator.overwrite_variables(max_failures, request_timeout, ping_interval);
 
   if !endorser_hostnames.is_empty() {
     let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
@@ -633,7 +582,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   println!("Endorser URIs: {:?}", coordinator.get_endorser_uris());
 
-  
   let coordinator_ref = Arc::new(coordinator);
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
@@ -680,8 +628,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
   use crate::{
     coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, PingAllReq
+      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingAllReq,
+      ReadByIndexReq, ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq,
+      ReadViewTailResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };

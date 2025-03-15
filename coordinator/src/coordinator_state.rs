@@ -13,11 +13,10 @@ use std::{
   convert::TryInto,
   ops::Deref,
   sync::{
-    atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst},
+    atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst},
     Arc, RwLock,
   },
   time::Duration,
-  u64::MAX,
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -71,12 +70,9 @@ const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to end
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
 
 static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
-static DESIRED_QUORUM_SIZE: AtomicU64 = AtomicU64::new(MAX);
 static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
 static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
-static ENDORSER_DEAD_ALLOWANCE: AtomicU64 = AtomicU64::new(66);
 static PING_INTERVAL: AtomicU32 = AtomicU32::new(10); // seconds
-static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -1763,7 +1759,6 @@ impl CoordinatorState {
   ///
   /// A result indicating success or a `CoordinatorError`.
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
-    // TODO: Make the new stuff optional
     let existing_endorsers = self.get_endorser_uris();
 
     // Check if hostnames contains endorsers that are not in existing_endorsers.
@@ -1786,9 +1781,9 @@ impl CoordinatorState {
     }
 
     // Now all available endorsers are in the conn_map, so we select the new quorum from
-    //there
+    // there
 
-    let mut new_endorsers: EndorserHostnames;
+    let new_endorsers: EndorserHostnames;
     let old_endorsers: EndorserHostnames;
 
     if let Ok(conn_map_rd) = self.conn_map.read() {
@@ -1810,10 +1805,6 @@ impl CoordinatorState {
         eprintln!("No eligible endorsers");
         return Err(CoordinatorError::FailedToObtainQuorum);
       }
-
-      // TODO: Replace with better selection method
-      println!("Desired quorum size: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
-      new_endorsers.truncate(DESIRED_QUORUM_SIZE.load(SeqCst).try_into().unwrap());
     } else {
       eprintln!("Couldn't get read lock on conn_map");
       return Err(CoordinatorError::FailedToAcquireReadLock);
@@ -2617,15 +2608,6 @@ impl CoordinatorState {
       "Debug: {} % alive before replace trigger",
       alive_endorser_percentage
     );
-
-    if alive_endorser_percentage < ENDORSER_DEAD_ALLOWANCE.load(SeqCst).try_into().unwrap() {
-      println!("Enough Endorsers have failed now. Endorser replacement triggered");
-      println!("DESIRED_QUORUM_SIZE: {}", DESIRED_QUORUM_SIZE.load(SeqCst));
-      match self.replace_endorsers(&[]).await {
-        Ok(_) => (),
-        Err(_) => eprintln!("Endorser replacement failed"),
-      }
-    }
   }
 
   /// Gets the timeout map for the endorsers.
@@ -2661,17 +2643,11 @@ impl CoordinatorState {
     &mut self,
     max_failures: u64,
     request_timeout: u64,
-    min_alive_percentage: u64,
-    quorum_size: u64,
     ping_interval: u32,
-    deactivate_auto_reconfig: bool,
   ) {
     MAX_FAILURES.store(max_failures, SeqCst);
     ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
-    ENDORSER_DEAD_ALLOWANCE.store(min_alive_percentage, SeqCst);
-    DESIRED_QUORUM_SIZE.store(quorum_size, SeqCst);
     PING_INTERVAL.store(ping_interval, SeqCst);
-    DEACTIVATE_AUTO_RECONFIG.store(deactivate_auto_reconfig, SeqCst);
   }
 }
 
