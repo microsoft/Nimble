@@ -82,7 +82,7 @@ running the binary and with the `--help` flag.
     -s "memory" # use "table" to use Azure table instead and provide the following
     -a AZURE_STORAGE_ACCOUNT_NAME
     -k AZURE_STORAGE_MASTER_KEY
-    -m The maximum number each endorser can fail a ping before it is considered dead. Dont set this, or set it to 0 to disable pinging.
+    -m The maximum number each endorser can fail a ping before it is considered dead. Don't set this, or set it to 0 to disable pinging.
     -pr the percentage of endorsers that should be held at all time
     -to the time at which a ping times out. This is in secounds
 ```
