@@ -8,27 +8,10 @@ import logging
 from config import *
 from setup_nodes import *
 from datetime import datetime
-#
-#Usage:
-# 1. Go to OurWork/AAzurite
-# 2. npm install -g azurite
-# 3. start Azurite in the background: azurite --silent --location ./azurite_data --debug ./azurite_debug.log --tableHost 127.0.0.1 --tablePort 10002 &
-# 4. Verify it is running: ps aux | grep azurite
-# evtl set new credentials: export AZURITE_ACCOUNTS="user:1234"
-#
 
-# Azurite default configuration
-AZURITE_ACCOUNT_NAME = "user"
-AZURITE_ACCOUNT_KEY = "1234"
-AZURITE_ENDPOINT = "http://127.0.0.1:10002/devstoreaccount1"
 RED = "\033[31;1m"  # Red and Bold for failure
 GREEN = "\033[32;1m"  # Green and Bold for success
 RESET = "\033[0m"  # Reset to default
-
-# Environment check for Azurit
-os.environ['STORAGE_MASTER_KEY'] = AZURITE_ACCOUNT_KEY
-
-os.environ['STORAGE_ACCOUNT_NAME'] = AZURITE_ACCOUNT_NAME
 
 timestamp = time.time()
 dt_object = datetime.fromtimestamp(timestamp)
@@ -63,7 +46,7 @@ def run_3b(time, op, out_folder):
     log_dir = os.path.dirname("./logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    if op == "read_azurite":
+    if op == "read":
         load = READ_LOAD
 
     # Run client (wrk2)
@@ -91,7 +74,6 @@ def run_3b(time, op, out_folder):
             print(f"{GREEN}Command executed successfully. Output captured in: {out_folder}{op}-{i}.log{RESET}")
 
 
-# Ensure environment variables are set for Azurite
 if os.environ.get('STORAGE_MASTER_KEY', '') == "" or os.environ.get('STORAGE_ACCOUNT_NAME', '') == "":
     print("Make sure to set the STORAGE_MASTER_KEY and STORAGE_ACCOUNT_NAME environment variables")
     exit(-1)
@@ -99,27 +81,25 @@ if os.environ.get('STORAGE_MASTER_KEY', '') == "" or os.environ.get('STORAGE_ACC
 out_folder = OUTPUT_FOLDER + "/" + EXP_NAME + "/"
 setup_output_folder(SSH_IP_CLIENT, out_folder)
 
-# Replace Azure Table Storage connection string with Azurite's
 store = f" -s table -n nimble{random.randint(1, 100000000)} -a \"{os.environ['STORAGE_ACCOUNT_NAME']}\""
 store += f" -k \"{os.environ['STORAGE_MASTER_KEY']}\""
-store += f" --endpoint \"{AZURITE_ENDPOINT}\""
 
 for i in range(NUM_ITERATIONS):
     teardown(False)
     setup(store, False)
 
     # Creates the ledgers so that we can append to them
-    operation = "create_azurite"
+    operation = "create"
     duration = "90s"
     run_3b(duration, operation, out_folder)
 
     # Append to the ledgers
-    operation = "append_azurite"
+    operation = "append"
     duration = "30s"
     run_3b(duration, operation, out_folder)
 
     # Read from the ledgers
-    operation = "read_azurite"
+    operation = "read"
     duration = "30s"
     run_3b(duration, operation, out_folder)
 

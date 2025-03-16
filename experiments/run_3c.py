@@ -1,7 +1,6 @@
 import os
 import subprocess
 import time
-import random
 from config import *
 from setup_nodes import *
 from datetime import datetime

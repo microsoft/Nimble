@@ -2,23 +2,11 @@ LOCAL_RUN = False  # set to True if you want to run all nodes and experiments lo
                   # If set to True, you can ignore all the IP addresses and SSH stuff below. They won't be used.
                   # You cannot run any of the Azure table experiments locally.
 
-# Azure Storage Emulator Settings for Azurite
-# Azurite default settings for local Azure emulator.
-AZURITE_STORAGE_ACCOUNT_NAME = "user"   # Default Azurite storage account name
-AZURITE_STORAGE_MASTER_KEY = "1234"  # Default Azurite master key
-
-# Azurite Emulator Endpoints (by default Azurite runs locally on port 10000, 10001, and 10002 for blob, queue, and table)
-AZURITE_BLOB_HOST = "127.0.0.1"  # Localhost for blob service
-AZURITE_BLOB_PORT = "10000"  # Azurite default port for blob storage
-
-AZURITE_QUEUE_HOST = "127.0.0.1"  # Localhost for queue service
-AZURITE_QUEUE_PORT = "10001"  # Azurite default port for queue storage
-
-AZURITE_TABLE_HOST = "127.0.0.1"  # Localhost for table service
-AZURITE_TABLE_PORT = "10002"  # Azurite default port for table storage
-
-# Azurite Emulator does not require an actual storage account or secret, so you can use these defaults
-# These variables will be used if you're running tests or simulations that interact with Azure storage locally
+# Set the IPs below and make sure that the machine running this script can ssh into those IPs
+# The SSH_IPs are IP addresses that our script can use to SSH to the machines and set things up
+# The LISTEN_IPs are IP addresses on which the machine can listen on a port. 
+#   For example, these could be private IP addresses in a VNET. In many cases, LISTEN_IPs can just the SSH_IPs.
+#   Azure won't let you listen on a public IP though. You need to listen on private IPs.
 
 SSH_IP_ENDORSER_1 = "127.0.0.1"
 LISTEN_IP_ENDORSER_1 = "127.0.0.1"
@@ -96,6 +84,5 @@ SSH_KEY_PATH = "/home/user/.ssh/id_rsa" # this is the path to private key in the
 
 # To use Azure storage, you need to set the STORAGE_ACCOUNT_NAME and STORAGE_MASTER_KEY environment variables
 # with the corresponding values that you get from Azure.
-# Azurite doesn't need actual Azure credentials, so you can use the following default:
-STORAGE_ACCOUNT_NAME = AZURITE_STORAGE_ACCOUNT_NAME  # Use Azurite storage account name
-STORAGE_MASTER_KEY = AZURITE_STORAGE_MASTER_KEY  # Use Azurite storage master key
+STORAGE_ACCOUNT_NAME = ""
+STORAGE_MASTER_KEY = ""
