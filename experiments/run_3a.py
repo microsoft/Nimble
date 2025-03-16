@@ -12,6 +12,7 @@ dt_string = dt_object.strftime("date-%Y-%m-%d-time-%H-%M-%S")
 
 EXP_NAME = "fig-3a-" + dt_string
 NUM_ITERATIONS = 1
+LOAD = [50000]  #[5000, 10000, 15000, 20000, 25000, 50000, 55000] # requests/sec
 
 
 # Setup logging
@@ -35,7 +36,6 @@ def run_3a(time, op, out_folder):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    LOAD = [50000]
     # Run client (wrk2)
     for i in LOAD:
         cmd = "\'" + WRK2_PATH + "/wrk2 -t120 -c120 -d" + time + " -R" + str(i)
