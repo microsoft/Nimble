@@ -122,7 +122,7 @@ async fn main() {
 
   // Step 1: NewCounter Request
   let tag_bytes: Vec<u8> = NimbleDigest::digest(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to_bytes();
-  let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let handle_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
   let handle = base64_url::encode(&handle_bytes);
   let new_counter_req = NewCounterRequest {
     tag: base64_url::encode(&tag_bytes),
@@ -163,7 +163,7 @@ async fn main() {
   assert!(res.is_ok());
 
   // Step 2: Read Latest with the Nonce generated
-  let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let nonce_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
   let nonce = base64_url::encode(&nonce_bytes);
   let read_counter_url = reqwest::Url::parse_with_params(
     &format!("{}/counters/{}", endpoint_addr, handle),
@@ -252,7 +252,7 @@ async fn main() {
   }
 
   // Step 4: ReadCounter with the Nonce generated and check for new data
-  let nonce_bytes = rand::thread_rng().gen::<[u8; 16]>();
+  let nonce_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
   let nonce = base64_url::encode(&nonce_bytes);
   let read_counter_url = reqwest::Url::parse_with_params(
     &format!("{}/counters/{}", endpoint_addr, handle),
@@ -302,7 +302,7 @@ async fn main() {
     tag: base64_url::encode(&tag_bytes),
   };
   for _idx in 0..num_ledgers {
-    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let handle_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
     let handle = base64_url::encode(&handle_bytes);
     let new_counter_url =
       reqwest::Url::parse(&format!("{}/counters/{}", endpoint_addr, handle)).unwrap();

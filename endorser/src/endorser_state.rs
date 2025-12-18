@@ -499,7 +499,7 @@ mod tests {
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
     let view_block_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
@@ -537,13 +537,13 @@ mod tests {
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let handle = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
 
-    let t = rand::thread_rng().gen::<[u8; 32]>();
+    let t = rand::thread_rng().r#gen::<[u8; 32]>();
     let block = Block::new(&t);
 
     let block_hash = block.hash();
@@ -598,7 +598,7 @@ mod tests {
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
     let view_block_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
@@ -635,8 +635,8 @@ mod tests {
       .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
-    let block = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
-    let handle = NimbleDigest::from_bytes(&rand::thread_rng().gen::<[u8; 32]>()).unwrap();
+    let block = Block::new(&rand::thread_rng().r#gen::<[u8; 32]>());
+    let handle = NimbleDigest::from_bytes(&rand::thread_rng().r#gen::<[u8; 32]>()).unwrap();
     let block_hash = block.hash(); // this need not be the case, but it does not matter for testing
     let res = endorser_state.new_ledger(&handle, &block_hash, &block);
     assert!(res.is_ok());
@@ -652,7 +652,7 @@ mod tests {
       .expect("failed")
       .0
       .hash();
-    let block_hash_to_append_data = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
+    let block_hash_to_append_data = Block::new(&rand::thread_rng().r#gen::<[u8; 32]>());
     let block_hash_to_append = block_hash_to_append_data.hash();
 
     let height_plus_one = {

@@ -666,9 +666,7 @@ impl CoordinatorState {
 
   pub fn get_endorser_pks(&self) -> Vec<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
-      conn_map_rd
-        .iter()
-        .map(|(pk, _endorser)| pk.clone())
+      conn_map_rd.keys().cloned()
         .collect::<Vec<Vec<u8>>>()
     } else {
       eprintln!("Failed to acquire read lock");
@@ -678,9 +676,7 @@ impl CoordinatorState {
 
   pub fn get_endorser_uris(&self) -> Vec<String> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
-      conn_map_rd
-        .iter()
-        .map(|(_pk, endorser)| endorser.uri.clone())
+      conn_map_rd.values().map(|endorser| endorser.uri.clone())
         .collect::<Vec<String>>()
     } else {
       eprintln!("Failed to acquire read lock");
@@ -984,11 +980,10 @@ impl CoordinatorState {
           match res {
             Ok(receipt_rs) => {
               receipts.add(&receipt_rs);
-              if let Ok(vs) = self.verifier_state.read() {
-                if receipts.check_quorum(&vs).is_ok() {
+              if let Ok(vs) = self.verifier_state.read()
+                && receipts.check_quorum(&vs).is_ok() {
                   return Ok(receipts);
                 }
-              }
             },
             Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
           }
@@ -1144,11 +1139,10 @@ impl CoordinatorState {
         Ok(receipt) => match Receipt::from_bytes(&receipt) {
           Ok(receipt_rs) => {
             receipts.add(&receipt_rs);
-            if let Ok(vs) = self.verifier_state.read() {
-              if receipts.check_quorum(&vs).is_ok() {
+            if let Ok(vs) = self.verifier_state.read()
+              && receipts.check_quorum(&vs).is_ok() {
                 return Ok(receipts);
               }
-            }
           },
           Err(error) => {
             eprintln!("Failed to parse a receipt (err={:?}", error);
@@ -1307,15 +1301,12 @@ impl CoordinatorState {
               max_height = height;
             }
             receipts.add(&receipt_rs);
-            if let Ok(vs) = self.verifier_state.read() {
-              if let Ok(_h) = receipts.check_quorum(&vs) {
-                if let Ok(block_rs) = Block::from_bytes(&block) {
-                  if let Ok(nonces_rs) = Nonces::from_bytes(&nonces) {
+            if let Ok(vs) = self.verifier_state.read()
+              && let Ok(_h) = receipts.check_quorum(&vs)
+                && let Ok(block_rs) = Block::from_bytes(&block)
+                  && let Ok(nonces_rs) = Nonces::from_bytes(&nonces) {
                     return Ok(LedgerEntry::new(block_rs, receipts, Some(nonces_rs)));
                   }
-                }
-              }
-            }
           },
           Err(error) => {
             eprintln!("Failed to parse a receipt (err={:?}", error);
@@ -1503,10 +1494,10 @@ impl CoordinatorState {
     // Read the current ledger tail
     let res = self.ledger_store.read_view_ledger_tail().await;
 
-    if res.is_err() {
+    if let Err(e) = res {
       eprintln!(
         "Failed to read from the view ledger in the ledger store ({:?})",
-        res.unwrap_err()
+        e
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
@@ -1622,10 +1613,10 @@ impl CoordinatorState {
       .ledger_store
       .attach_view_ledger_receipts(view_ledger_height, &receipts)
       .await;
-    if res.is_err() {
+    if let Err(e) = res {
       eprintln!(
         "Failed to attach view ledger receipt in the ledger store ({:?})",
-        res.unwrap_err()
+        e
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
@@ -1638,12 +1629,12 @@ impl CoordinatorState {
         continue;
       }
       let mut block_hashes: Vec<Vec<u8>> =
-        Vec::with_capacity((cut_diff.high - cut_diff.low) as usize);
+        Vec::with_capacity(cut_diff.high - cut_diff.low  );
       let h = NimbleDigest::from_bytes(&cut_diff.handle).unwrap();
       for index in (cut_diff.low + 1)..=cut_diff.high {
         let res = self
           .ledger_store
-          .read_ledger_by_index(&h, index as usize)
+          .read_ledger_by_index(&h, index)
           .await;
         if let Err(e) = res {
           eprintln!("Failed to read the ledger store {:?}", e);
@@ -1723,10 +1714,10 @@ impl CoordinatorState {
       .ledger_store
       .create_ledger(&handle, genesis_block.clone())
       .await;
-    if res.is_err() {
+    if let Err(e) = res {
       eprintln!(
         "Failed to create ledger in the ledger store ({:?})",
-        res.unwrap_err()
+        e
       );
       return Err(CoordinatorError::FailedToCreateLedger);
     }
@@ -1740,9 +1731,9 @@ impl CoordinatorState {
       let res = self
         .endorser_create_ledger(&endorsers, &handle, &block_hash, genesis_block)
         .await;
-      if res.is_err() {
-        eprintln!("Failed to create ledger in endorsers ({:?})", res);
-        return Err(res.unwrap_err());
+      if let Err(e) = res {
+        eprintln!("Failed to create ledger in endorsers ({:?})", e);
+        return Err(e);
       }
       res.unwrap()
     };
@@ -1781,10 +1772,10 @@ impl CoordinatorState {
       .ledger_store
       .append_ledger(&handle, &data_block, expected_height)
       .await;
-    if res.is_err() {
+    if let Err(e) = res {
       eprintln!(
         "Failed to append to the ledger in the ledger store {:?}",
-        res.unwrap_err()
+        e
       );
       return Err(CoordinatorError::FailedToAppendLedger);
     }
@@ -1811,9 +1802,9 @@ impl CoordinatorState {
           nonces,
         )
         .await;
-      if res.is_err() {
-        eprintln!("Failed to append to the ledger in endorsers {:?}", res);
-        return Err(res.unwrap_err());
+      if let Err(e) = res {
+        eprintln!("Failed to append to the ledger in endorsers {:?}", e);
+        return Err(e);
       }
       res.unwrap()
     };
@@ -1822,10 +1813,10 @@ impl CoordinatorState {
       .ledger_store
       .attach_ledger_receipts(&handle, expected_height, &receipts)
       .await;
-    if res.is_err() {
+    if let Err(e) = res {
       eprintln!(
         "Failed to attach ledger receipt to the ledger store ({:?})",
-        res.unwrap_err()
+        e
       );
       return Err(CoordinatorError::FailedToAttachReceipt);
     }
@@ -1887,10 +1878,10 @@ impl CoordinatorState {
           CoordinatorError::FailedToObtainQuorum => {
             if !nonce_attached {
               let res = self.ledger_store.attach_ledger_nonce(&handle, &nonce).await;
-              if res.is_err() {
+              if let Err(e) = res {
                 eprintln!(
                   "Failed to attach the nonce for reading ledger tail {:?}",
-                  res.unwrap_err()
+                  e
                 );
                 return Err(CoordinatorError::FailedToAttachNonce);
               }
