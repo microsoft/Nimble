@@ -314,7 +314,7 @@ impl EndorserState {
   fn append_view_ledger(
     &self,
     view_ledger_state: &mut ViewLedgerState,
-    ledger_tail_map: &Vec<LedgerTailMapEntry>,
+    ledger_tail_map: &[LedgerTailMapEntry],
     block_hash: &NimbleDigest,
     expected_height: usize,
   ) -> Result<Receipt, EndorserError> {
@@ -354,7 +354,7 @@ impl EndorserState {
   fn sign_view_ledger(
     &self,
     view_ledger_state: &ViewLedgerState,
-    ledger_tail_map: &Vec<LedgerTailMapEntry>,
+    ledger_tail_map: &[LedgerTailMapEntry],
   ) -> Receipt {
     // the view embedded in the view ledger is the hash of the current state of the endorser
     let view = produce_hash_of_state(ledger_tail_map);
@@ -446,8 +446,8 @@ impl EndorserState {
     &self,
     old_config: &[u8],
     new_config: &[u8],
-    ledger_tail_maps: &Vec<LedgerTailMap>,
-    ledger_chunks: &Vec<LedgerChunkEntry>,
+    ledger_tail_maps: &[LedgerTailMap],
+    ledger_chunks: &[LedgerChunkEntry],
     receipts: &Receipts,
   ) -> Result<(), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {

@@ -72,7 +72,7 @@ impl NimbleDigest {
 pub type Handle = NimbleDigest;
 
 // this function assumes the provided vector is sorted by handles
-pub fn produce_hash_of_state(ledger_tail_map: &Vec<LedgerTailMapEntry>) -> NimbleDigest {
+pub fn produce_hash_of_state(ledger_tail_map: &[LedgerTailMapEntry]) -> NimbleDigest {
   // for empty state, hash is a vector of zeros
   if ledger_tail_map.is_empty() {
     NimbleDigest::default()
@@ -579,8 +579,8 @@ impl Receipts {
     group_identity: &NimbleDigest,
     old_metablock: &MetaBlock,
     new_metablock: &MetaBlock,
-    ledger_tail_maps: &Vec<LedgerTailMap>,
-    ledger_chunks: &Vec<LedgerChunkEntry>,
+    ledger_tail_maps: &[LedgerTailMap],
+    ledger_chunks: &[LedgerChunkEntry],
   ) -> Result<(), VerificationError> {
     // check the conditions when this is the first view change
     if old_metablock.get_height() == 0 {
@@ -985,7 +985,7 @@ impl VerifierState {
   }
 }
 
-pub fn compute_max_cut(ledger_tail_maps: &Vec<LedgerTailMap>) -> Vec<LedgerTailMapEntry> {
+pub fn compute_max_cut(ledger_tail_maps: &[LedgerTailMap]) -> Vec<LedgerTailMapEntry> {
   if ledger_tail_maps.is_empty() {
     Vec::new()
   } else {
@@ -1033,7 +1033,7 @@ pub struct CutDiff {
   pub high: usize,
 }
 
-pub fn compute_cut_diffs(ledger_tail_maps: &Vec<LedgerTailMap>) -> Vec<CutDiff> {
+pub fn compute_cut_diffs(ledger_tail_maps: &[LedgerTailMap]) -> Vec<CutDiff> {
   if ledger_tail_maps.len() <= 1 {
     Vec::new()
   } else {

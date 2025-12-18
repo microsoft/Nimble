@@ -333,8 +333,7 @@ async fn update_endorser(
     };
 
     let res = Receipt::from_bytes(&receipt);
-    if res.is_ok() {
-      let receipt_rs = res.unwrap();
+    if let Ok(receipt_rs) = res {
       let mut receipts = Receipts::new();
       receipts.add(&receipt_rs);
       let res = ledger_store
@@ -630,7 +629,8 @@ impl CoordinatorState {
     let mut endorsers = EndorserHostnames::new();
 
     for (pk, uri) in &endorser_hostnames {
-      let pks = self.connect_endorsers(&[uri.clone()]).await;
+      let pks = self.connect_endorsers(std::slice::from_ref(uri)).await;
+
       if pks.len() == 1 && pks[0].0 == *pk {
         endorsers.push((pk.clone(), uri.clone()));
       }
