@@ -64,4 +64,6 @@ pub enum CoordinatorError {
   FailedToObtainQuorum,
   /// returned if failed to verify view change
   FailedToActivate,
+  /// returned if get timeout map fails
+  FailedToGetTimeoutMap,
 }

@@ -4,7 +4,7 @@ use axum::{
   extract::{Extension, Path, Query},
   http::StatusCode,
   response::IntoResponse,
-  routing::get,
+  routing::{get, put},
   Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
@@ -16,6 +16,7 @@ use clap::{App, Arg};
 
 use serde::{Deserialize, Serialize};
 
+/// Main function to start the endpoint service.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("endpoint")
@@ -97,6 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Build our application by composing routes
   let app = Router::new()
       .route("/serviceid", get(get_identity))
+      .route("/timeoutmap", get(get_timeout_map))
+      .route("/pingallendorsers", get(ping_all_endorsers))
+      .route("/addendorsers", put(add_endorsers))
       .route("/counters/:handle", get(read_counter).put(new_counter).post(increment_counter))
       // Add middleware to all routes
       .layer(
@@ -133,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
+/// Response structure for the get_identity endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct GetIdentityResponse {
   #[serde(rename = "Identity")]
@@ -141,18 +146,21 @@ struct GetIdentityResponse {
   pub pk: String,
 }
 
+/// Request structure for the new_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterRequest {
   #[serde(rename = "Tag")]
   pub tag: String,
 }
 
+/// Response structure for the new_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct NewCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
 }
 
+/// Request structure for the increment_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterRequest {
   #[serde(rename = "Tag")]
@@ -161,12 +169,14 @@ struct IncrementCounterRequest {
   pub expected_counter: u64,
 }
 
+/// Response structure for the increment_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct IncrementCounterResponse {
   #[serde(rename = "Signature")]
   pub signature: String,
 }
 
+/// Response structure for the read_counter endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 struct ReadCounterResponse {
   #[serde(rename = "Tag")]
@@ -177,6 +187,29 @@ struct ReadCounterResponse {
   pub signature: String,
 }
 
+/// Response structure for the get_timeout_map endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+struct GetTimeoutMapResp {
+  #[serde(rename = "timeout_map")]
+  pub timeout_map: HashMap<String, u64>,
+}
+
+/// Response structure for the ping_all_endorsers endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+struct PingAllResp {
+}
+
+/// Response structure for the add_endorsers endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+struct AddEndorsersResp {
+}
+
+/// Request structure for the add_endorsers endpoint.
+#[derive(Debug, Serialize, Deserialize)]
+struct AddEndorsersRequest {
+}
+
+/// Handler for the get_identity endpoint.
 async fn get_identity(
   Query(params): Query<HashMap<String, String>>,
   Extension(state): Extension<Arc<EndpointState>>,
@@ -203,6 +236,7 @@ async fn get_identity(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the new_counter endpoint.
 async fn new_counter(
   Path(handle): Path<String>,
   Json(req): Json<NewCounterRequest>,
@@ -246,6 +280,7 @@ async fn new_counter(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the read_counter endpoint.
 async fn read_counter(
   Path(handle): Path<String>,
   Query(params): Query<HashMap<String, String>>,
@@ -294,6 +329,7 @@ async fn read_counter(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Handler for the increment_counter endpoint.
 async fn increment_counter(
   Path(handle): Path<String>,
   Json(req): Json<IncrementCounterRequest>,
@@ -335,6 +371,77 @@ async fn increment_counter(
   let resp = IncrementCounterResponse {
     signature: base64_url::encode(&signature),
   };
+
+  (StatusCode::OK, Json(json!(resp)))
+}
+
+/// Handler for the get_timeout_map endpoint.
+async fn get_timeout_map(
+  Extension(state): Extension<Arc<EndpointState>>,
+) -> impl IntoResponse {
+
+  let res = state.get_timeout_map().await;
+  if res.is_err() {
+    eprintln!("failed to get the timeout map");
+    return (StatusCode::CONFLICT, Json(json!({})));
+  }
+  let timeout_map = res.unwrap();
+
+  let resp = GetTimeoutMapResp {
+    timeout_map: timeout_map,
+  };
+
+  (StatusCode::OK, Json(json!(resp)))
+}
+
+/// Handler for the ping_all_endorsers endpoint.
+async fn ping_all_endorsers(
+  Extension(state): Extension<Arc<EndpointState>>,
+) -> impl IntoResponse {
+
+  let res = state.ping_all_endorsers().await;
+  if res.is_err() {
+    eprintln!("failed to ping all endorsers");
+    return (StatusCode::CONFLICT, Json(json!({})));
+  }
+
+  let resp = PingAllResp {};
+
+  (StatusCode::OK, Json(json!(resp)))
+}
+
+/// Handler for the add_endorsers endpoint.
+async fn add_endorsers(
+  Query(params): Query<HashMap<String, String>>,
+  Extension(state): Extension<Arc<EndpointState>>,
+) -> impl IntoResponse {
+
+  if !params.contains_key("endorsers") {
+    eprintln!("missing a uri endorsers");
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+
+  let res = base64_url::decode(&params["endorsers"]);
+  if res.is_err() {
+    eprintln!("received no endorsers uri {:?}", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorsers = res.unwrap();
+  let endorsers = endorsers.as_slice();
+  let endorsers = std::str::from_utf8(endorsers);
+  if endorsers.is_err() {
+    eprintln!("received a bad endorsers uri {:?}", endorsers);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  let endorsers = endorsers.unwrap();
+
+  let res = state.add_endorsers(endorsers.to_string()).await;
+  if res.is_err() {
+    eprintln!("failed to add endorsers");
+    return (StatusCode::CONFLICT, Json(json!({})));
+  }
+
+  let resp = AddEndorsersResp {};
 
   (StatusCode::OK, Json(json!(resp)))
 }

@@ -12,14 +12,12 @@ service EndorserCall {
   rpc ReadLatest(ReadLatestReq) returns (ReadLatestResp);
   rpc Append(AppendReq) returns (AppendResp);
   rpc Activate(ActivateReq) returns (ActivateResp);
+  rpc Ping(PingReq) returns (PingResp);
 }
 
-message GetPublicKeyReq {
-}
+message GetPublicKeyReq {}
 
-message GetPublicKeyResp {
-  bytes pk = 1;
-}
+message GetPublicKeyResp { bytes pk = 1; }
 
 message NewLedgerReq {
   bytes handle = 1;
@@ -27,9 +25,7 @@ message NewLedgerReq {
   bytes block = 3;
 }
 
-message NewLedgerResp {
-  bytes receipt = 1;
-}
+message NewLedgerResp { bytes receipt = 1; }
 
 message ReadLatestReq {
   bytes handle = 1;
@@ -50,9 +46,7 @@ message AppendReq {
   bytes nonces = 5;
 }
 
-message AppendResp {
-  bytes receipt = 1;
-}
+message AppendResp { bytes receipt = 1; }
 
 message LedgerTailMapEntry {
   bytes handle = 1;
@@ -62,25 +56,23 @@ message LedgerTailMapEntry {
   bytes nonces = 5;
 }
 
-message LedgerTailMap {
-  repeated LedgerTailMapEntry entries = 1;
-}
+message LedgerTailMap { repeated LedgerTailMapEntry entries = 1; }
 
-// protobuf supports maps (https://developers.google.com/protocol-buffers/docs/proto#maps), 
-// but it does not allow using bytes as keys in the map
-// gRPC messages are limited to 4 MB, which allows about 50+K entries. 
-// In the future, we can either increase the limit on gRPC messages or switch to gRPC streaming 
+// protobuf supports maps
+// (https://developers.google.com/protocol-buffers/docs/proto#maps), but it does
+// not allow using bytes as keys in the map gRPC messages are limited to 4 MB,
+// which allows about 50+K entries. In the future, we can either increase the
+// limit on gRPC messages or switch to gRPC streaming
 message InitializeStateReq {
   bytes group_identity = 1;
   repeated LedgerTailMapEntry ledger_tail_map = 2; // the list of ledger tails
   bytes view_tail_metablock = 3; // the view ledger tail's metablock
   bytes block_hash = 4; // the block hash of the latest block on the view ledger
-  uint64 expected_height = 5; // the conditional updated height of the latest block on the view ledger
+  uint64 expected_height = 5; // the conditional updated height of the latest
+                              // block on the view ledger
 }
 
-message InitializeStateResp {
-  bytes receipt = 1;
-}
+message InitializeStateResp { bytes receipt = 1; }
 
 message FinalizeStateReq {
   bytes block_hash = 1;
@@ -99,9 +91,7 @@ enum EndorserMode {
   Finalized = 3;
 }
 
-message ReadStateReq {
-
-}
+message ReadStateReq {}
 
 message ReadStateResp {
   bytes receipt = 1;
@@ -124,6 +114,8 @@ message ActivateReq {
   bytes receipts = 5;
 }
 
-message ActivateResp {
+message ActivateResp {}
 
-}
+message PingReq { bytes nonce = 1; }
+
+message PingResp { bytes id_sig = 1; }

@@ -45,6 +45,7 @@ pub struct EndorserState {
 }
 
 impl EndorserState {
+  /// Creates a new instance of `EndorserState`.
   pub fn new() -> Self {
     let private_key = PrivateKey::new();
     let public_key = private_key.get_public_key().unwrap();
@@ -62,6 +63,19 @@ impl EndorserState {
     }
   }
 
+  /// Initializes the state of the endorser.
+  ///
+  /// # Arguments
+  ///
+  /// * `group_identity` - The group identity of the endorser.
+  /// * `ledger_tail_map` - The ledger tail map.
+  /// * `view_ledger_tail_metablock` - The tail metablock of the view ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a receipt or an `EndorserError`.
   pub fn initialize_state(
     &self,
     group_identity: &NimbleDigest,
@@ -106,6 +120,17 @@ impl EndorserState {
     }
   }
 
+  /// Creates a new ledger with the given handle, block hash, and block.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle` - The handle of the ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `block` - The block to add to the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a receipt or an `EndorserError`.
   pub fn new_ledger(
     &self,
     handle: &NimbleDigest,
@@ -155,6 +180,16 @@ impl EndorserState {
     }
   }
 
+  /// Reads the latest block from the ledger with the given handle and nonce.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle` - The handle of the ledger.
+  /// * `nonce` - The nonce to use for reading the latest block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a tuple of receipt, block, and nonces or an `EndorserError`.
   pub fn read_latest(
     &self,
     handle: &NimbleDigest,
@@ -206,6 +241,15 @@ impl EndorserState {
     }
   }
 
+  /// Gets the height of the ledger with the given handle.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle` - The handle of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the height of the ledger or an `EndorserError`.
   pub fn get_height(&self, handle: &NimbleDigest) -> Result<usize, EndorserError> {
     if let Ok(view_ledger_state) = self.view_ledger_state.read() {
       match view_ledger_state.endorser_mode {
@@ -237,6 +281,19 @@ impl EndorserState {
     }
   }
 
+  /// Appends a block to the ledger with the given handle, block hash, expected height, block, and nonces.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle` - The handle of the ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  /// * `block` - The block to append to the ledger.
+  /// * `nonces` - The nonces to use for appending the block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a receipt or an `EndorserError`.
   pub fn append(
     &self,
     handle: &NimbleDigest,
@@ -307,10 +364,27 @@ impl EndorserState {
     }
   }
 
+  /// Retrieves the public key of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// The public key of the endorser.
   pub fn get_public_key(&self) -> PublicKey {
     self.public_key.clone()
   }
 
+  /// Appends a block to the view ledger.
+  ///
+  /// # Arguments
+  ///
+  /// * `view_ledger_state` - The state of the view ledger.
+  /// * `ledger_tail_map` - The ledger tail map.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a receipt or an `EndorserError`.
   fn append_view_ledger(
     &self,
     view_ledger_state: &mut ViewLedgerState,
@@ -351,6 +425,16 @@ impl EndorserState {
     Ok(self.sign_view_ledger(view_ledger_state, ledger_tail_map))
   }
 
+  /// Signs the view ledger.
+  ///
+  /// # Arguments
+  ///
+  /// * `view_ledger_state` - The state of the view ledger.
+  /// * `ledger_tail_map` - The ledger tail map.
+  ///
+  /// # Returns
+  ///
+  /// A receipt.
   fn sign_view_ledger(
     &self,
     view_ledger_state: &ViewLedgerState,
@@ -370,6 +454,11 @@ impl EndorserState {
     )
   }
 
+  /// Constructs the ledger tail map.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger tail map or an `EndorserError`.
   fn construct_ledger_tail_map(&self) -> Result<Vec<LedgerTailMapEntry>, EndorserError> {
     let mut ledger_tail_map = Vec::new();
     if let Ok(ledger_tail_map_rd) = self.ledger_tail_map.read() {
@@ -393,6 +482,16 @@ impl EndorserState {
     Ok(ledger_tail_map)
   }
 
+  /// Finalizes the state of the endorser.
+  ///
+  /// # Arguments
+  ///
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a tuple of receipt and ledger tail map or an `EndorserError`.
   pub fn finalize_state(
     &self,
     block_hash: &NimbleDigest,
@@ -426,6 +525,11 @@ impl EndorserState {
     }
   }
 
+  /// Reads the current state of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a tuple of receipt, endorser mode, and ledger tail map or an `EndorserError`.
   pub fn read_state(
     &self,
   ) -> Result<(Receipt, EndorserMode, Vec<LedgerTailMapEntry>), EndorserError> {
@@ -442,6 +546,19 @@ impl EndorserState {
     }
   }
 
+  /// Activates the endorser with the given parameters.
+  ///
+  /// # Arguments
+  ///
+  /// * `old_config` - The old configuration.
+  /// * `new_config` - The new configuration.
+  /// * `ledger_tail_maps` - The ledger tail maps.
+  /// * `ledger_chunks` - The ledger chunks.
+  /// * `receipts` - The receipts.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or an `EndorserError`.
   pub fn activate(
     &self,
     old_config: &[u8],
@@ -485,6 +602,33 @@ impl EndorserState {
       Err(EndorserError::FailedToAcquireViewLedgerWriteLock)
     }
   }
+
+  /// Pings the endorser with the given nonce.
+  ///
+  /// # Arguments
+  ///
+  /// * `nonce` - The nonce to use for pinging the endorser.
+  ///
+  /// # Returns
+  ///
+  /// A result containing an `IdSig` or an `EndorserError`.
+  pub fn ping(&self, nonce: &[u8]) -> Result<IdSig, EndorserError> {
+    println!("Pinged Endorser");
+    if let Ok(view_ledger_state) = self.view_ledger_state.read() {
+      match view_ledger_state.endorser_mode {
+        EndorserMode::Finalized => {
+          // If finalized then there is no key for signing
+          return Err(EndorserError::AlreadyFinalized);
+        },
+        _ => {},
+      }
+      let signature = self.private_key.sign(&nonce).unwrap();
+      let id_sig = IdSig::new(self.public_key.clone(), signature);
+      Ok(id_sig)
+    } else {
+      Err(EndorserError::FailedToAcquireViewLedgerReadLock)
+    }
+  }
 }
 
 #[cfg(test)]
@@ -493,7 +637,7 @@ mod tests {
   use rand::Rng;
 
   #[test]
-  pub fn check_endorser_new_ledger_and_get_tail() {
+  pub fn check_endorser_new_ledger_and_greceiptet_tail() {
     let endorser_state = EndorserState::new();
 
     // The coordinator sends the hashed contents of the configuration to the endorsers
@@ -728,5 +872,55 @@ mod tests {
     } else {
       panic!("Signature verification failed when it should not have failed");
     }
+  }
+
+  #[test]
+  pub fn check_ping() {
+    let endorser_state = EndorserState::new();
+
+    // The coordinator sends the hashed contents of the configuration to the endorsers
+    // We will pick a dummy view value for testing purposes
+    let view_block_hash = {
+      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let n = NimbleDigest::from_bytes(&t);
+      assert!(n.is_ok(), "This should not have occured");
+      n.unwrap()
+    };
+
+    // perform a checked addition of height with 1
+    let height_plus_one = {
+      let res = endorser_state
+        .view_ledger_state
+        .read()
+        .expect("failed")
+        .view_ledger_tail_metablock
+        .get_height()
+        .checked_add(1);
+      assert!(res.is_some());
+      res.unwrap()
+    };
+
+    // The coordinator initializes the endorser by calling initialize_state
+    let res = endorser_state.initialize_state(
+      &view_block_hash,
+      &Vec::new(),
+      &MetaBlock::default(),
+      &view_block_hash,
+      height_plus_one,
+    );
+    assert!(res.is_ok());
+
+    // Set the endorser mode directly
+    endorser_state
+      .view_ledger_state
+      .write()
+      .expect("failed to acquire write lock")
+      .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
+
+    let nonce = rand::thread_rng().gen::<[u8; 32]>();
+    let result = endorser_state.ping(&nonce);
+    assert!(result.is_ok(), "Ping should be successful when endorser_state is active");
+    let id_sig = result.unwrap();
+    assert!(id_sig.verify(&nonce).is_ok(), "Signature verification failed");
   }
 }

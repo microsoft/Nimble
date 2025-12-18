@@ -12,7 +12,7 @@ use ledger::endorser_proto::{
   endorser_call_server::{EndorserCall, EndorserCallServer},
   ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
   GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq,
-  NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
+  NewLedgerResp, PingReq, PingResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
 };
 
 pub struct EndorserServiceState {
@@ -20,12 +20,20 @@ pub struct EndorserServiceState {
 }
 
 impl EndorserServiceState {
+  /// Creates a new instance of `EndorserServiceState`.
   pub fn new() -> Self {
     EndorserServiceState {
       state: EndorserState::new(),
     }
   }
 
+  /// Processes an error and returns a corresponding gRPC `Status`.
+  ///
+  /// # Arguments
+  ///
+  /// * `error` - The error to process.
+  /// * `handle` - An optional handle associated with the error.
+  /// * `default_msg` - A default message to use if the error does not match any known cases.
   fn process_error(
     &self,
     error: EndorserError,
@@ -50,7 +58,7 @@ impl EndorserServiceState {
       EndorserError::LedgerHeightOverflow => Status::out_of_range("Ledger height overflow"),
       EndorserError::InvalidTailHeight => Status::invalid_argument("Invalid ledger height"),
       EndorserError::AlreadyInitialized => {
-        Status::already_exists("Enodrser is already initialized")
+        Status::already_exists("Endorser is already initialized")
       },
       EndorserError::NotInitialized => Status::unimplemented("Endorser is not initialized"),
       EndorserError::AlreadyFinalized => Status::unavailable("Endorser is already finalized"),
@@ -67,6 +75,7 @@ impl Default for EndorserServiceState {
 
 #[tonic::async_trait]
 impl EndorserCall for EndorserServiceState {
+  /// Retrieves the public key of the endorser.
   async fn get_public_key(
     &self,
     _req: Request<GetPublicKeyReq>,
@@ -80,6 +89,7 @@ impl EndorserCall for EndorserServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Creates a new ledger with the given handle, block hash, and block.
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
@@ -133,6 +143,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Appends a block to the ledger with the given handle, block hash, expected height, block, and nonces.
   async fn append(&self, req: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
     let AppendReq {
       handle,
@@ -191,6 +202,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Reads the latest block from the ledger with the given handle and nonce.
   async fn read_latest(
     &self,
     request: Request<ReadLatestReq>,
@@ -225,6 +237,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Finalizes the state of the endorser with the given block hash and expected height.
   async fn finalize_state(
     &self,
     req: Request<FinalizeStateReq>,
@@ -250,6 +263,7 @@ impl EndorserCall for EndorserServiceState {
           receipt: receipt.to_bytes().to_vec(),
           ledger_tail_map,
         };
+        println!("Finalized endorser");
         Ok(Response::new(reply))
       },
       Err(error) => {
@@ -263,6 +277,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Initializes the state of the endorser with the given parameters.
   async fn initialize_state(
     &self,
     req: Request<InitializeStateReq>,
@@ -303,6 +318,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Reads the current state of the endorser.
   async fn read_state(
     &self,
     _req: Request<ReadStateReq>,
@@ -329,6 +345,7 @@ impl EndorserCall for EndorserServiceState {
     }
   }
 
+  /// Activates the endorser with the given parameters.
   async fn activate(&self, req: Request<ActivateReq>) -> Result<Response<ActivateResp>, Status> {
     let ActivateReq {
       old_config,
@@ -361,8 +378,32 @@ impl EndorserCall for EndorserServiceState {
       },
     }
   }
+
+  /// Pings the endorser with the given nonce.
+  async fn ping(&self, req: Request<PingReq>) -> Result<Response<PingResp>, Status> {
+    let PingReq { nonce } = req.into_inner();
+    let res = self.state.ping(&nonce);
+
+    match res {
+      Ok(id_sig) => {
+        let reply = PingResp {
+          id_sig: id_sig.to_bytes().to_vec(),
+        };
+        Ok(Response::new(reply))
+      },
+      Err(e) => {
+        let status = self.process_error(
+          e,
+          None,
+          "Failed to compute signature due to an internal error",
+        );
+        Err(status)
+      },
+    }
+  }
 }
 
+/// Main function to start the endorser service.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("endorser")

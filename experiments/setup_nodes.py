@@ -62,7 +62,7 @@ def setup_sgx_endorsers():
 
 
 def setup_coordinator(store):
-    coordinator = CMD + "/coordinator -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
+    coordinator = CMD + "/coordinator -i1 -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
     coordinator += " -e \"http://" + LISTEN_IP_ENDORSER_1 + ":" + PORT_ENDORSER_1
     coordinator += ",http://" + LISTEN_IP_ENDORSER_2 + ":" + PORT_ENDORSER_2
     coordinator += ",http://" + LISTEN_IP_ENDORSER_3 + ":" + PORT_ENDORSER_3
@@ -76,7 +76,7 @@ def setup_coordinator(store):
     time.sleep(5)
 
 def setup_coordinator_sgx(store):
-    coordinator = CMD + "/coordinator -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
+    coordinator = CMD + "/coordinator -i1 -t " + LISTEN_IP_COORDINATOR + " -p " + PORT_COORDINATOR + " -r " + PORT_COORDINATOR_CTRL
     coordinator += " -e \"http://" + LISTEN_IP_SGX_ENDORSER_1 + ":" + PORT_SGX_ENDORSER_1
     coordinator += ",http://" + LISTEN_IP_SGX_ENDORSER_2 + ":" + PORT_SGX_ENDORSER_2
     coordinator += ",http://" + LISTEN_IP_SGX_ENDORSER_3 + ":" + PORT_SGX_ENDORSER_3

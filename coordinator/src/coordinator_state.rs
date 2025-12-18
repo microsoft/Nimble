@@ -3,15 +3,20 @@ use ledger::{
   compute_aggregated_block_hash, compute_cut_diffs, compute_max_cut,
   errors::VerificationError,
   signature::{PublicKey, PublicKeyTrait},
-  Block, CustomSerde, EndorserHostnames, Handle, MetaBlock, NimbleDigest, NimbleHashTrait, Nonce,
-  Nonces, Receipt, Receipts, VerifierState,
+  Block, CustomSerde, EndorserHostnames, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait,
+  Nonce, Nonces, Receipt, Receipts, VerifierState,
 };
-use rand::random;
+use log::error;
+use rand::{random, Rng};
 use std::{
   collections::{HashMap, HashSet},
   convert::TryInto,
   ops::Deref,
-  sync::{Arc, RwLock},
+  sync::{
+    atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering::SeqCst},
+    Arc, RwLock,
+  },
+  time::Duration,
 };
 use store::ledger::{
   azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
@@ -24,31 +29,50 @@ use tonic::{
   Code, Status,
 };
 
+use clokwerk::TimeUnits;
 use ledger::endorser_proto;
 
+//use tracing::{error, info};
+//use tracing_subscriber;
+
 const DEFAULT_NUM_GRPC_CHANNELS: usize = 1; // the default number of GRPC channels
+
+enum EndorserUsageState {
+  Uninitialized,
+  Initialized,
+  Active,
+  Finalized,
+}
 
 struct EndorserClients {
   clients: Vec<endorser_proto::endorser_call_client::EndorserCallClient<Channel>>,
   uri: String,
+  failures: u64,
+  usage_state: EndorserUsageState,
 }
 
 type EndorserConnMap = HashMap<Vec<u8>, EndorserClients>;
 
 type LedgerStoreRef = Arc<Box<dyn LedgerStore + Send + Sync>>;
 
+#[derive(Clone)]
 pub struct CoordinatorState {
   pub(crate) ledger_store: LedgerStoreRef,
   conn_map: Arc<RwLock<EndorserConnMap>>,
   verifier_state: Arc<RwLock<VerifierState>>,
   num_grpc_channels: usize,
+  _used_nonces: Arc<RwLock<HashSet<Vec<u8>>>>,
 }
 
 const ENDORSER_MPSC_CHANNEL_BUFFER: usize = 8; // limited by the number of endorsers
 const ENDORSER_CONNECT_TIMEOUT: u64 = 10; // seconds: the connect timeout to endorsres
-const ENDORSER_REQUEST_TIMEOUT: u64 = 10; // seconds: the request timeout to endorsers
 
 const ATTESTATION_STR: &str = "THIS IS A PLACE HOLDER FOR ATTESTATION";
+
+static DEAD_ENDORSERS: AtomicUsize = AtomicUsize::new(0); // Set the number of currently dead endorsers
+static MAX_FAILURES: AtomicU64 = AtomicU64::new(3);
+static ENDORSER_REQUEST_TIMEOUT: AtomicU64 = AtomicU64::new(10);
+static PING_INTERVAL: AtomicU32 = AtomicU32::new(10); // seconds
 
 async fn get_public_key_with_retry(
   endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
@@ -57,6 +81,32 @@ async fn get_public_key_with_retry(
   loop {
     let res = endorser_client
       .get_public_key(tonic::Request::new(request.clone()))
+      .await;
+    match res {
+      Ok(resp) => {
+        return Ok(resp);
+      },
+      Err(status) => {
+        match status.code() {
+          Code::ResourceExhausted => {
+            continue;
+          },
+          _ => {
+            return Err(status);
+          },
+        };
+      },
+    };
+  }
+}
+
+async fn get_ping_with_retry(
+  endorser_client: &mut endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+  request: endorser_proto::PingReq,
+) -> Result<tonic::Response<endorser_proto::PingResp>, Status> {
+  loop {
+    let res = endorser_client
+      .ping(tonic::Request::new(request.clone()))
       .await;
     match res {
       Ok(resp) => {
@@ -443,6 +493,17 @@ fn process_error(
 }
 
 impl CoordinatorState {
+  /// Creates a new instance of `CoordinatorState`.
+  ///
+  /// # Arguments
+  ///
+  /// * `ledger_store_type` - The type of ledger store to use.
+  /// * `args` - A map of arguments for the ledger store.
+  /// * `num_grpc_channels_opt` - An optional number of gRPC channels.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the new `CoordinatorState` or a `CoordinatorError`.
   pub async fn new(
     ledger_store_type: &str,
     args: &HashMap<String, String>,
@@ -458,24 +519,28 @@ impl CoordinatorState {
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "table" => CoordinatorState {
         ledger_store: Arc::new(Box::new(TableLedgerStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       "filestore" => CoordinatorState {
         ledger_store: Arc::new(Box::new(FileStore::new(args).await.unwrap())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
       _ => CoordinatorState {
         ledger_store: Arc::new(Box::new(InMemoryLedgerStore::new())),
         conn_map: Arc::new(RwLock::new(HashMap::new())),
         verifier_state: Arc::new(RwLock::new(VerifierState::new())),
         num_grpc_channels,
+        _used_nonces: Arc::new(RwLock::new(HashSet::new())),
       },
     };
 
@@ -613,6 +678,34 @@ impl CoordinatorState {
     Ok(coordinator)
   }
 
+  /// Starts the auto scheduler for pinging endorsers.
+  pub async fn start_auto_scheduler(self: Arc<Self>) {
+    let mut scheduler = clokwerk::AsyncScheduler::new();
+    scheduler
+      .every(PING_INTERVAL.load(SeqCst).seconds())
+      .run(move || {
+        let value = self.clone();
+        async move { value.ping_all_endorsers().await }
+      });
+
+    tokio::spawn(async move {
+      loop {
+        scheduler.run_pending().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+      }
+    });
+    println!("Started the scheduler");
+  }
+
+  /// Connects to existing endorsers using the view ledger block.
+  ///
+  /// # Arguments
+  ///
+  /// * `view_ledger_block` - The view ledger block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the endorser hostnames or a `CoordinatorError`.
   async fn connect_to_existing_endorsers(
     &self,
     view_ledger_block: &[u8],
@@ -639,6 +732,15 @@ impl CoordinatorState {
     Ok(endorsers)
   }
 
+  /// Gets the endorser client for the given public key.
+  ///
+  /// # Arguments
+  ///
+  /// * `pk` - The public key of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// An optional tuple containing the endorser client and URI.
   fn get_endorser_client(
     &self,
     pk: &[u8],
@@ -664,6 +766,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the public keys of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of public keys.
   pub fn get_endorser_pks(&self) -> Vec<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -676,6 +783,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the URIs of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of URIs.
   pub fn get_endorser_uris(&self) -> Vec<String> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -688,6 +800,11 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the hostnames of all endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of endorser hostnames.
   fn get_endorser_hostnames(&self) -> EndorserHostnames {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       conn_map_rd
@@ -700,6 +817,15 @@ impl CoordinatorState {
     }
   }
 
+  /// Gets the public key of an endorser by hostname.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostname` - The hostname of the endorser.
+  ///
+  /// # Returns
+  ///
+  /// An optional public key.
   pub fn get_endorser_pk(&self, hostname: &str) -> Option<Vec<u8>> {
     if let Ok(conn_map_rd) = self.conn_map.read() {
       for (pk, endorser) in conn_map_rd.iter() {
@@ -711,6 +837,15 @@ impl CoordinatorState {
     None
   }
 
+  /// Connects to the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostnames` - The hostnames of the endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A vector of endorser hostnames.
   pub async fn connect_endorsers(&self, hostnames: &[String]) -> EndorserHostnames {
     let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
     for hostname in hostnames {
@@ -723,8 +858,9 @@ impl CoordinatorState {
           if let Ok(endorser_endpoint) = res {
             let endorser_endpoint = endorser_endpoint
               .connect_timeout(std::time::Duration::from_secs(ENDORSER_CONNECT_TIMEOUT));
-            let endorser_endpoint =
-              endorser_endpoint.timeout(std::time::Duration::from_secs(ENDORSER_REQUEST_TIMEOUT));
+            let endorser_endpoint = endorser_endpoint.timeout(std::time::Duration::from_secs(
+              ENDORSER_REQUEST_TIMEOUT.load(SeqCst),
+            ));
             let res = endorser_endpoint.connect().await;
             if let Ok(channel) = res {
               let mut client =
@@ -774,6 +910,8 @@ impl CoordinatorState {
               let mut endorser_clients = EndorserClients {
                 clients: Vec::new(),
                 uri: endorser,
+                failures: 0,
+                usage_state: EndorserUsageState::Uninitialized,
               };
               endorser_clients.clients.push(client);
               conn_map_wr.insert(pk, endorser_clients);
@@ -783,7 +921,7 @@ impl CoordinatorState {
             },
           };
         } else {
-          eprintln!("Failed to acquire the write lock");
+          eprintln!("Failed to acquire the conn_map write lock");
         }
       }
     }
@@ -791,6 +929,11 @@ impl CoordinatorState {
     endorser_hostnames
   }
 
+  /// Disconnects the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to disconnect.
   pub async fn disconnect_endorsers(&self, endorsers: &EndorserHostnames) {
     if let Ok(mut conn_map_wr) = self.conn_map.write() {
       for (pk, uri) in endorsers {
@@ -810,6 +953,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Filters the endorsers based on the view ledger height.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to filter.
+  /// * `view_ledger_height` - The height of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   async fn filter_endorsers(
     &self,
     endorsers: &EndorserHostnames,
@@ -871,6 +1024,20 @@ impl CoordinatorState {
     Ok(())
   }
 
+  /// Initializes the state of the endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `group_identity` - The group identity of the endorsers.
+  /// * `endorsers` - The endorsers to initialize.
+  /// * `ledger_tail_map` - The ledger tail map.
+  /// * `view_tail_metablock` - The tail metablock of the view ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A `Receipts` object containing the receipts.
   async fn endorser_initialize_state(
     &self,
     group_identity: &NimbleDigest,
@@ -917,7 +1084,18 @@ impl CoordinatorState {
           let endorser_proto::InitializeStateResp { receipt } = resp.into_inner();
           let res = Receipt::from_bytes(&receipt);
           match res {
-            Ok(receipt_rs) => receipts.add(&receipt_rs),
+            Ok(receipt_rs) => {
+              receipts.add(&receipt_rs);
+              if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                let e = conn_map_wr.get_mut(&pk_bytes);
+                match e {
+                  None => eprintln!("Couldn't find Endorser in conn_map"),
+                  Some(v) => v.usage_state = EndorserUsageState::Initialized,
+                }
+              } else {
+                eprintln!("Couldn't get write lock on conn_map");
+              }
+            },
             Err(error) => eprintln!("Failed to parse a receipt ({:?})", error),
           }
         },
@@ -940,6 +1118,18 @@ impl CoordinatorState {
     receipts
   }
 
+  /// Creates a new ledger with the given handle, block hash, and block.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to create the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `ledger_block_hash` - The hash of the block.
+  /// * `ledger_block` - The block to add to the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   async fn endorser_create_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1014,6 +1204,20 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Appends a block to the ledger with the given handle, block hash, expected height, block, and nonces.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to append the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  /// * `block` - The block to append to the ledger.
+  /// * `nonces` - The nonces to use for appending the block.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   pub async fn endorser_append_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1169,6 +1373,14 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Updates the ledger for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to update the ledger.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `max_height` - The maximum height of the ledger.
+  /// * `endorser_height_map` - A map of endorser heights.
   async fn endorser_update_ledger(
     &self,
     endorsers: &[Vec<u8>],
@@ -1233,6 +1445,17 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads the tail of the ledger for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to read the ledger tail.
+  /// * `ledger_handle` - The handle of the ledger.
+  /// * `client_nonce` - The nonce to use for reading the ledger tail.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   async fn endorser_read_ledger_tail(
     &self,
     endorsers: &[Vec<u8>],
@@ -1341,6 +1564,17 @@ impl CoordinatorState {
     Err(CoordinatorError::FailedToObtainQuorum)
   }
 
+  /// Finalizes the state of the endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to finalize the state.
+  /// * `block_hash` - The hash of the block.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A tuple containing the receipts and ledger tail maps.
   async fn endorser_finalize_state(
     &self,
     endorsers: &EndorserHostnames,
@@ -1388,6 +1622,14 @@ impl CoordinatorState {
           let receipt_rs = match res {
             Ok(receipt_rs) => {
               receipts.add(&receipt_rs);
+              if let Ok(mut conn_map_wr) = self.conn_map.write() {
+                match conn_map_wr.get_mut(&pk_bytes) {
+                  None => eprintln!("Endorser wasn't in conn_map during finalization."),
+                  Some(e) => e.usage_state = EndorserUsageState::Finalized,
+                }
+              } else {
+                eprint!("Couldn't get write lock on conn_map");
+              }
               receipt_rs
             },
             Err(error) => {
@@ -1417,6 +1659,20 @@ impl CoordinatorState {
     (receipts, ledger_tail_maps)
   }
 
+  /// Verifies the view change for the given endorsers.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers` - The endorsers to verify the view change.
+  /// * `old_config` - The old configuration.
+  /// * `new_config` - The new configuration.
+  /// * `ledger_tail_maps` - The ledger tail maps.
+  /// * `ledger_chunks` - The ledger chunks.
+  /// * `receipts` - The receipts.
+  ///
+  /// # Returns
+  ///
+  /// The number of verified endorsers.
   async fn endorser_verify_view_change(
     &self,
     endorsers: &EndorserHostnames,
@@ -1460,9 +1716,23 @@ impl CoordinatorState {
 
     let mut num_verified_endorers = 0;
 
+    // TODO: Better error handling here
     while let Some((endorser, pk_bytes, res)) = mpsc_rx.recv().await {
       match res {
         Ok(_resp) => {
+          if let Ok(mut conn_map_wr) = self.conn_map.write() {
+            let e = conn_map_wr.get_mut(&pk_bytes);
+            match e {
+              None => {
+                eprintln!("Couldn't find endorser in conn_map");
+              },
+              Some(v) => {
+                v.usage_state = EndorserUsageState::Active;
+              },
+            }
+          } else {
+            eprintln!("Couldn't get write lock on conn_map");
+          }
           num_verified_endorers += 1;
         },
         Err(status) => {
@@ -1476,18 +1746,78 @@ impl CoordinatorState {
         },
       }
     }
-
     num_verified_endorers
   }
 
+  /// Replaces the endorsers with the given hostnames.
+  ///
+  /// # Arguments
+  ///
+  /// * `hostnames` - The hostnames of the new endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   pub async fn replace_endorsers(&self, hostnames: &[String]) -> Result<(), CoordinatorError> {
-    let existing_endorsers = self.get_endorser_hostnames();
+    let existing_endorsers = self.get_endorser_uris();
 
-    // Connect to new endorsers
-    let new_endorsers = self.connect_endorsers(hostnames).await;
-    if new_endorsers.is_empty() {
-      return Err(CoordinatorError::NoNewEndorsers);
+    // Check if hostnames contains endorsers that are not in existing_endorsers.
+    // If yes, connect to those and then continue
+    // Once done, select the new endorser quorum from the conn_map and reconfigure
+
+    if !hostnames.is_empty() {
+      // Filter out those endorsers which haven't been connected to, yet and connect to them.
+      let mut added_endorsers: Vec<String> = hostnames.to_vec();
+      added_endorsers.retain(|x| !existing_endorsers.contains(x));
+
+      let added_endorsers = self.connect_endorsers(&added_endorsers).await;
+      // After the previous ^ line the new endorsers are in the conn_map as uninitialized
+      if added_endorsers.is_empty() {
+        // This is not an error as long as there are enough qualified endorsers already connected
+        println!("New endorsers couldn't be reached");
+      } else {
+        println!("Connected to new endorsers");
+      }
     }
+
+    // Now all available endorsers are in the conn_map, so we select the new quorum from
+    // there
+
+    let new_endorsers: EndorserHostnames;
+    let old_endorsers: EndorserHostnames;
+
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      new_endorsers = conn_map_rd
+        .iter()
+        .filter(|(_pk, endorser)| {
+          matches!(endorser.usage_state, EndorserUsageState::Uninitialized)
+            && endorser.failures == 0
+        })
+        .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
+        .collect();
+
+      old_endorsers = conn_map_rd
+        .iter()
+        .filter(|(_pk, endorser)| matches!(endorser.usage_state, EndorserUsageState::Active))
+        .map(|(pk, endorser)| (pk.clone(), endorser.uri.clone()))
+        .collect();
+      if new_endorsers.is_empty() {
+        eprintln!("No eligible endorsers");
+        return Err(CoordinatorError::FailedToObtainQuorum);
+      }
+    } else {
+      eprintln!("Couldn't get read lock on conn_map");
+      return Err(CoordinatorError::FailedToAcquireReadLock);
+    }
+
+    for (_pk, uri) in &new_endorsers {
+      println!("New endorser URI: {}", uri);
+    }
+
+    DEAD_ENDORSERS.store(0, SeqCst);
+
+    // At this point new_endorsers should contain the hostnames of the new quorum
+    // and old_endorsers should contain the currently active quorum
 
     // Package the list of endorsers into a genesis block of the view ledger
     let view_ledger_genesis_block = {
@@ -1499,7 +1829,7 @@ impl CoordinatorState {
       let block_vec = res.unwrap();
       Block::new(&block_vec)
     };
-
+    println!("created view ledger genesis block");
     // Read the current ledger tail
     let res = self.ledger_store.read_view_ledger_tail().await;
 
@@ -1510,7 +1840,7 @@ impl CoordinatorState {
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
-
+    println!("read view ledger tail");
     let (tail, height) = res.unwrap();
 
     // Store the genesis block of the view ledger in the ledger store
@@ -1525,12 +1855,12 @@ impl CoordinatorState {
       );
       return Err(CoordinatorError::FailedToCallLedgerStore);
     }
-
+    println!("appended view ledger genesis block");
     let view_ledger_height = res.unwrap();
 
     self
       .apply_view_change(
-        &existing_endorsers,
+        &old_endorsers,
         &new_endorsers,
         &tail,
         &view_ledger_genesis_block,
@@ -1539,6 +1869,19 @@ impl CoordinatorState {
       .await
   }
 
+  /// Applies the view change to the verifier state.
+  ///
+  /// # Arguments
+  ///
+  /// * `existing_endorsers` - The existing endorsers.
+  /// * `new_endorsers` - The new endorsers.
+  /// * `view_ledger_entry` - The view ledger entry.
+  /// * `view_ledger_genesis_block` - The genesis block of the view ledger.
+  /// * `view_ledger_height` - The height of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result indicating success or a `CoordinatorError`.
   async fn apply_view_change(
     &self,
     existing_endorsers: &EndorserHostnames,
@@ -1564,7 +1907,7 @@ impl CoordinatorState {
       match res {
         Ok(metablock) => metablock,
         Err(_e) => {
-          eprintln!("faield to retrieve metablock from view receipts");
+          eprintln!("failed to retrieve metablock from view receipts");
           return Err(CoordinatorError::UnexpectedError);
         },
       }
@@ -1674,6 +2017,8 @@ impl CoordinatorState {
         &receipts,
       )
       .await;
+    // TODO: Change this line? Would allow to use a smaller quorum if not enough eligible endorsers
+    // are available
     if num_verified_endorsers * 2 <= new_endorsers.len() {
       eprintln!(
         "insufficient verified endorsers {} * 2 <= {}",
@@ -1701,11 +2046,23 @@ impl CoordinatorState {
     Ok(())
   }
 
+  /// Resets the ledger store.
   pub async fn reset_ledger_store(&self) {
     let res = self.ledger_store.reset_store().await;
     assert!(res.is_ok());
   }
 
+  /// Creates a new ledger with the given handle and block.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers_opt` - An optional vector of endorsers.
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `block_bytes` - The block to add to the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the receipts or a `CoordinatorError`.
   pub async fn create_ledger(
     &self,
     endorsers_opt: Option<Vec<Vec<u8>>>,
@@ -1763,6 +2120,18 @@ impl CoordinatorState {
     Ok(receipts)
   }
 
+  /// Appends a block to the ledger with the given handle, block, and expected height.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorsers_opt` - An optional vector of endorsers.
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `block_bytes` - The block to append to the ledger.
+  /// * `expected_height` - The expected height of the ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the hash of the nonces and the receipts or a `CoordinatorError`.
   pub async fn append_ledger(
     &self,
     endorsers_opt: Option<Vec<Vec<u8>>>,
@@ -1861,6 +2230,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads the tail of the ledger with the given handle and nonce.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `nonce_bytes` - The nonce to use for reading the ledger tail.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_ledger_tail(
     &self,
     handle_bytes: &[u8],
@@ -1920,6 +2299,16 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads a block from the ledger by index.
+  ///
+  /// # Arguments
+  ///
+  /// * `handle_bytes` - The handle of the ledger.
+  /// * `index` - The index of the block to read.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_ledger_by_index(
     &self,
     handle_bytes: &[u8],
@@ -1939,6 +2328,15 @@ impl CoordinatorState {
     }
   }
 
+  /// Reads a block from the view ledger by index.
+  ///
+  /// # Arguments
+  ///
+  /// * `index` - The index of the block to read.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry or a `CoordinatorError`.
   pub async fn read_view_by_index(&self, index: usize) -> Result<LedgerEntry, CoordinatorError> {
     let ledger_entry = {
       let res = self.ledger_store.read_view_ledger_by_index(index).await;
@@ -1951,6 +2349,11 @@ impl CoordinatorState {
     Ok(ledger_entry)
   }
 
+  /// Reads the tail of the view ledger.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the ledger entry, height, and attestation string or a `CoordinatorError`.
   pub async fn read_view_tail(&self) -> Result<(LedgerEntry, usize, Vec<u8>), CoordinatorError> {
     let res = self.ledger_store.read_view_ledger_tail().await;
     if let Err(error) = res {
@@ -1964,4 +2367,292 @@ impl CoordinatorState {
     let (ledger_entry, height) = res.unwrap();
     Ok((ledger_entry, height, ATTESTATION_STR.as_bytes().to_vec()))
   }
+
+  /// Pings all endorsers.
+  pub async fn ping_all_endorsers(self: Arc<Self>) {
+    println!("Pinging all endorsers from coordinator_state");
+    let hostnames = self.get_endorser_hostnames();
+    let (mpsc_tx, mut mpsc_rx) = mpsc::channel(ENDORSER_MPSC_CHANNEL_BUFFER);
+
+    for (pk, hostname) in hostnames {
+      let tx = mpsc_tx.clone();
+      let endorser = hostname.clone();
+      let endorser_key = pk.clone();
+      let conn_map = self.conn_map.clone();
+      let self_c = self.clone();
+
+      let _job = tokio::spawn(async move {
+        let nonce = generate_secure_nonce_bytes(16); // Nonce is a randomly generated with 16B length
+                                                     // TODO: Save the nonce for replay protection
+                                                     // Create a connection endpoint
+
+        let endpoint = Endpoint::from_shared(endorser.to_string());
+        match endpoint {
+          Ok(endpoint) => {
+            let endpoint = endpoint
+              .connect_timeout(Duration::from_secs(ENDORSER_CONNECT_TIMEOUT))
+              .timeout(Duration::from_secs(ENDORSER_REQUEST_TIMEOUT.load(SeqCst)));
+
+            match endpoint.connect().await {
+              Ok(channel) => {
+                let mut client =
+                  endorser_proto::endorser_call_client::EndorserCallClient::new(channel);
+
+                // Include the nonce in the request
+                let ping_req = endorser_proto::PingReq {
+                  nonce: nonce.clone(), // Send the nonce in the request
+                  ..Default::default() // Set other fields to their default values (in this case, none)
+                };
+
+                // Call the method with retry logic
+                let res = get_ping_with_retry(&mut client, ping_req).await;
+                match res {
+                  Ok(resp) => {
+                    let endorser_proto::PingResp { id_sig } = resp.into_inner();
+                    match IdSig::from_bytes(&id_sig) {
+                      Ok(id_signature) => {
+                        let id_pubkey = id_signature.get_id();
+                        if *id_pubkey != endorser_key {
+                          let error_message = format!(
+                            "Endorser public_key mismatch. Expected {:?}, got {:?}",
+                            endorser_key, id_pubkey
+                          );
+                          self_c
+                            .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                            .await;
+                          return;
+                        }
+
+                        // Verify the signature with the original nonce
+                        if id_signature.verify(&nonce).is_ok() {
+                          // TODO: Replace println with info
+                          println!("Nonce match for endorser: {}", endorser); //HERE If the nonce matched
+
+                          if let Ok(mut conn_map_wr) = conn_map.write() {
+                            if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+                              if endorser_clients.failures > 0 {
+                                // Only update DEAD_ENDORSERS if endorser_client is part of the
+                                // quorum and has previously been marked as unavailable
+                                if endorser_clients.failures > MAX_FAILURES.load(SeqCst)
+                                  && matches!(
+                                    endorser_clients.usage_state,
+                                    EndorserUsageState::Active
+                                  )
+                                {
+                                  DEAD_ENDORSERS.fetch_sub(1, SeqCst);
+                                }
+                                println!(
+                                  "Endorser {} reconnected after {} tries",
+                                  endorser, endorser_clients.failures
+                                );
+                                // Reset failures on success
+                                endorser_clients.failures = 0;
+                                // TODO: Replace println with info
+                              }
+                            } else {
+                              eprintln!("Endorser key not found in conn_map");
+                            }
+                          } else {
+                            eprintln!("Failed to acquire write lock on conn_map");
+                          }
+                        } else {
+                          let error_message = format!(
+                            "Nonce did not match. Expected {:?}, got {:?}",
+                            nonce, id_signature
+                          );
+                          self_c
+                            .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                            .await;
+                        }
+                      },
+                      Err(_) => {
+                        let error_message = format!("Failed to decode IdSig.");
+                        self_c
+                          .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                          .await;
+                      },
+                    }
+                  },
+                  Err(status) => {
+                    let error_message = format!(
+                      "Failed to connect to the endorser {}: {:?}.",
+                      endorser, status
+                    );
+                    self_c
+                      .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                      .await;
+                  },
+                }
+              },
+              Err(err) => {
+                let error_message =
+                  format!("Failed to connect to the endorser {}: {:?}.", endorser, err);
+                self_c
+                  .endorser_ping_failed(endorser.clone(), &error_message, endorser_key)
+                  .await;
+              },
+            }
+          },
+          Err(err) => {
+            error!(
+              "Failed to resolve the endorser host name {}: {:?}",
+              endorser, err
+            );
+            if let Err(_) = tx
+              .send((
+                endorser.clone(),
+                Err::<
+                  (
+                    endorser_proto::endorser_call_client::EndorserCallClient<Channel>,
+                    Vec<u8>,
+                  ),
+                  CoordinatorError,
+                >(CoordinatorError::CannotResolveHostName),
+              ))
+              .await
+            {
+              error!("Failed to send failure result for endorser: {}", endorser);
+            }
+          },
+        }
+      });
+    }
+
+    drop(mpsc_tx);
+
+    // Receive results from the channel and process them
+    while let Some((endorser, res)) = mpsc_rx.recv().await {
+      match res {
+        Ok((_client, _pk)) => {
+          // Process the client and public key
+        },
+        Err(_) => {
+          // TODO: Call endorser refresh for "client"
+          error!("Endorser {} needs to be refreshed", endorser);
+        },
+      }
+    }
+  }
+
+  /// Handles the failure of an endorser ping.
+  ///
+  /// # Arguments
+  ///
+  /// * `endorser` - The endorser that failed to respond.
+  /// * `error_message` - The error message.
+  /// * `endorser_key` - The public key of the endorser.
+  pub async fn endorser_ping_failed(
+    self: Arc<Self>,
+    endorser: String,
+    error_message: &str,
+    endorser_key: Vec<u8>,
+  ) {
+    if let Ok(mut conn_map_wr) = self.conn_map.write() {
+      if let Some(endorser_clients) = conn_map_wr.get_mut(&endorser_key) {
+        // Increment the failures count
+        endorser_clients.failures += 1;
+      } else {
+        eprintln!("Endorser key not found in conn_map");
+      }
+    } else {
+      eprintln!("Failed to acquire write lock on conn_map");
+    }
+
+    let mut alive_endorser_percentage = 100;
+
+    if let Ok(conn_map_r) = self.conn_map.read() {
+      if let Some(endorser_clients) = conn_map_r.get(&endorser_key) {
+        // Log the failure
+        // TODO: Replace with warn!
+        println!(
+          "Ping failed for endorser {}. {} pings failed.\n{}",
+          endorser, endorser_clients.failures, error_message
+        );
+
+        // Only count towards allowance if it first crosses the boundary
+        if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
+          && endorser_clients.failures >= MAX_FAILURES.load(SeqCst) + 1
+        {
+          // Increment dead endorser count
+          if matches!(endorser_clients.usage_state, EndorserUsageState::Active)
+            && endorser_clients.failures == MAX_FAILURES.load(SeqCst) + 1
+          {
+            DEAD_ENDORSERS.fetch_add(1, SeqCst);
+          }
+
+          println!(
+            "Active endorser {} failed more than {} times! Now {} endorsers are dead.",
+            endorser,
+            MAX_FAILURES.load(SeqCst),
+            DEAD_ENDORSERS.load(SeqCst)
+          );
+
+          let active_endorsers_count = conn_map_r
+            .values()
+            .filter(|&e| matches!(e.usage_state, EndorserUsageState::Active))
+            .count();
+          let dead_endorsers_count = DEAD_ENDORSERS.load(SeqCst);
+          println!("Debug: active_endorsers_count = {}", active_endorsers_count);
+          println!("Debug: dead_endorsers_count = {}", dead_endorsers_count);
+          alive_endorser_percentage = 100 - ((dead_endorsers_count * 100) / active_endorsers_count);
+          println!("Debug: {} % alive", alive_endorser_percentage);
+        }
+      } else {
+        eprintln!("Endorser key not found in conn_map");
+      }
+    } else {
+      eprintln!("Failed to acquire read lock on conn_map");
+    }
+
+    println!(
+      "Debug: {} % alive before replace trigger",
+      alive_endorser_percentage
+    );
+  }
+
+  /// Gets the timeout map for the endorsers.
+  ///
+  /// # Returns
+  ///
+  /// A result containing the timeout map or a `CoordinatorError`.
+  pub fn get_timeout_map(&self) -> Result<HashMap<String, u64>, CoordinatorError> {
+    if let Ok(conn_map_rd) = self.conn_map.read() {
+      let mut timeout_map = HashMap::new();
+      for (_pk, endorser_clients) in conn_map_rd.iter() {
+        // Convert Vec<u8> to String (assuming UTF-8 encoding)
+        timeout_map.insert(endorser_clients.uri.clone(), endorser_clients.failures);
+      }
+      Ok(timeout_map)
+    } else {
+      eprintln!("Failed to acquire read lock on conn_map");
+      Err(CoordinatorError::FailedToGetTimeoutMap)
+    }
+  }
+
+  /// Overwrites the configuration variables.
+  ///
+  /// # Arguments
+  ///
+  /// * `max_failures` - The maximum number of failures allowed.
+  /// * `request_timeout` - The request timeout in seconds.
+  /// * `min_alive_percentage` - The minimum percentage of alive endorsers.
+  /// * `quorum_size` - The desired quorum size.
+  /// * `ping_interval` - The interval for pinging endorsers in seconds.
+  /// * `deactivate_auto_reconfig` - Whether to deactivate auto reconfiguration.
+  pub fn overwrite_variables(
+    &mut self,
+    max_failures: u64,
+    request_timeout: u64,
+    ping_interval: u32,
+  ) {
+    MAX_FAILURES.store(max_failures, SeqCst);
+    ENDORSER_REQUEST_TIMEOUT.store(request_timeout, SeqCst);
+    PING_INTERVAL.store(ping_interval, SeqCst);
+  }
+}
+
+fn generate_secure_nonce_bytes(size: usize) -> Vec<u8> {
+  let mut rng = rand::thread_rng();
+  let nonce: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+  nonce
 }

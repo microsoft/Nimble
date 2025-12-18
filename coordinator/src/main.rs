@@ -3,9 +3,14 @@ mod errors;
 
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+  collections::HashMap,
+  sync::{
+    atomic::{AtomicBool, Ordering::SeqCst},
+    Arc,
+  },
+};
 use tonic::{transport::Server, Request, Response, Status};
-
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
   tonic::include_proto!("coordinator_proto");
@@ -14,7 +19,8 @@ pub mod coordinator_proto {
 use clap::{App, Arg};
 use coordinator_proto::{
   call_server::{Call, CallServer},
-  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+  AddEndorsersReq, AddEndorsersResp, AppendReq, AppendResp, GetTimeoutMapReq, GetTimeoutMapResp,
+  NewLedgerReq, NewLedgerResp, PingAllReq, PingAllResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
   ReadViewTailResp,
 };
@@ -30,11 +36,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower::ServiceBuilder;
 
+static DEACTIVATE_AUTO_RECONFIG: AtomicBool = AtomicBool::new(false);
+
 pub struct CoordinatorServiceState {
   state: Arc<CoordinatorState>,
 }
 
 impl CoordinatorServiceState {
+  /// Creates a new instance of `CoordinatorServiceState`.
   pub fn new(coordinator: Arc<CoordinatorState>) -> Self {
     CoordinatorServiceState { state: coordinator }
   }
@@ -47,6 +56,7 @@ impl CoordinatorServiceState {
 
 #[tonic::async_trait]
 impl Call for CoordinatorServiceState {
+  /// Creates a new ledger with the given handle and block.
   async fn new_ledger(
     &self,
     req: Request<NewLedgerReq>,
@@ -71,6 +81,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Appends a block to the ledger with the given handle, block, and expected height.
   async fn append(&self, request: Request<AppendReq>) -> Result<Response<AppendResp>, Status> {
     let AppendReq {
       handle: handle_bytes,
@@ -95,6 +106,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads the latest block from the ledger with the given handle and nonce.
   async fn read_latest(
     &self,
     request: Request<ReadLatestReq>,
@@ -122,6 +134,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads a block from the ledger by index.
   async fn read_by_index(
     &self,
     request: Request<ReadByIndexReq>,
@@ -148,6 +161,7 @@ impl Call for CoordinatorServiceState {
     }
   }
 
+  /// Reads a block from the view ledger by index.
   async fn read_view_by_index(
     &self,
     request: Request<ReadViewByIndexReq>,
@@ -168,6 +182,7 @@ impl Call for CoordinatorServiceState {
     Ok(Response::new(reply))
   }
 
+  /// Reads the tail of the view ledger.
   async fn read_view_tail(
     &self,
     _request: Request<ReadViewTailReq>,
@@ -187,6 +202,58 @@ impl Call for CoordinatorServiceState {
 
     Ok(Response::new(reply))
   }
+
+  /// Pings all endorsers.
+  async fn ping_all_endorsers(
+    &self,
+    _request: Request<PingAllReq>, // Accept the gRPC request
+  ) -> Result<Response<PingAllResp>, Status> {
+    // Call the state method to perform the ping task (no return value)
+    println!("Pining all endorsers now from main.rs");
+    self.state.clone().ping_all_endorsers().await;
+
+    // Construct and return the PingAllResp
+    let reply = PingAllResp {};
+
+    // Return the response
+    Ok(Response::new(reply))
+  }
+
+  /// Gets the timeout map from the coordinator.
+  async fn get_timeout_map(
+    &self,
+    _request: Request<GetTimeoutMapReq>,
+  ) -> Result<Response<GetTimeoutMapResp>, Status> {
+    let res = self.state.get_timeout_map();
+
+    if res.is_err() {
+      return Err(Status::aborted("Failed to get the timeout map"));
+    }
+
+    let res = res.unwrap();
+
+    let reply = GetTimeoutMapResp { timeout_map: res };
+
+    Ok(Response::new(reply))
+  }
+
+  /// Adds endorsers with the given URIs.
+  async fn add_endorsers(
+    &self,
+    request: Request<AddEndorsersReq>,
+  ) -> Result<Response<AddEndorsersResp>, Status> {
+    let AddEndorsersReq { endorsers } = request.into_inner();
+
+    let endorsers_uris = endorsers
+      .split(';')
+      .filter(|e| !e.is_empty())
+      .map(|e| e.to_string())
+      .collect::<Vec<String>>();
+
+    let _res = self.state.connect_endorsers(&endorsers_uris).await;
+    let reply = AddEndorsersResp {};
+    Ok(Response::new(reply))
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -195,6 +262,7 @@ struct EndorserOpResponse {
   pub pk: String,
 }
 
+/// Retrieves the public key of an endorser.
 async fn get_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -234,6 +302,7 @@ async fn get_endorser(
   }
 }
 
+/// Adds a new endorser.
 async fn new_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -261,10 +330,14 @@ async fn new_endorser(
     .map(|e| e.to_string())
     .collect::<Vec<String>>();
 
-  let res = state.replace_endorsers(&endorsers).await;
-  if res.is_err() {
-    eprintln!("failed to add the endorser ({:?})", res);
-    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  if DEACTIVATE_AUTO_RECONFIG.load(SeqCst) {
+    let res = state.replace_endorsers(&endorsers).await;
+    if res.is_err() {
+      eprintln!("failed to add the endorser ({:?})", res);
+      return (StatusCode::BAD_REQUEST, Json(json!({})));
+    }
+  } else {
+    let _res = state.connect_endorsers(&endorsers).await;
   }
 
   let pks = state.get_endorser_pks();
@@ -278,6 +351,7 @@ async fn new_endorser(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Deletes an existing endorser.
 async fn delete_endorser(
   Path(uri): Path<String>,
   Extension(state): Extension<Arc<CoordinatorState>>,
@@ -322,6 +396,25 @@ async fn delete_endorser(
   (StatusCode::OK, Json(json!(resp)))
 }
 
+/// Retrieves the timeout map of endorsers.
+async fn get_timeout_map(Extension(state): Extension<Arc<CoordinatorState>>) -> impl IntoResponse {
+  let res = state.get_timeout_map();
+  if res.is_err() {
+    eprintln!("failed to get the timeout map ({:?})", res);
+    return (StatusCode::BAD_REQUEST, Json(json!({})));
+  }
+  return (StatusCode::OK, Json(json!(res.unwrap())));
+}
+
+/// Pings all endorsers.
+async fn ping_all_endorsers(
+  Extension(state): Extension<Arc<CoordinatorState>>,
+) -> impl IntoResponse {
+  let _res = state.ping_all_endorsers();
+  return (StatusCode::OK, Json(json!({})));
+}
+
+/// Main function to start the coordinator service.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let config = App::new("coordinator")
@@ -395,6 +488,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .long("channels")
         .takes_value(true)
         .help("The number of grpc channels"),
+    )
+    .arg(
+      Arg::with_name("max_failures")
+        .short("f")
+        .long("max-failures")
+        .value_name("COUNT")
+        .help(
+          "Sets the maximum number of allowed ping failures before an endorser is declared dead",
+        )
+        .takes_value(true)
+        .default_value("3"),
+    )
+    .arg(
+      Arg::with_name("request_timeout")
+        .long("request-timeout")
+        .value_name("SECONDS")
+        .help("Sets the request timeout in seconds before a ping is considered failed")
+        .takes_value(true)
+        .default_value("10"),
+    )
+    .arg(
+      Arg::with_name("ping_inverval")
+        .short("i")
+        .long("ping-interval")
+        .value_name("SEC")
+        .help("How often to ping endorsers in seconds")
+        .takes_value(true)
+        .default_value("10"),
     );
 
   let cli_matches = config.get_matches();
@@ -404,6 +525,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let store = cli_matches.value_of("store").unwrap();
   let addr = format!("{}:{}", hostname, port_number).parse()?;
   let str_vec: Vec<&str> = cli_matches.values_of("endorser").unwrap().collect();
+
+  let max_failures_str = cli_matches.value_of("max_failures").unwrap();
+  let max_failures = max_failures_str.parse::<u64>().unwrap_or(5).max(1);
+
+  let request_timeout_str = cli_matches.value_of("request_timeout").unwrap();
+  let request_timeout = request_timeout_str.parse::<u64>().unwrap_or(12).max(1);
+
+  let ping_interval_str = cli_matches.value_of("ping_inverval").unwrap();
+  let ping_interval = ping_interval_str.parse::<u32>().unwrap_or(10).max(1);
+
+  println!(
+    "Coordinator starting with max_failures: {}, request_timeout: {}",
+    max_failures, request_timeout
+  );
+
   let endorser_hostnames = str_vec
     .iter()
     .filter(|e| !e.is_empty())
@@ -434,6 +570,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   let res = CoordinatorState::new(store, &ledger_store_args, num_grpc_channels).await;
   assert!(res.is_ok());
   let coordinator = res.unwrap();
+  let mut mutcoordinator = coordinator.clone();
+
+  mutcoordinator.overwrite_variables(max_failures, request_timeout, ping_interval);
 
   if !endorser_hostnames.is_empty() {
     let _ = coordinator.replace_endorsers(&endorser_hostnames).await;
@@ -447,9 +586,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let server = CoordinatorServiceState::new(coordinator_ref.clone());
 
+  println!("Pinging all Endorsers method called from main.rs");
+  coordinator_ref.clone().ping_all_endorsers().await;
+
+  coordinator_ref.clone().start_auto_scheduler().await;
   // Start the REST server for management
   let control_server = Router::new()
       .route("/endorsers/:uri", get(get_endorser).put(new_endorser).delete(delete_endorser))
+      .route("/pingallendorsers", get(ping_all_endorsers))
+      .route("/timeoutmap", get(get_timeout_map))
       // Add middleware to all routes
       .layer(
           ServiceBuilder::new()
@@ -483,8 +628,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
   use crate::{
     coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp,
+      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, PingAllReq,
+      ReadByIndexReq, ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq,
+      ReadViewTailResp,
     },
     CoordinatorServiceState, CoordinatorState,
   };
@@ -611,19 +757,19 @@ mod tests {
 
     // Launch the endorser
     let endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
-
+    println!("Endorser started");
     // Create the coordinator
     let coordinator = Arc::new(
       CoordinatorState::new(&store, &ledger_store_args, None)
         .await
         .unwrap(),
     );
-
+    println!("Coordinator started");
     let res = coordinator
       .replace_endorsers(&["http://[::1]:9090".to_string()])
       .await;
     assert!(res.is_ok());
-
+    println!("Endorser replaced");
     let server = CoordinatorServiceState::new(coordinator);
 
     // Initialization: Fetch view ledger to build VerifierState
@@ -773,6 +919,8 @@ mod tests {
     let endorser2 = launch_endorser(&endorser_cmd, endorser_args2);
     let endorser_args3 = endorser_args.clone() + " -p 9093";
     let endorser3 = launch_endorser(&endorser_cmd, endorser_args3);
+
+    println!("2 more Endorsers started");
 
     let res = server
       .get_state()
@@ -963,6 +1111,8 @@ mod tests {
     let endorser5 = launch_endorser(&endorser_cmd, endorser_args5);
     let endorser_args6 = endorser_args.clone() + " -p 9096";
     let endorser6 = launch_endorser(&endorser_cmd, endorser_args6);
+
+    println!("3 more Endorsers started");
 
     let res = server
       .get_state()
@@ -1189,5 +1339,127 @@ mod tests {
     println!("endorser4 process ID is {}", endorser4.child.id());
     println!("endorser5 process ID is {}", endorser5.child.id());
     println!("endorser6 process ID is {}", endorser6.child.id());
+  }
+
+  #[tokio::test]
+  #[ignore]
+  async fn test_ping() {
+    if std::env::var_os("ENDORSER_CMD").is_none() {
+      panic!("The ENDORSER_CMD environment variable is not specified");
+    }
+    let endorser_cmd = {
+      match std::env::var_os("ENDORSER_CMD") {
+        None => panic!("The ENDORSER_CMD environment variable is not specified"),
+        Some(x) => x,
+      }
+    };
+
+    let endorser_args = {
+      match std::env::var_os("ENDORSER_ARGS") {
+        None => String::from(""),
+        Some(x) => x.into_string().unwrap(),
+      }
+    };
+
+    let store = {
+      match std::env::var_os("LEDGER_STORE") {
+        None => String::from("memory"),
+        Some(x) => x.into_string().unwrap(),
+      }
+    };
+
+    let mut ledger_store_args = HashMap::<String, String>::new();
+    if std::env::var_os("COSMOS_URL").is_some() {
+      ledger_store_args.insert(
+        String::from("COSMOS_URL"),
+        std::env::var_os("COSMOS_URL")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("STORAGE_ACCOUNT").is_some() {
+      ledger_store_args.insert(
+        String::from("STORAGE_ACCOUNT"),
+        std::env::var_os("STORAGE_ACCOUNT")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("STORAGE_MASTER_KEY").is_some() {
+      ledger_store_args.insert(
+        String::from("STORAGE_MASTER_KEY"),
+        std::env::var_os("STORAGE_MASTER_KEY")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("NIMBLE_DB").is_some() {
+      ledger_store_args.insert(
+        String::from("NIMBLE_DB"),
+        std::env::var_os("NIMBLE_DB")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    if std::env::var_os("NIMBLE_FSTORE_DIR").is_some() {
+      ledger_store_args.insert(
+        String::from("NIMBLE_FSTORE_DIR"),
+        std::env::var_os("NIMBLE_FSTORE_DIR")
+          .unwrap()
+          .into_string()
+          .unwrap(),
+      );
+    }
+
+    // Launch the endorser
+    let _endorser = launch_endorser(&endorser_cmd, endorser_args.clone());
+    println!("Endorser started");
+    // Create the coordinator
+    let coordinator = Arc::new(
+      CoordinatorState::new(&store, &ledger_store_args, None)
+        .await
+        .unwrap(),
+    );
+    println!("Coordinator started");
+    let res = coordinator
+      .replace_endorsers(&["http://[::1]:9090".to_string()])
+      .await;
+    assert!(res.is_ok());
+    println!("Endorser replaced");
+    let server = CoordinatorServiceState::new(coordinator);
+
+    // Print the whole timeout_map from the coordinator state
+    let timeout_map = server.get_state().get_timeout_map();
+    println!("Timeout Map: {:?}", timeout_map);
+
+    // Print the whole timeout_map from the coordinator state again
+    let req = tonic::Request::new(PingAllReq {});
+    let res = server.ping_all_endorsers(req).await;
+    assert!(res.is_ok());
+    let timeout_map = server.get_state().get_timeout_map();
+    println!("Timeout Map after waiting: {:?}", timeout_map);
+
+    let _ = Command::new("pkill")
+      .arg("-f")
+      .arg("endorser")
+      .status()
+      .expect("failed to execute process");
+
+    let req1 = tonic::Request::new(PingAllReq {});
+    let res1 = server.ping_all_endorsers(req1).await;
+    assert!(res1.is_ok());
+    let timeout_map = server.get_state().get_timeout_map();
+    println!(
+      "Timeout Map after waiting and killing process: {:?}",
+      timeout_map
+    );
   }
 }

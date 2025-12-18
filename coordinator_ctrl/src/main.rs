@@ -9,6 +9,7 @@ struct EndorserOpResponse {
   pub pk: String,
 }
 
+/// Main function to start the coordinator control client.
 #[tokio::main]
 async fn main() {
   let config = App::new("client")
@@ -17,7 +18,7 @@ async fn main() {
         .short("c")
         .long("coordinator")
         .help("The hostname of the coordinator")
-        .default_value("http://127.0.0.1:8090"),
+        .default_value("http://localhost:8090"),
     )
     .arg(
       Arg::with_name("add")
@@ -39,12 +40,25 @@ async fn main() {
         .long("get")
         .takes_value(true)
         .help("Endorser to read"),
+    )
+    .arg(
+      Arg::with_name("gettimeoutmap")
+      .long("gettimeoutmap")
+      .help("Get the timeout map of endorsers")
+      .takes_value(false),
+    )
+    .arg(
+      Arg::with_name("pingallendorsers")
+      .long("pingallendorsers")
+      .help("Ping all endorsers")
+      .takes_value(false),
     );
   let cli_matches = config.get_matches();
   let coordinator_addr = cli_matches.value_of("coordinator").unwrap();
 
   let client = reqwest::Client::new();
 
+  // Adds a new endorser.
   if let Some(x) = cli_matches.value_of("add") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -66,6 +80,8 @@ async fn main() {
       },
     }
   }
+
+  // Deletes an existing endorser.
   if let Some(x) = cli_matches.value_of("delete") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -83,6 +99,8 @@ async fn main() {
       },
     }
   }
+
+  // Retrieves information about an endorser.
   if let Some(x) = cli_matches.value_of("get") {
     let uri = base64_url::encode(&x);
     let endorser_url =
@@ -97,6 +115,38 @@ async fn main() {
       },
       Err(error) => {
         eprintln!("get_endorser failed: {:?}", error);
+      },
+    }
+  }
+
+  // Retrieves the timeout map of endorsers.
+  if cli_matches.is_present("gettimeoutmap") {
+    let endorser_url = reqwest::Url::parse(&format!("{}/timeoutmap", coordinator_addr)).unwrap();
+    let res = client.get(endorser_url).send().await;
+    match res {
+      Ok(resp) => {
+        assert!(resp.status() == reqwest::StatusCode::OK);
+        let timeout_map: serde_json::Value = resp.json().await.unwrap();
+        println!("Timeout map: {:?}", timeout_map);
+      },
+      Err(error) => {
+        eprintln!("get_timeout_map failed: {:?}", error);
+      },
+    }
+  }
+
+  // Pings all endorsers.
+  if cli_matches.is_present("pingallendorsers") {
+    let endorser_url = reqwest::Url::parse(&format!("{}/pingallendorsers", coordinator_addr)).unwrap();
+    let res = client.get(endorser_url).send().await;
+    match res {
+      Ok(resp) => {
+        assert!(resp.status() == reqwest::StatusCode::OK);
+        let ping_results: serde_json::Value = resp.json().await.unwrap();
+        println!("Ping all endorsers: {:?}", ping_results);
+      },
+      Err(error) => {
+        eprintln!("ping_all_endorsers failed: {:?}", error);
       },
     }
   }

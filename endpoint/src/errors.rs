@@ -26,4 +26,10 @@ pub enum EndpointError {
   FailedToAcquireWriteLock,
   /// returned if the endpoint fails to apply view change
   FailedToApplyViewChange,
+  /// returned if the endpoint fails to get the timeout map
+  FailedToGetTimeoutMap,
+  /// returned if failed to ping all endorsers
+  FailedToPingAllEndorsers,
+  /// returned if failed to add endorsers
+  FailedToAddEndorsers,
 }

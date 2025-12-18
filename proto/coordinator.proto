@@ -9,6 +9,9 @@ service Call {
   rpc ReadByIndex(ReadByIndexReq) returns (ReadByIndexResp);
   rpc ReadViewByIndex(ReadViewByIndexReq) returns (ReadViewByIndexResp);
   rpc ReadViewTail(ReadViewTailReq) returns (ReadViewTailResp);
+  rpc PingAllEndorsers(PingAllReq) returns (PingAllResp);
+  rpc GetTimeoutMap(GetTimeoutMapReq) returns (GetTimeoutMapResp);
+  rpc AddEndorsers(AddEndorsersReq) returns (AddEndorsersResp);
 }
 
 message NewLedgerReq {
@@ -70,4 +73,24 @@ message ReadViewTailResp {
   bytes receipts = 2;
   uint64 height = 3;
   bytes attestations = 4; // TODO: place holder for attestation reports
+}
+
+message PingAllReq { 
+}
+
+message PingAllResp { 
+}
+
+message GetTimeoutMapReq {
+}
+
+message GetTimeoutMapResp {
+  map<string, uint64> timeout_map = 1;
+}
+
+message AddEndorsersReq {
+  string endorsers = 1;
+}
+
+message AddEndorsersResp {
 }
