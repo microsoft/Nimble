@@ -97,8 +97,8 @@ pub trait LedgerStore {
 #[cfg(test)]
 mod tests {
   use crate::ledger::{
-    azure_table::TableLedgerStore, filestore::FileStore, in_memory::InMemoryLedgerStore,
-    mongodb_cosmos::MongoCosmosLedgerStore, LedgerStore,
+    LedgerStore, azure_table::TableLedgerStore, filestore::FileStore,
+    in_memory::InMemoryLedgerStore, mongodb_cosmos::MongoCosmosLedgerStore,
   };
   use ledger::{Block, CustomSerde, NimbleHashTrait};
   use std::collections::HashMap;

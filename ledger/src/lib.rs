@@ -3,12 +3,12 @@ pub mod signature;
 use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
 use errors::VerificationError;
-use generic_array::{typenum::U32, GenericArray};
+use generic_array::{GenericArray, typenum::U32};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::{
   cmp::Ordering,
-  collections::{hash_map, HashMap, HashSet},
+  collections::{HashMap, HashSet, hash_map},
   convert::TryInto,
 };
 
@@ -537,9 +537,10 @@ impl Receipts {
       }
       // check the height matches with the expected height
       if let Some(h) = expected_height
-        && h != ex_meta_block.get_metablock().get_height() {
-          return Err(VerificationError::InvalidHeight);
-        }
+        && h != ex_meta_block.get_metablock().get_height()
+      {
+        return Err(VerificationError::InvalidHeight);
+      }
       // update the message
       let tail_hash = match nonce_bytes {
         Some(n) => ex_meta_block.get_metablock().hash().digest_with_bytes(n),
@@ -703,11 +704,12 @@ impl Receipts {
       for entry in &ledger_tail_map.entries {
         let res = ledger_entries.get(&(entry.handle.clone(), entry.height));
         if let Some(metablock) = res
-          && entry.metablock.cmp(metablock) != Ordering::Equal {
-            eprintln!("metablock1={:?}", entry.metablock);
-            eprintln!("metablock2={:?}", metablock);
-            return Err(VerificationError::InconsistentLedgerTailMaps);
-          }
+          && entry.metablock.cmp(metablock) != Ordering::Equal
+        {
+          eprintln!("metablock1={:?}", entry.metablock);
+          eprintln!("metablock2={:?}", metablock);
+          return Err(VerificationError::InconsistentLedgerTailMaps);
+        }
       }
     }
 

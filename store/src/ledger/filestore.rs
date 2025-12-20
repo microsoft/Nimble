@@ -14,7 +14,7 @@ use std::{
   fmt::Debug,
   fs,
   fs::{File, OpenOptions},
-  io::{prelude::*, SeekFrom},
+  io::{SeekFrom, prelude::*},
   path::{Path, PathBuf},
   sync::{Arc, RwLock},
 };

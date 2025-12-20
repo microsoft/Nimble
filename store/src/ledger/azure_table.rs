@@ -856,7 +856,7 @@ impl LedgerStore for TableLedgerStore {
           LedgerStoreError::LedgerError(StorageError::IncorrectConditionalData) => {
             return Err(LedgerStoreError::LedgerError(
               StorageError::IncorrectConditionalData,
-            ))
+            ));
           },
           _ => return Err(e),
         },

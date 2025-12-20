@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use rand::Rng;
 
 use ledger::{
-  signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait},
   NimbleDigest,
+  signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait},
 };
 
 #[derive(Debug, Serialize, Deserialize)]

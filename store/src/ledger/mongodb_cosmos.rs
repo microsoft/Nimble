@@ -7,9 +7,9 @@ use bincode;
 use hex;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use mongodb::{
-  bson::{doc, spec::BinarySubtype, Binary},
-  error::WriteFailure::WriteError,
   Client, Collection,
+  bson::{Binary, doc, spec::BinarySubtype},
+  error::WriteFailure::WriteError,
 };
 use serde::{Deserialize, Serialize};
 use std::{

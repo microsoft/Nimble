@@ -4,7 +4,7 @@ mod errors;
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
@@ -13,18 +13,18 @@ pub mod coordinator_proto {
 
 use clap::{App, Arg};
 use coordinator_proto::{
-  call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
   ReadViewTailResp,
+  call_server::{Call, CallServer},
 };
 
 use axum::{
+  Json, Router,
   extract::{Extension, Path},
   http::StatusCode,
   response::IntoResponse,
   routing::get,
-  Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -482,11 +482,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
   use crate::{
-    coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp,
-    },
     CoordinatorServiceState, CoordinatorState,
+    coordinator_proto::{
+      AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+      ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, call_server::Call,
+    },
   };
   use ledger::{Block, CustomSerde, NimbleDigest, VerifierState};
   use rand::Rng;

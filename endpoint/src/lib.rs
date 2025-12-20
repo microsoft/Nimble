@@ -1,8 +1,8 @@
 mod errors;
 
 use tonic::{
-  transport::{Channel, Endpoint},
   Request,
+  transport::{Channel, Endpoint},
 };
 
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -12,13 +12,14 @@ pub mod coordinator_proto {
 
 use crate::errors::EndpointError;
 use coordinator_proto::{
-  call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
+  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
+  call_client::CallClient,
 };
 use ledger::{
+  Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
   errors::VerificationError,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, PublicKeyTrait, Signature, SignatureTrait},
-  Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
 use rand::random;
 use std::{

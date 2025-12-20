@@ -5,13 +5,12 @@ use itertools::Itertools;
 use ledger::endorser_proto::{EndorserMode, LedgerChunkEntry, LedgerTailMap, LedgerTailMapEntry};
 
 use ledger::{
-  produce_hash_of_state,
-  signature::{PrivateKey, PrivateKeyTrait, PublicKey},
   Block, CustomSerde, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait, Nonces, Receipt,
-  Receipts,
+  Receipts, produce_hash_of_state,
+  signature::{PrivateKey, PrivateKeyTrait, PublicKey},
 };
 use std::{
-  collections::{hash_map, HashMap},
+  collections::{HashMap, hash_map},
   ops::{Deref, DerefMut},
   sync::{Arc, RwLock},
 };
@@ -561,19 +560,21 @@ mod tests {
         .expect("failed")
         .view_ledger_tail_hash,
     );
-    assert!(receipt
-      .get_id_sig()
-      .verify_with_id(
-        &endorser_state.public_key,
-        &view_block_hash
-          .digest_with(
-            &receipt
-              .get_view()
-              .digest_with(&handle.digest_with(&genesis_tail_hash))
-          )
-          .to_bytes(),
-      )
-      .is_ok());
+    assert!(
+      receipt
+        .get_id_sig()
+        .verify_with_id(
+          &endorser_state.public_key,
+          &view_block_hash
+            .digest_with(
+              &receipt
+                .get_view()
+                .digest_with(&handle.digest_with(&genesis_tail_hash))
+            )
+            .to_bytes(),
+        )
+        .is_ok()
+    );
 
     // Fetch the value currently in the tail.
     let tail_result = endorser_state.read_latest(&handle, &[0]);
