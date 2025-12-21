@@ -1,18 +1,18 @@
 use crate::{endorser_state::EndorserState, errors::EndorserError};
 use clap::{App, Arg};
 use ledger::{
-  signature::PublicKeyTrait, Block, CustomSerde, MetaBlock, NimbleDigest, Nonces, Receipts,
+  Block, CustomSerde, MetaBlock, NimbleDigest, Nonces, Receipts, signature::PublicKeyTrait,
 };
-use tonic::{transport::Server, Code, Request, Response, Status};
+use tonic::{Code, Request, Response, Status, transport::Server};
 
 mod endorser_state;
 mod errors;
 
 use ledger::endorser_proto::{
-  endorser_call_server::{EndorserCall, EndorserCallServer},
   ActivateReq, ActivateResp, AppendReq, AppendResp, FinalizeStateReq, FinalizeStateResp,
   GetPublicKeyReq, GetPublicKeyResp, InitializeStateReq, InitializeStateResp, NewLedgerReq,
   NewLedgerResp, ReadLatestReq, ReadLatestResp, ReadStateReq, ReadStateResp,
+  endorser_call_server::{EndorserCall, EndorserCallServer},
 };
 
 pub struct EndorserServiceState {

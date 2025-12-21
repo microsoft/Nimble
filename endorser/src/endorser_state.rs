@@ -5,13 +5,12 @@ use itertools::Itertools;
 use ledger::endorser_proto::{EndorserMode, LedgerChunkEntry, LedgerTailMap, LedgerTailMapEntry};
 
 use ledger::{
-  produce_hash_of_state,
-  signature::{PrivateKey, PrivateKeyTrait, PublicKey},
   Block, CustomSerde, Handle, IdSig, MetaBlock, NimbleDigest, NimbleHashTrait, Nonces, Receipt,
-  Receipts,
+  Receipts, produce_hash_of_state,
+  signature::{PrivateKey, PrivateKeyTrait, PublicKey},
 };
 use std::{
-  collections::{hash_map, HashMap},
+  collections::{HashMap, hash_map},
   ops::{Deref, DerefMut},
   sync::{Arc, RwLock},
 };
@@ -314,7 +313,7 @@ impl EndorserState {
   fn append_view_ledger(
     &self,
     view_ledger_state: &mut ViewLedgerState,
-    ledger_tail_map: &Vec<LedgerTailMapEntry>,
+    ledger_tail_map: &[LedgerTailMapEntry],
     block_hash: &NimbleDigest,
     expected_height: usize,
   ) -> Result<Receipt, EndorserError> {
@@ -354,7 +353,7 @@ impl EndorserState {
   fn sign_view_ledger(
     &self,
     view_ledger_state: &ViewLedgerState,
-    ledger_tail_map: &Vec<LedgerTailMapEntry>,
+    ledger_tail_map: &[LedgerTailMapEntry],
   ) -> Receipt {
     // the view embedded in the view ledger is the hash of the current state of the endorser
     let view = produce_hash_of_state(ledger_tail_map);
@@ -446,8 +445,8 @@ impl EndorserState {
     &self,
     old_config: &[u8],
     new_config: &[u8],
-    ledger_tail_maps: &Vec<LedgerTailMap>,
-    ledger_chunks: &Vec<LedgerChunkEntry>,
+    ledger_tail_maps: &[LedgerTailMap],
+    ledger_chunks: &[LedgerChunkEntry],
     receipts: &Receipts,
   ) -> Result<(), EndorserError> {
     if let Ok(mut view_ledger_state) = self.view_ledger_state.write() {
@@ -499,7 +498,7 @@ mod tests {
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
     let view_block_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
@@ -537,13 +536,13 @@ mod tests {
 
     // The coordinator sends the hashed contents of the block to the endorsers
     let handle = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
     };
 
-    let t = rand::thread_rng().gen::<[u8; 32]>();
+    let t = rand::thread_rng().r#gen::<[u8; 32]>();
     let block = Block::new(&t);
 
     let block_hash = block.hash();
@@ -561,19 +560,21 @@ mod tests {
         .expect("failed")
         .view_ledger_tail_hash,
     );
-    assert!(receipt
-      .get_id_sig()
-      .verify_with_id(
-        &endorser_state.public_key,
-        &view_block_hash
-          .digest_with(
-            &receipt
-              .get_view()
-              .digest_with(&handle.digest_with(&genesis_tail_hash))
-          )
-          .to_bytes(),
-      )
-      .is_ok());
+    assert!(
+      receipt
+        .get_id_sig()
+        .verify_with_id(
+          &endorser_state.public_key,
+          &view_block_hash
+            .digest_with(
+              &receipt
+                .get_view()
+                .digest_with(&handle.digest_with(&genesis_tail_hash))
+            )
+            .to_bytes(),
+        )
+        .is_ok()
+    );
 
     // Fetch the value currently in the tail.
     let tail_result = endorser_state.read_latest(&handle, &[0]);
@@ -598,7 +599,7 @@ mod tests {
     // The coordinator sends the hashed contents of the configuration to the endorsers
     // We will pick a dummy view value for testing purposes
     let view_block_hash = {
-      let t = rand::thread_rng().gen::<[u8; 32]>();
+      let t = rand::thread_rng().r#gen::<[u8; 32]>();
       let n = NimbleDigest::from_bytes(&t);
       assert!(n.is_ok(), "This should not have occured");
       n.unwrap()
@@ -635,8 +636,8 @@ mod tests {
       .endorser_mode = ledger::endorser_proto::EndorserMode::Active;
 
     // The coordinator sends the hashed contents of the block to the endorsers
-    let block = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
-    let handle = NimbleDigest::from_bytes(&rand::thread_rng().gen::<[u8; 32]>()).unwrap();
+    let block = Block::new(&rand::thread_rng().r#gen::<[u8; 32]>());
+    let handle = NimbleDigest::from_bytes(&rand::thread_rng().r#gen::<[u8; 32]>()).unwrap();
     let block_hash = block.hash(); // this need not be the case, but it does not matter for testing
     let res = endorser_state.new_ledger(&handle, &block_hash, &block);
     assert!(res.is_ok());
@@ -652,7 +653,7 @@ mod tests {
       .expect("failed")
       .0
       .hash();
-    let block_hash_to_append_data = Block::new(&rand::thread_rng().gen::<[u8; 32]>());
+    let block_hash_to_append_data = Block::new(&rand::thread_rng().r#gen::<[u8; 32]>());
     let block_hash_to_append = block_hash_to_append_data.hash();
 
     let height_plus_one = {

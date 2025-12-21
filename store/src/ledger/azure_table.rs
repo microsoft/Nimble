@@ -663,8 +663,8 @@ async fn read_ledger_internal(
   req_idx: Option<usize>,
   ledger: Arc<TableClient>,
 ) -> Result<(LedgerEntry, usize), LedgerStoreError> {
-  let actual_idx = if req_idx.is_some() {
-    req_idx.unwrap()
+  let actual_idx = if let Some(idx) = req_idx {
+    idx
   } else {
     let (entry, _etag) = find_db_entry(ledger.clone(), handle, TAIL).await?;
     entry.height as usize
@@ -856,7 +856,7 @@ impl LedgerStore for TableLedgerStore {
           LedgerStoreError::LedgerError(StorageError::IncorrectConditionalData) => {
             return Err(LedgerStoreError::LedgerError(
               StorageError::IncorrectConditionalData,
-            ))
+            ));
           },
           _ => return Err(e),
         },

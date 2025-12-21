@@ -4,7 +4,7 @@ mod errors;
 use crate::coordinator_state::CoordinatorState;
 use ledger::CustomSerde;
 use std::{collections::HashMap, sync::Arc};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status, transport::Server};
 
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub mod coordinator_proto {
@@ -13,18 +13,18 @@ pub mod coordinator_proto {
 
 use clap::{App, Arg};
 use coordinator_proto::{
-  call_server::{Call, CallServer},
   AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
   ReadLatestReq, ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq,
   ReadViewTailResp,
+  call_server::{Call, CallServer},
 };
 
 use axum::{
+  Json, Router,
   extract::{Extension, Path},
   http::StatusCode,
   response::IntoResponse,
   routing::get,
-  Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -482,11 +482,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
   use crate::{
-    coordinator_proto::{
-      call_server::Call, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq,
-      ReadByIndexResp, ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp,
-    },
     CoordinatorServiceState, CoordinatorState,
+    coordinator_proto::{
+      AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadByIndexReq, ReadByIndexResp,
+      ReadLatestReq, ReadLatestResp, ReadViewTailReq, ReadViewTailResp, call_server::Call,
+    },
   };
   use ledger::{Block, CustomSerde, NimbleDigest, VerifierState};
   use rand::Rng;
@@ -649,7 +649,7 @@ mod tests {
     let block_bytes: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     // Step 1: NewLedger Request (With Application Data Embedded)
-    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let handle_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
     let request = tonic::Request::new(NewLedgerReq {
       handle: handle_bytes.to_vec(),
       block: block_bytes.to_vec(),
@@ -678,7 +678,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 3: Read Latest with the Nonce generated
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce = rand::thread_rng().r#gen::<[u8; 16]>();
     let req = tonic::Request::new(ReadLatestReq {
       handle: handle.clone(),
       nonce: nonce.to_vec(),
@@ -698,7 +698,7 @@ mod tests {
     let b1: Vec<u8> = "data_block_example_1".as_bytes().to_vec();
     let b2: Vec<u8> = "data_block_example_2".as_bytes().to_vec();
     let b3: Vec<u8> = "data_block_example_3".as_bytes().to_vec();
-    let blocks = vec![&b1, &b2, &b3].to_vec();
+    let blocks = [&b1, &b2, &b3].to_vec();
 
     let mut expected_height = 0;
     for block_to_append in blocks {
@@ -726,7 +726,7 @@ mod tests {
     }
 
     // Step 4: Read Latest with the Nonce generated and check for new data
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce = rand::thread_rng().r#gen::<[u8; 16]>();
     let latest_state_query = tonic::Request::new(ReadLatestReq {
       handle: handle.clone(),
       nonce: nonce.to_vec(),
@@ -818,7 +818,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 8: Read Latest with the Nonce generated and check for new data appended without condition
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce = rand::thread_rng().r#gen::<[u8; 16]>();
     let latest_state_query = tonic::Request::new(ReadLatestReq {
       handle: handle.clone(),
       nonce: nonce.to_vec(),
@@ -847,7 +847,7 @@ mod tests {
     let mut endorsers = server.get_state().get_endorser_pks();
     endorsers.remove(1);
 
-    let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let handle_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
     let res = server
       .get_state()
       .create_ledger(Some(endorsers.clone()), handle_bytes.as_ref(), &[])
@@ -870,7 +870,7 @@ mod tests {
     println!("append_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
-    let handle2_bytes = rand::thread_rng().gen::<[u8; 16]>();
+    let handle2_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
     let res = server
       .get_state()
       .create_ledger(None, handle2_bytes.as_ref(), &[])
@@ -893,7 +893,7 @@ mod tests {
     println!("append_ledger with first endorser: {:?}", res);
     assert!(res.is_ok());
 
-    let nonce1 = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce1 = rand::thread_rng().r#gen::<[u8; 16]>();
     let res = server
       .get_state()
       .read_ledger_tail(&new_handle2, &nonce1)
@@ -919,7 +919,7 @@ mod tests {
       .await;
     assert!(res.is_ok());
 
-    let nonce2 = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce2 = rand::thread_rng().r#gen::<[u8; 16]>();
     let res = server
       .get_state()
       .read_ledger_tail(&new_handle2, &nonce2)
@@ -990,7 +990,7 @@ mod tests {
     assert!(res.is_ok());
 
     // Step 11: read the latest of the new ledger
-    let nonce = rand::thread_rng().gen::<[u8; 16]>();
+    let nonce = rand::thread_rng().r#gen::<[u8; 16]>();
     let latest_state_query = tonic::Request::new(ReadLatestReq {
       handle: new_handle.clone(),
       nonce: nonce.to_vec(),
@@ -1034,7 +1034,7 @@ mod tests {
       let mut endorsers = server.get_state().get_endorser_pks();
       endorsers.remove(1);
 
-      let handle_bytes = rand::thread_rng().gen::<[u8; 16]>();
+      let handle_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
       let res = server
         .get_state()
         .create_ledger(Some(endorsers.clone()), handle_bytes.as_ref(), &[])
@@ -1060,7 +1060,7 @@ mod tests {
       );
       assert!(res.is_ok());
 
-      let handle2_bytes = rand::thread_rng().gen::<[u8; 16]>();
+      let handle2_bytes = rand::thread_rng().r#gen::<[u8; 16]>();
       let res = server
         .get_state()
         .create_ledger(None, handle2_bytes.as_ref(), &[])

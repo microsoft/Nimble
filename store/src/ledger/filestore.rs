@@ -14,7 +14,7 @@ use std::{
   fmt::Debug,
   fs,
   fs::{File, OpenOptions},
-  io::{prelude::*, SeekFrom},
+  io::{SeekFrom, prelude::*},
   path::{Path, PathBuf},
   sync::{Arc, RwLock},
 };
@@ -211,7 +211,7 @@ fn open_and_lock(
 
     // Check if the ledger exists.
     let mut options = OpenOptions::new();
-    let file_name = dir_path.join(&hex::encode(&handle.to_bytes()));
+    let file_name = dir_path.join(hex::encode(handle.to_bytes()));
     let ledger = match options
       .read(true)
       .write(true)

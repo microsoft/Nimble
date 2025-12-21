@@ -7,9 +7,9 @@ use bincode;
 use hex;
 use ledger::{Block, CustomSerde, Handle, NimbleDigest, Nonce, Nonces, Receipts};
 use mongodb::{
-  bson::{doc, spec::BinarySubtype, Binary},
-  error::WriteFailure::WriteError,
   Client, Collection,
+  bson::{Binary, doc, spec::BinarySubtype},
+  error::WriteFailure::WriteError,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -196,7 +196,7 @@ impl MongoCosmosLedgerStore {
           ledger_store
             .client
             .database(&nimble_db_name)
-            .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()))
+            .collection::<DBEntry>(&hex::encode(view_handle.to_bytes()))
             .insert_one(tail_entry, None)
             .await?;
 
@@ -211,7 +211,7 @@ impl MongoCosmosLedgerStore {
       let ledger = ledger_store
         .client
         .database(&nimble_db_name)
-        .collection::<DBEntry>(&hex::encode(&view_handle.to_bytes()));
+        .collection::<DBEntry>(&hex::encode(view_handle.to_bytes()));
       fix_cached_height(&ledger_store.view_handle, &ledger_store.cache, &ledger).await?;
     }
 
@@ -531,7 +531,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
+      .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     loop {
       with_retry!(
@@ -573,7 +573,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
+      .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     loop {
       with_retry!(
@@ -601,7 +601,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
+      .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     loop_and_read(handle, None, &ledger, &self.cache).await
   }
@@ -614,7 +614,7 @@ impl LedgerStore for MongoCosmosLedgerStore {
     let client = self.client.clone();
     let ledger = client
       .database(&self.dbname)
-      .collection::<DBEntry>(&hex::encode(&handle.to_bytes()));
+      .collection::<DBEntry>(&hex::encode(handle.to_bytes()));
 
     let (entry, _height) = loop_and_read(handle, Some(index), &ledger, &self.cache).await?;
     Ok(entry)

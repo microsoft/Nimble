@@ -1,8 +1,8 @@
 mod errors;
 
 use tonic::{
-  transport::{Channel, Endpoint},
   Request,
+  transport::{Channel, Endpoint},
 };
 
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -12,13 +12,14 @@ pub mod coordinator_proto {
 
 use crate::errors::EndpointError;
 use coordinator_proto::{
-  call_client::CallClient, AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq,
-  ReadLatestResp, ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
+  AppendReq, AppendResp, NewLedgerReq, NewLedgerResp, ReadLatestReq, ReadLatestResp,
+  ReadViewByIndexReq, ReadViewByIndexResp, ReadViewTailReq, ReadViewTailResp,
+  call_client::CallClient,
 };
 use ledger::{
+  Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
   errors::VerificationError,
   signature::{PrivateKey, PrivateKeyTrait, PublicKey, PublicKeyTrait, Signature, SignatureTrait},
-  Block, CustomSerde, NimbleDigest, NimbleHashTrait, VerifierState,
 };
 use rand::random;
 use std::{
@@ -346,25 +347,24 @@ impl EndpointState {
       }
     };
 
-    if res.is_err() {
-      if res.unwrap_err() != VerificationError::ViewNotFound {
+    if let Err(e) = res {
+      if e != VerificationError::ViewNotFound {
         return Err(EndpointError::FailedToVerifyNewCounter);
-      } else {
-        let res = self.update_view().await;
-        if res.is_err() {
-          return Err(EndpointError::FailedToVerifyNewCounter);
+      }
+      let res = self.update_view().await;
+      if res.is_err() {
+        return Err(EndpointError::FailedToVerifyNewCounter);
+      }
+      let res = {
+        if let Ok(vs_rd) = self.vs.read() {
+          vs_rd.verify_new_ledger(handle, &block, &receipts)
+        } else {
+          return Err(EndpointError::FailedToAcquireReadLock);
         }
-        let res = {
-          if let Ok(vs_rd) = self.vs.read() {
-            vs_rd.verify_new_ledger(handle, &block, &receipts)
-          } else {
-            return Err(EndpointError::FailedToAcquireReadLock);
-          }
-        };
-        if res.is_err() {
-          eprintln!("failed to create a new counter {:?}", res);
-          return Err(EndpointError::FailedToVerifyNewCounter);
-        }
+      };
+      if let Err(e) = res {
+        eprintln!("failed to create a new counter {:?}", e);
+        return Err(EndpointError::FailedToVerifyNewCounter);
       }
     }
 
@@ -442,25 +442,24 @@ impl EndpointState {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
     };
-    if res.is_err() {
-      if res.unwrap_err() != VerificationError::ViewNotFound {
+    if let Err(e) = res {
+      if e != VerificationError::ViewNotFound {
         return Err(EndpointError::FailedToVerifyIncrementedCounter);
-      } else {
-        let res = self.update_view().await;
-        if res.is_err() {
-          return Err(EndpointError::FailedToVerifyIncrementedCounter);
+      }
+      let res = self.update_view().await;
+      if res.is_err() {
+        return Err(EndpointError::FailedToVerifyIncrementedCounter);
+      }
+      let res = {
+        if let Ok(vs_rd) = self.vs.read() {
+          vs_rd.verify_append(handle, &block, &hash_nonces, expected_height, &receipts)
+        } else {
+          return Err(EndpointError::FailedToAcquireReadLock);
         }
-        let res = {
-          if let Ok(vs_rd) = self.vs.read() {
-            vs_rd.verify_append(handle, &block, &hash_nonces, expected_height, &receipts)
-          } else {
-            return Err(EndpointError::FailedToAcquireReadLock);
-          }
-        };
-        if res.is_err() {
-          eprintln!("failed to increment a counter {:?}", res);
-          return Err(EndpointError::FailedToVerifyIncrementedCounter);
-        }
+      };
+      if let Err(e) = res {
+        eprintln!("failed to increment a counter {:?}", e);
+        return Err(EndpointError::FailedToVerifyIncrementedCounter);
       }
     }
 
@@ -509,31 +508,26 @@ impl EndpointState {
         return Err(EndpointError::FailedToAcquireReadLock);
       }
     };
-    let counter = {
-      if res.is_err() {
-        if res.unwrap_err() != VerificationError::ViewNotFound {
+    let counter = match res {
+      Err(VerificationError::ViewNotFound) => {
+        let res = self.update_view().await;
+        if res.is_err() {
           return Err(EndpointError::FaieldToVerifyReadCounter);
-        } else {
-          let res = self.update_view().await;
-          if res.is_err() {
-            return Err(EndpointError::FaieldToVerifyReadCounter);
-          }
-          let res = {
-            if let Ok(vs_rd) = self.vs.read() {
-              vs_rd.verify_read_latest(handle, &block, &nonces, nonce, &receipts)
-            } else {
-              return Err(EndpointError::FailedToAcquireReadLock);
-            }
-          };
-          if res.is_err() {
-            return Err(EndpointError::FaieldToVerifyReadCounter);
-          } else {
-            res.unwrap()
-          }
         }
-      } else {
-        res.unwrap()
-      }
+        let res = {
+          if let Ok(vs_rd) = self.vs.read() {
+            vs_rd.verify_read_latest(handle, &block, &nonces, nonce, &receipts)
+          } else {
+            return Err(EndpointError::FailedToAcquireReadLock);
+          }
+        };
+        match res {
+          Ok(c) => c,
+          Err(_) => return Err(EndpointError::FaieldToVerifyReadCounter),
+        }
+      },
+      Err(_) => return Err(EndpointError::FaieldToVerifyReadCounter),
+      Ok(c) => c,
     };
 
     // verify the integrity of the coordinator's response by checking the signature

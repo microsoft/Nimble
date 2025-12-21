@@ -3,12 +3,12 @@ pub mod signature;
 use crate::signature::{PublicKey, PublicKeyTrait, Signature, SignatureTrait};
 use digest::Output;
 use errors::VerificationError;
-use generic_array::{typenum::U32, GenericArray};
+use generic_array::{GenericArray, typenum::U32};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::{
   cmp::Ordering,
-  collections::{hash_map, HashMap, HashSet},
+  collections::{HashMap, HashSet, hash_map},
   convert::TryInto,
 };
 
@@ -72,7 +72,7 @@ impl NimbleDigest {
 pub type Handle = NimbleDigest;
 
 // this function assumes the provided vector is sorted by handles
-pub fn produce_hash_of_state(ledger_tail_map: &Vec<LedgerTailMapEntry>) -> NimbleDigest {
+pub fn produce_hash_of_state(ledger_tail_map: &[LedgerTailMapEntry]) -> NimbleDigest {
   // for empty state, hash is a vector of zeros
   if ledger_tail_map.is_empty() {
     NimbleDigest::default()
@@ -90,7 +90,6 @@ pub fn produce_hash_of_state(ledger_tail_map: &Vec<LedgerTailMapEntry>) -> Nimbl
     // we ceil the slice size so the last slice contains fewer entries.
     let slice_size = (ledger_tail_map.len() as f64 / num_leaves as f64).ceil() as usize;
     let leaf_hashes = (0..num_leaves)
-      .into_iter()
       .collect::<Vec<usize>>()
       .par_iter()
       .map(|&i| {
@@ -110,7 +109,7 @@ pub fn produce_hash_of_state(ledger_tail_map: &Vec<LedgerTailMapEntry>) -> Nimbl
 
     let mut sha256 = Sha256::new();
     for entry in leaf_hashes {
-      sha256.update(&entry.to_bytes());
+      sha256.update(entry.to_bytes());
     }
     NimbleDigest::new(sha256.finalize())
   }
@@ -161,7 +160,7 @@ impl Nonces {
   }
 
   pub fn contains(&self, nonce: &Nonce) -> bool {
-    self.nonces.iter().any(|nonce_iter| *nonce_iter == *nonce)
+    self.nonces.contains(nonce)
   }
 
   pub fn len(&self) -> usize {
@@ -537,10 +536,10 @@ impl Receipts {
         return Err(VerificationError::InvalidBlockHash);
       }
       // check the height matches with the expected height
-      if let Some(h) = expected_height {
-        if h != ex_meta_block.get_metablock().get_height() {
-          return Err(VerificationError::InvalidHeight);
-        }
+      if let Some(h) = expected_height
+        && h != ex_meta_block.get_metablock().get_height()
+      {
+        return Err(VerificationError::InvalidHeight);
       }
       // update the message
       let tail_hash = match nonce_bytes {
@@ -581,8 +580,8 @@ impl Receipts {
     group_identity: &NimbleDigest,
     old_metablock: &MetaBlock,
     new_metablock: &MetaBlock,
-    ledger_tail_maps: &Vec<LedgerTailMap>,
-    ledger_chunks: &Vec<LedgerChunkEntry>,
+    ledger_tail_maps: &[LedgerTailMap],
+    ledger_chunks: &[LedgerChunkEntry],
   ) -> Result<(), VerificationError> {
     // check the conditions when this is the first view change
     if old_metablock.get_height() == 0 {
@@ -704,12 +703,12 @@ impl Receipts {
     for ledger_tail_map in ledger_tail_maps {
       for entry in &ledger_tail_map.entries {
         let res = ledger_entries.get(&(entry.handle.clone(), entry.height));
-        if let Some(metablock) = res {
-          if entry.metablock.cmp(metablock) != Ordering::Equal {
-            eprintln!("metablock1={:?}", entry.metablock);
-            eprintln!("metablock2={:?}", metablock);
-            return Err(VerificationError::InconsistentLedgerTailMaps);
-          }
+        if let Some(metablock) = res
+          && entry.metablock.cmp(metablock) != Ordering::Equal
+        {
+          eprintln!("metablock1={:?}", entry.metablock);
+          eprintln!("metablock2={:?}", metablock);
+          return Err(VerificationError::InconsistentLedgerTailMaps);
         }
       }
     }
@@ -988,7 +987,7 @@ impl VerifierState {
   }
 }
 
-pub fn compute_max_cut(ledger_tail_maps: &Vec<LedgerTailMap>) -> Vec<LedgerTailMapEntry> {
+pub fn compute_max_cut(ledger_tail_maps: &[LedgerTailMap]) -> Vec<LedgerTailMapEntry> {
   if ledger_tail_maps.is_empty() {
     Vec::new()
   } else {
@@ -1036,7 +1035,7 @@ pub struct CutDiff {
   pub high: usize,
 }
 
-pub fn compute_cut_diffs(ledger_tail_maps: &Vec<LedgerTailMap>) -> Vec<CutDiff> {
+pub fn compute_cut_diffs(ledger_tail_maps: &[LedgerTailMap]) -> Vec<CutDiff> {
   if ledger_tail_maps.len() <= 1 {
     Vec::new()
   } else {
@@ -1134,7 +1133,7 @@ impl CustomSerde for Nonces {
   }
 
   fn from_bytes(bytes: &[u8]) -> Result<Nonces, CustomSerdeError> {
-    if bytes.len() % Nonce::num_bytes() != 0 {
+    if !bytes.len().is_multiple_of(Nonce::num_bytes()) {
       Err(CustomSerdeError::IncorrectLength)
     } else {
       let mut nonces = Nonces::new();
@@ -1289,7 +1288,7 @@ impl CustomSerde for Receipts {
   }
 
   fn from_bytes(bytes: &[u8]) -> Result<Receipts, CustomSerdeError> {
-    if bytes.len() % Receipt::num_bytes() != 0 {
+    if !bytes.len().is_multiple_of(Receipt::num_bytes()) {
       return Err(CustomSerdeError::IncorrectLength);
     }
     let mut pos = 0;
@@ -1335,8 +1334,8 @@ mod tests {
 
   #[test]
   pub fn test_nimble_digest_equality() {
-    let hash_bytes_1 = rand::thread_rng().gen::<[u8; 32]>();
-    let hash_bytes_2 = rand::thread_rng().gen::<[u8; 32]>();
+    let hash_bytes_1 = rand::thread_rng().r#gen::<[u8; 32]>();
+    let hash_bytes_2 = rand::thread_rng().r#gen::<[u8; 32]>();
     let duplicate_hash_bytes_1 = hash_bytes_1;
     let nimble_digest_1 = NimbleDigest::from_bytes(&hash_bytes_1);
     let nimble_digest_2 = NimbleDigest::from_bytes(&hash_bytes_2);
@@ -1393,8 +1392,8 @@ mod tests {
   pub fn test_hash_of_state() {
     let map = (0..1024 * 1023)
       .map(|i: usize| {
-        let handle = NimbleDigest::digest(&rand::thread_rng().gen::<[u8; 32]>());
-        let metablock = NimbleDigest::digest(&rand::thread_rng().gen::<[u8; 32]>());
+        let handle = NimbleDigest::digest(&rand::thread_rng().r#gen::<[u8; 32]>());
+        let metablock = NimbleDigest::digest(&rand::thread_rng().r#gen::<[u8; 32]>());
         LedgerTailMapEntry {
           handle: handle.to_bytes(),
           metablock: metablock.to_bytes(),
